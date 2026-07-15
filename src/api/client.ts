@@ -397,9 +397,29 @@ function parseComment(
   }
   const parsed = commentSchema.safeParse(json);
   if (!parsed.success) throw new Error('COMMENT_PROVIDER_PAYLOAD_INVALID');
-  validatePlainText(parsed.data.comment);
-  validateLinkPolicy(parsed.data.comment, linkMode, websiteUrl);
-  return parsed.data.comment;
+  const comment = addMissingInlineUrl(
+    parsed.data.comment,
+    linkMode,
+    websiteUrl
+  );
+  validatePlainText(comment);
+  validateLinkPolicy(comment, linkMode, websiteUrl);
+  return comment;
+}
+
+function addMissingInlineUrl(
+  comment: string,
+  linkMode: LinkMode,
+  websiteUrl: string
+): string {
+  if (linkMode !== 'inline' || (linkify.match(comment) ?? []).length > 0) {
+    return comment;
+  }
+  const repaired = `${comment} ${websiteUrl}`;
+  if (repaired.length > 2_000) {
+    throw new Error('COMMENT_PROVIDER_PAYLOAD_INVALID');
+  }
+  return repaired;
 }
 
 function validatePlainText(comment: string): void {

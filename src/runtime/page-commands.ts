@@ -154,7 +154,7 @@ export async function prepareTabSubmission(
   target: PageSubmissionExpectation
 ): Promise<PageSubmissionPreparation> {
   return readPreparation(
-    await executePageCommand(tabId, {
+    await sendPageCommand(tabId, {
       type: 'submit.prepare',
       input,
       expected: target,

@@ -6,6 +6,29 @@ describe('page probe', () => {
     document.body.innerHTML = '';
   });
 
+  it('ignores form named-property clobbering when reading ancestor IDs', () => {
+    document.body.innerHTML = `
+      <form id="comment-form">
+        <input name="id" value="123">
+        <textarea name="comment" aria-label="Comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+    const form = document.querySelector('form');
+    Object.defineProperty(form, 'id', {
+      configurable: true,
+      value: document.querySelector('input[name="id"]'),
+    });
+
+    const snapshot = probePageDocument(document);
+    const comment = snapshot.controlCandidates.find(
+      (candidate) => candidate.attributes.name === 'comment'
+    );
+
+    expect(snapshot.formCandidates[0]?.attributes.id).toBe('comment-form');
+    expect(comment?.ancestorTokens).toContain('form#comment-form');
+  });
+
   it('captures an Apotekanet form without exposing entered identity values', () => {
     document.body.innerHTML = `
       <form id="comment-form">

@@ -41,7 +41,7 @@ const DESTRUCTIVE_SUBMIT =
   /\b(?:delete|remove|report|flag|spam|abuse|edit|update|moderate|approve|reject|ban|block|hide|archive|trash|discard)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄/i;
 const NON_COMMENT_FORM_CONTEXT =
   /\b(?:report|flag|spam|abuse|delete|remove|edit|update|moderat(?:e|ion)|approve|reject|ban|block|hide|archive|trash|discard|share|forward|invite|private[\s_-]*message|direct[\s_-]*message|message[\s_-]*author|order|checkout|payment|purchase|cart|billing|shipping|donat(?:e|ion)|booking|reservation|rsvp|application|apply|log[\s_-]*in|sign[\s_-]*(?:in|up)|register|account)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄|分享|转发|轉發|邀请|邀請|私信|私人消息|私人訊息|站内信|站內信|订单|訂單|结账|結帳|支付|付款|购买|購買|购物车|購物車|账单|帳單|捐赠|捐贈|预订|預訂|预约|預約|申请|申請|登录|登入|注册|註冊|加入|账号|帳號/i;
-const CHECKOUT_THEME_IDENTITY_TOKEN = /(^|[-_])checkout(?=$|[-_])/gi;
+const CHECKOUT_THEME_IDENTITY_TOKEN = /(^|[\s_-])checkout(?=$|[\s_-])/gi;
 const LOGIN_COPY =
   /log[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*up\s+to\s+(?:comment|reply)|register\s+to\s+(?:comment|reply)|create\s+(?:an?\s+)?account\s+to\s+(?:comment|reply)|you must be logged in|登录后(?:才可)?(?:评论|回复|留言)|请先登录|登入後(?:才可)?(?:評論|回覆)|注册后(?:才可)?(?:评论|回复|留言)|註冊後(?:才可)?(?:評論|回覆)/i;
 const CAPTCHA_SELECTOR = [
@@ -581,12 +581,54 @@ function hasUnsafePlannedFormContext(controls: PlannedFormControls): boolean {
     controls.container,
     formElements
   );
+  const explicitCommentControls = hasExplicitCommentControls(
+    controls.editor,
+    controls.submit
+  );
+  const checkoutThemeAllowed =
+    explicitCommentControls && hasWordPressCommentEndpoint(controls);
+  const safetyContext = checkoutThemeAllowed
+    ? [
+        structuralDescriptor(controls.editor, true),
+        structuralDescriptor(controls.container, true),
+        structuralDescriptor(controls.container.parentElement, true),
+        structuralDescriptor(
+          controls.container.parentElement?.parentElement ?? null,
+          true
+        ),
+        ...formElements.map((element) => structuralDescriptor(element, true)),
+        headingCopy,
+      ].join(' ')
+    : `${structuralContext} ${headingCopy}`;
   return (
     isUnsafePlannedSubmit(controls.submit) ||
     hasUnsafeSubmissionEndpoint(controls) ||
     NEGATIVE_EDITOR.test(structuralContext) ||
-    NON_COMMENT_FORM_CONTEXT.test(`${structuralContext} ${headingCopy}`) ||
-    NON_SUBMISSION_ACTION.test(structuralContext)
+    NON_COMMENT_FORM_CONTEXT.test(safetyContext) ||
+    NON_SUBMISSION_ACTION.test(safetyContext)
+  );
+}
+
+function hasWordPressCommentEndpoint(controls: PlannedFormControls): boolean {
+  const action =
+    controls.submit.getAttribute('formaction') ??
+    controls.nativeForm?.getAttribute('action');
+  if (!action?.trim()) return false;
+  try {
+    const endpoint = new URL(action, controls.editor.ownerDocument.baseURI);
+    return /\/wp-comments-post\.php\/?$/i.test(endpoint.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitCommentControls(
+  editor: HTMLElement,
+  submit: HTMLElement
+): boolean {
+  return (
+    POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
+    STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit))
   );
 }
 
@@ -1015,28 +1057,38 @@ function readPageFeedbackMessages(document: Document): string[] {
     '.flash-message',
     '.comment-awaiting-moderation',
   ];
-  const elements = new Set<Element>();
+  const semanticElements = new Set<Element>();
   for (const selector of selectors) {
     for (const element of queryAllDeep(document, selector)) {
-      elements.add(element);
+      semanticElements.add(element);
     }
   }
-  for (const element of queryAllDeep(document, 'p, div, span, li')) {
-    if (!isVisible(element)) continue;
-    const message = normalizeWhitespace(visibleTextContent(element));
+  const genericElements = new Set<Element>();
+  for (const candidate of queryAllDeep(document, 'p, div, span, li')) {
+    const rawText = normalizeWhitespace(candidate.textContent ?? '');
     if (
-      message.length <= MAX_FEEDBACK_MESSAGE_LENGTH &&
-      (SUCCESS_COPY.test(message) ||
-        PENDING_COPY.test(message) ||
-        ERROR_COPY.test(message))
+      SUCCESS_COPY.test(rawText) ||
+      PENDING_COPY.test(rawText) ||
+      ERROR_COPY.test(rawText)
     ) {
-      elements.add(element);
+      if (!semanticElements.has(candidate)) genericElements.add(candidate);
     }
   }
-  return Array.from(elements)
+  const semanticMessages = Array.from(semanticElements)
     .filter(isVisible)
     .map((element) => normalizeWhitespace(visibleTextContent(element)))
-    .filter(Boolean)
+    .filter(Boolean);
+  const genericMessages = Array.from(genericElements)
+    .filter(isVisible)
+    .map((element) => normalizeWhitespace(visibleTextContent(element)))
+    .filter(
+      (message) =>
+        message.length <= MAX_FEEDBACK_MESSAGE_LENGTH &&
+        (SUCCESS_COPY.test(message) ||
+          PENDING_COPY.test(message) ||
+          ERROR_COPY.test(message))
+    );
+  return [...semanticMessages, ...genericMessages]
     .map((message) => message.slice(0, MAX_FEEDBACK_MESSAGE_LENGTH))
     .slice(-MAX_FEEDBACK_MESSAGES);
 }
@@ -1052,10 +1104,11 @@ function renderedCommentExists(
   );
   return candidates.some((element) => {
     if (
-      !isVisible(element) ||
+      !containsFingerprintWords(element.textContent ?? '', fingerprint) ||
       element.matches('form, textarea, input, [contenteditable="true"]') ||
       element.querySelector(`form, ${EDITOR_SELECTOR}`) ||
-      hasExcludedRenderedCommentContext(element)
+      hasExcludedRenderedCommentContext(element) ||
+      !isVisible(element)
     ) {
       return false;
     }
@@ -1063,6 +1116,18 @@ function renderedCommentExists(
       fingerprint
     );
   });
+}
+
+function containsFingerprintWords(text: string, fingerprint: string): boolean {
+  const haystack = normalizeWhitespace(text);
+  const words = fingerprint.split(/\s+/).filter(Boolean);
+  let offset = 0;
+  for (const word of words) {
+    const index = haystack.indexOf(word, offset);
+    if (index < 0) return false;
+    offset = index + word.length;
+  }
+  return words.length > 0;
 }
 
 function hasExcludedRenderedCommentContext(element: Element): boolean {

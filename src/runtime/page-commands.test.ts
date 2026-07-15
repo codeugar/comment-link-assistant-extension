@@ -75,9 +75,10 @@ describe('page command runtime', () => {
       type: 'preparation',
       preparation: { ok: true, prepared },
     });
+    const executeScript = vi.fn().mockResolvedValue([]);
     vi.stubGlobal('chrome', {
       tabs: { query, sendMessage },
-      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+      scripting: { executeScript },
     });
 
     await expect(
@@ -92,6 +93,7 @@ describe('page command runtime', () => {
     ).resolves.toEqual({ ok: true, prepared });
 
     expect(query).not.toHaveBeenCalled();
+    expect(executeScript).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(42, {
       type: 'comment-link-assistant:page-command',
       command: {

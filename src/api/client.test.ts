@@ -267,6 +267,33 @@ describe('direct comment generation', () => {
     ).rejects.toThrow('COMMENT_RELEVANT_URL_REQUIRED');
   });
 
+  it('adds the promoted URL when an inline comment omits every link', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: '{"comment":"A specific, useful observation."}',
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, linkMode: 'inline' }
+      )
+    ).resolves.toBe('A specific, useful observation. https://product.example');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('retries a transient provider failure with a capped backoff', async () => {
     const fetchMock = vi
       .fn<(url: string, request?: RequestInit) => Promise<Response>>()

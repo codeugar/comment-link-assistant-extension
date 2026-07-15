@@ -314,7 +314,8 @@ function readAncestorTokens(element: HTMLElement): string[] {
   let ancestor = parentElementAcrossShadow(element);
   while (ancestor && tokens.length < 6) {
     const tag = ancestor.tagName.toLowerCase();
-    const id = ancestor.id ? `#${normalizeText(ancestor.id)}` : '';
+    const rawId = ancestor.getAttribute('id');
+    const id = rawId ? `#${normalizeText(rawId)}` : '';
     const classes = semanticClassNames(ancestor)
       .map((className) => `.${normalizeText(className)}`)
       .join('');
@@ -522,7 +523,7 @@ function scoreEditorGroup(
   );
   const evidence = normalizeText(
     [
-      container.id,
+      container.getAttribute('id'),
       container.getAttribute('name'),
       container.getAttribute('class'),
       container.getAttribute('aria-label'),

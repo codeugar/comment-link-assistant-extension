@@ -182,7 +182,7 @@ describe('comment page DOM helpers', () => {
       <form action="/checkout/payment">
         <h2>Checkout payment</h2>
         <textarea name="comment" placeholder="Enter your comment"></textarea>
-        <button type="submit">Submit Comment</button>
+        <button type="submit" class="checkout-form__btn">Submit Comment</button>
       </form>
     `;
 
@@ -1235,6 +1235,102 @@ describe('comment page DOM helpers', () => {
       },
     });
     expect(clicked).toBe(false);
+  });
+
+  it('allows an explicit planned comment form with checkout theme classes', async () => {
+    document.body.innerHTML = `
+      <form class="checkout-form form-add-comments blog-checkout-form" action="/wp-comments-post.php">
+        <textarea name="comment" aria-label="Your comment"></textarea>
+        <input name="author" aria-label="Name">
+        <input name="email" aria-label="Email">
+        <button type="submit" class="checkout-form__btn">Submit Comment</button>
+      </form>
+    `;
+    const snapshot = probePageDocument(document);
+    const control = (name: string) =>
+      snapshot.controlCandidates.find(
+        (candidate) => candidate.attributes.name === name
+      )?.candidateId;
+    const submit = snapshot.controlCandidates.find(
+      (candidate) => candidate.tag === 'button'
+    )?.candidateId;
+
+    const preparation = await prepareSubmissionDocument(
+      document,
+      {
+        comment: 'A useful comment.',
+        displayName: 'Seed Audio',
+        email: 'support@example.com',
+        websiteUrl: '',
+      },
+      {
+        url: document.location.href,
+        editorLabel: 'Your comment',
+        submitLabel: 'Submit Comment',
+        hasWebsiteField: false,
+        formPlan: {
+          schemaVersion: 1,
+          snapshotId: snapshot.snapshotId,
+          decision: 'commentable',
+          formCandidateId: snapshot.formCandidates[0]?.formId ?? null,
+          bindings: {
+            comment: control('comment') ?? '',
+            name: control('author'),
+            email: control('email'),
+          },
+          submitCandidateId: submit ?? null,
+          requiredRoles: ['comment', 'name', 'email'],
+          uncertainties: [],
+        },
+      }
+    );
+
+    expect(preparation.ok).toBe(true);
+    if (preparation.ok) {
+      await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+    }
+  });
+
+  it('rejects explicit comment controls on a same-origin payment endpoint', async () => {
+    document.body.innerHTML = `
+      <form class="checkout-form" action="/pay">
+        <textarea name="comment" aria-label="Your comment"></textarea>
+        <button type="submit" title="checkout-payment">Submit Comment</button>
+      </form>
+    `;
+    const snapshot = probePageDocument(document);
+    const comment = snapshot.controlCandidates.find(
+      (candidate) => candidate.attributes.name === 'comment'
+    );
+    const submit = snapshot.controlCandidates.find(
+      (candidate) => candidate.tag === 'button'
+    );
+
+    const preparation = await prepareSubmissionDocument(
+      document,
+      { comment: 'A useful comment.', websiteUrl: '' },
+      {
+        url: document.location.href,
+        editorLabel: 'Your comment',
+        submitLabel: 'Submit Comment',
+        hasWebsiteField: false,
+        formPlan: {
+          schemaVersion: 1,
+          snapshotId: snapshot.snapshotId,
+          decision: 'commentable',
+          formCandidateId: snapshot.formCandidates[0]?.formId ?? null,
+          bindings: { comment: comment?.candidateId ?? '' },
+          submitCandidateId: submit?.candidateId ?? null,
+          requiredRoles: ['comment'],
+          uncertainties: [],
+        },
+      }
+    );
+
+    expect(preparation).toMatchObject({
+      ok: false,
+      result: { message: 'FORM_PLAN_UNSAFE_SUBMIT', clickOccurred: false },
+    });
   });
 
   it('rejects a planned comment form that submits to another origin', async () => {
@@ -2354,6 +2450,79 @@ describe('comment page DOM helpers', () => {
       clickOccurred: false,
     });
     expect(submitted).toBe(false);
+  });
+
+  it('skips oversized generic elements before checking feedback visibility', async () => {
+    document.body.innerHTML = `
+      <div id="oversized">${'x'.repeat(501)}</div>
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+    const oversized = document.querySelector('#oversized');
+    const originalGetComputedStyle = window.getComputedStyle.bind(window);
+    const getComputedStyle = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation((element, pseudoElement) =>
+        originalGetComputedStyle(element, pseudoElement)
+      );
+
+    const preparation = await prepareSubmissionDocument(document, {
+      comment: 'A useful comment.',
+      websiteUrl: '',
+    });
+
+    expect(preparation.ok).toBe(true);
+    expect(
+      getComputedStyle.mock.calls.some(([element]) => element === oversized)
+    ).toBe(false);
+  });
+
+  it('keeps short visible feedback when a hidden descendant is oversized', () => {
+    document.body.innerHTML = `
+      <div>Your comment was submitted.<span hidden>${'x'.repeat(501)}</span></div>
+    `;
+
+    const result = verifySubmissionDocument(document, 'A useful comment.', {
+      feedbackMessages: [],
+      renderedComment: false,
+    });
+
+    expect(result).toMatchObject({
+      status: 'submitted_not_visible',
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+    });
+  });
+
+  it('skips unrelated comment-shaped elements before checking visibility', () => {
+    document.body.innerHTML = '<div class="comment-shell">Unrelated copy</div>';
+    const shell = document.querySelector('.comment-shell');
+    const originalGetComputedStyle = window.getComputedStyle.bind(window);
+    const getComputedStyle = vi
+      .spyOn(window, 'getComputedStyle')
+      .mockImplementation((element, pseudoElement) =>
+        originalGetComputedStyle(element, pseudoElement)
+      );
+
+    verifySubmissionDocument(document, 'A unique comment fingerprint');
+
+    expect(
+      getComputedStyle.mock.calls.some(([element]) => element === shell)
+    ).toBe(false);
+  });
+
+  it('finds a visible comment when hidden metadata separates fingerprint words', () => {
+    document.body.innerHTML = `
+      <div class="comment">A useful <span hidden>metadata</span> point</div>
+    `;
+
+    const result = verifySubmissionDocument(document, 'A useful point', {
+      feedbackMessages: [],
+      renderedComment: false,
+    });
+
+    expect(result.status).toBe('published');
   });
 
   it('does not verify a submission on a different page URL', async () => {
