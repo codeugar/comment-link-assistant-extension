@@ -475,6 +475,70 @@ describe('batch runner', () => {
     ]);
   });
 
+  it('uses a confidently detected standard comment form without AI planning', async () => {
+    const ready = analysis('ready');
+    ready.probe = {
+      snapshotId: 'snapshot-standard',
+      url: ready.page.url,
+      formCandidates: [
+        {
+          formId: 'form-1',
+          tag: 'form',
+          attributes: { id: 'commentform' },
+          controlCandidateIds: ['control-1', 'control-2'],
+        },
+      ],
+      controlCandidates: [
+        {
+          candidateId: 'control-1',
+          formId: 'form-1',
+          tag: 'textarea',
+          type: 'textarea',
+          attributes: { name: 'comment' },
+          labels: ['Comment'],
+          nearbyText: [],
+          ancestorTokens: ['form#commentform'],
+          requiredSignals: [],
+          visible: true,
+          enabled: true,
+          hasValue: false,
+        },
+        {
+          candidateId: 'control-2',
+          formId: 'form-1',
+          tag: 'button',
+          type: 'submit',
+          attributes: { type: 'submit' },
+          labels: ['Submit Comment'],
+          nearbyText: [],
+          ancestorTokens: ['form#commentform'],
+          requiredSignals: [],
+          visible: true,
+          enabled: true,
+          hasValue: false,
+        },
+      ],
+    };
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const context = dependencies(batch, {
+      analyzeTab: vi.fn(async () => ready),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.planCommentForm).not.toHaveBeenCalled();
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'generating',
+      analysis: {
+        form: { readiness: 'ready' },
+      },
+    });
+  });
+
   it('uses AI semantics to turn a localized candidate form into a ready plan', async () => {
     const localized = analysis('not_found');
     localized.form.message = 'COMMENT_FORM_NOT_FOUND';

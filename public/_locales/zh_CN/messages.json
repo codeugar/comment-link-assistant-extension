@@ -365,6 +365,15 @@
   "generatedCommentCopyFailed": {
     "message": "无法复制评论"
   },
+  "copyDiagnostics": {
+    "message": "复制诊断信息"
+  },
+  "diagnosticsCopied": {
+    "message": "诊断信息已复制"
+  },
+  "diagnosticsCopyFailed": {
+    "message": "无法复制诊断信息"
+  },
   "activityOpeningTarget": {
     "message": "正在打开目标页面"
   },

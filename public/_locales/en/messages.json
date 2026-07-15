@@ -365,6 +365,15 @@
   "generatedCommentCopyFailed": {
     "message": "The comment could not be copied"
   },
+  "copyDiagnostics": {
+    "message": "Copy diagnostic"
+  },
+  "diagnosticsCopied": {
+    "message": "Diagnostic copied"
+  },
+  "diagnosticsCopyFailed": {
+    "message": "The diagnostic could not be copied"
+  },
   "activityOpeningTarget": {
     "message": "Opening the target page"
   },

@@ -176,6 +176,43 @@ describe('side panel navigation', () => {
     expect(container.textContent).toContain('formNeedsReview');
   });
 
+  it('shows and copies the raw diagnostic for a failed website', async () => {
+    const completed = completeCurrentItem(
+      createBatch({
+        targetText:
+          'https://www.learnalanguage.com/blog/italian-greetings-how-are-you-in-italian/',
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+      }),
+      'failed',
+      'FORM_PLAN_INVALID_SCHEMA'
+    );
+    const writeText = vi.fn<(text: string) => Promise<void>>(
+      async () => undefined
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: completed.settings,
+      [BATCH_STORAGE_KEY]: completed,
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('FORM_PLAN_INVALID_SCHEMA');
+    await clickButton('copyDiagnostics');
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText.mock.calls[0]?.[0]).toContain('FORM_PLAN_INVALID_SCHEMA');
+    expect(writeText.mock.calls[0]?.[0]).toContain('learnalanguage.com');
+  });
+
   it('explains when a planned action is blocked as unsafe', async () => {
     const completed = completeCurrentItem(
       createBatch({

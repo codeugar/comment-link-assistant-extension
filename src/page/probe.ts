@@ -473,6 +473,38 @@ function uniqueElements(elements: HTMLElement[]): HTMLElement[] {
   return [...new Set(elements)];
 }
 
+function boundedFallbackControls(
+  elements: HTMLElement[],
+  limit: number
+): HTMLElement[] {
+  if (limit <= 0) return [];
+  const signatures = new Set<string>();
+  const deduplicated = elements.filter((element) => {
+    if (!isActionControl(element) && element.tagName !== 'A') return true;
+    const signature = JSON.stringify({
+      tag: element.tagName,
+      type: controlType(element),
+      text: normalizeText(readButtonText(element)),
+      class: semanticClassNames(element),
+      role: normalizeText(element.getAttribute('role')),
+      href: safeAttributeValue(
+        element,
+        'href',
+        element.getAttribute('href') ?? ''
+      ),
+    });
+    if (signatures.has(signature)) return false;
+    signatures.add(signature);
+    return true;
+  });
+  if (deduplicated.length <= limit) return deduplicated;
+  const leadingCount = Math.ceil(limit / 2);
+  return [
+    ...deduplicated.slice(0, leadingCount),
+    ...deduplicated.slice(-(limit - leadingCount)),
+  ];
+}
+
 interface EditorControlGroup {
   container: HTMLElement;
   controls: HTMLElement[];
@@ -777,9 +809,7 @@ export function probePageDocument(document: Document): PageProbeSnapshot {
     MAX_CONTROL_CANDIDATES - selectedGroupedControls.length;
   const controls = [
     ...selectedGroupedControls,
-    ...fallbackControls.slice(
-      Math.max(0, fallbackControls.length - fallbackControlLimit)
-    ),
+    ...boundedFallbackControls(fallbackControls, fallbackControlLimit),
   ];
   const controlCandidates = controls.map((element, index) => {
     const group = controlGroup(element);

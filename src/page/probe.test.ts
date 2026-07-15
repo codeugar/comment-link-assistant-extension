@@ -531,6 +531,32 @@ describe('page probe', () => {
     expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
   });
 
+  it('keeps a unique comment entry when repeated reply actions exceed the cap', () => {
+    document.body.innerHTML = `
+      <a class="comments__add-btn" href="#addComment">+ Add Comments</a>
+      ${Array.from(
+        { length: 180 },
+        () => '<a class="comments__reply" href="javascript:void(0)">Reply</a>'
+      ).join('')}
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <button type="submit">Submit Comment</button>
+      </form>
+    `;
+
+    const snapshot = probePageDocument(document);
+    const addComment = snapshot.controlCandidates.find((candidate) =>
+      candidate.attributes.class?.includes('comments__add-btn')
+    );
+    const replyCandidates = snapshot.controlCandidates.filter((candidate) =>
+      candidate.attributes.class?.includes('comments__reply')
+    );
+
+    expect(addComment).toBeDefined();
+    expect(replyCandidates).toHaveLength(1);
+    expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
+  });
+
   it('bounds aria-labelledby references before resolving or serializing them', () => {
     const labelIds = Array.from({ length: 20 }, (_, index) => `label-${index}`);
     document.body.innerHTML = `
@@ -679,7 +705,7 @@ describe('page probe', () => {
     );
 
     expect(snapshot.formCandidates).toHaveLength(40);
-    expect(snapshot.controlCandidates).toHaveLength(120);
+    expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
     expect(commentForm?.controlCandidateIds).toHaveLength(4);
     expect(replyForm?.controlCandidateIds).toHaveLength(2);
     expect(selectedNames).toEqual(

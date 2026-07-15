@@ -906,10 +906,10 @@ async function advanceAnalysis(
           candidate.attributes.role === 'button' ||
           (candidate.tag === 'input' && candidate.type === 'button'))
     );
-  if (
-    analysis.probe &&
-    (hasPlausibleCommentControls(analysis.probe) || canPlanFormReveal)
-  ) {
+  const needsSemanticFormPlan =
+    analysis.form.readiness === 'not_found' &&
+    Boolean(analysis.probe && hasPlausibleCommentControls(analysis.probe));
+  if (analysis.probe && (needsSemanticFormPlan || canPlanFormReveal)) {
     try {
       const keys = await dependencies.getProviderApiKeys();
       const plan = await dependencies.planCommentForm(keys, {

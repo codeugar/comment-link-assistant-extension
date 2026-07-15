@@ -688,6 +688,27 @@ textarea:focus {
   margin: 0 10px 8px 26px;
 }
 
+.site-diagnostics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 10px 8px 26px;
+  border-left: 2px solid var(--red);
+  padding-left: 8px;
+}
+
+.site-diagnostics code {
+  overflow-wrap: anywhere;
+  color: var(--red);
+  font-size: 8px;
+}
+
+.site-diagnostics .text-button {
+  flex: none;
+  font-size: 8px;
+}
+
 .generated-comment {
   margin: 4px 10px 10px 26px;
   border-left: 2px solid var(--line);

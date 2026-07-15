@@ -129,6 +129,15 @@ function batchItemMessageCopy(message: string): string | null {
   return null;
 }
 
+function batchItemDiagnostic(item: BatchItem): string {
+  return [
+    `URL: ${item.url}`,
+    `Status: ${item.status}`,
+    `Error: ${item.message}`,
+    `Updated: ${new Date(item.updatedAt).toISOString()}`,
+  ].join('\n');
+}
+
 function pauseCopy(status?: BatchItemStatus): string {
   if (status === 'login_required') {
     return translate('batchPausedLoginDescription');
@@ -480,6 +489,16 @@ export default function App() {
       setError('');
     } catch {
       setError(translate('generatedCommentCopyFailed'));
+    }
+  }
+
+  async function copyDiagnostics(item: BatchItem) {
+    try {
+      await navigator.clipboard.writeText(batchItemDiagnostic(item));
+      setNotice(translate('diagnosticsCopied'));
+      setError('');
+    } catch {
+      setError(translate('diagnosticsCopyFailed'));
     }
   }
 
@@ -912,6 +931,19 @@ export default function App() {
 
                     {detail ? (
                       <p className="site-result-detail">{detail}</p>
+                    ) : null}
+
+                    {item.status === 'failed' && item.message ? (
+                      <div className="site-diagnostics">
+                        <code>{item.message}</code>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => copyDiagnostics(item)}
+                        >
+                          {translate('copyDiagnostics')}
+                        </button>
+                      </div>
                     ) : null}
 
                     {item.comment ? (

@@ -20,6 +20,9 @@ website metadata and target count, then confirms the whole batch once. The
 service worker processes one URL at a time in a reusable inactive tab placed in
 a collapsed `Comment Assistant` group. Automated work never activates that tab;
 login and CAPTCHA gates pause the queue until the user explicitly opens it.
+Reliably detected standard comment forms are filled directly without asking AI
+to rediscover their fields. AI form planning is reserved for unresolved or
+initially hidden forms.
 If the comment form is initially hidden, the same constrained AI planner can
 select a visible same-page control that reveals it, including controls written
 in other languages. The page operator accepts only an observed candidate ID,
@@ -34,7 +37,8 @@ the page and also appears in a credential-free public-page fetch. Explicit
 acceptance without a publicly visible comment is recorded as submitted but not
 visible, and later targets from that website are skipped. Each website keeps a
 timestamped node history and its generated comment in the batch snapshot until
-the user starts a new batch.
+the user starts a new batch. Failed websites also expose their raw diagnostic
+code in the Side Panel with a copy action for troubleshooting.
 
 The dedicated worker tab has a `{ batchId, tabId }` ownership marker in
 `chrome.storage.session`. Every read, activation, navigation, and page command
