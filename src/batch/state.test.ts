@@ -51,6 +51,7 @@ describe('batch state', () => {
         comment: null,
         commentFingerprint: null,
         prepared: null,
+        events: [{ status: 'queued', message: '', at: 1_000 }],
         message: '',
         createdAt: 1_000,
         updatedAt: 1_000,
@@ -63,6 +64,7 @@ describe('batch state', () => {
         comment: null,
         commentFingerprint: null,
         prepared: null,
+        events: [{ status: 'queued', message: '', at: 1_000 }],
         message: '',
         createdAt: 1_000,
         updatedAt: 1_000,
@@ -146,7 +148,7 @@ describe('batch state', () => {
     });
   });
 
-  it('drops generation and page payloads after an item becomes terminal', () => {
+  it('keeps the generated comment but drops page payloads after completion', () => {
     let batch = createTwoItemBatch();
     batch = updateBatchProgress(
       batch,
@@ -183,9 +185,37 @@ describe('batch state', () => {
     expect(batch.items[0]).toMatchObject({
       status: 'published',
       analysis: null,
-      comment: null,
+      comment: 'A generated comment',
       prepared: null,
     });
+  });
+
+  it('keeps a timestamped node history for each website', () => {
+    let batch = createTwoItemBatch();
+    batch = updateBatchProgress(batch, { item: { status: 'opening' } }, 1_100);
+    batch = updateBatchProgress(
+      batch,
+      { item: { status: 'analyzing' } },
+      1_200
+    );
+    batch = updateBatchProgress(
+      batch,
+      { item: { status: 'generating', comment: 'Generated comment' } },
+      1_300
+    );
+    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 1_400);
+
+    expect(batch.items[0]?.events).toEqual([
+      { status: 'queued', message: '', at: 1_000 },
+      { status: 'opening', message: '', at: 1_100 },
+      { status: 'analyzing', message: '', at: 1_200 },
+      { status: 'generating', message: '', at: 1_300 },
+      {
+        status: 'published',
+        message: 'COMMENT_PUBLISHED',
+        at: 1_400,
+      },
+    ]);
   });
 
   it.each(['login_required', 'captcha_required'] as const)(

@@ -120,7 +120,6 @@ function dependencies(
       url,
       status: 'loading',
     })),
-    activateWorkerTab: vi.fn(async () => undefined),
     analyzeTab: vi.fn(async () => analysis()),
     planCommentForm: vi.fn(
       async (_keys, input): Promise<FormPlan> => ({
@@ -385,7 +384,6 @@ describe('batch runner', () => {
       status: 'paused',
       items: [{ status: 'login_required' }],
     });
-    expect(context.deps.activateWorkerTab).toHaveBeenCalledWith(7, 'batch-1');
   });
 
   it('does not adopt a redirect that changes a non-tracking query parameter', async () => {
@@ -640,7 +638,7 @@ describe('batch runner', () => {
   });
 
   it.each(['login_required', 'captcha_required'] as const)(
-    'pauses on %s and leaves the target tab ready for manual action',
+    'pauses on %s without stealing focus from the current page',
     async (readiness) => {
       const batch = updateBatchProgress(
         initialBatch(),
@@ -658,7 +656,6 @@ describe('batch runner', () => {
         currentIndex: 0,
         items: [{ status: readiness }],
       });
-      expect(context.deps.activateWorkerTab).toHaveBeenCalledWith(7, 'batch-1');
     }
   );
 
@@ -727,7 +724,6 @@ describe('batch runner', () => {
         items: [{ status: expectedStatus }],
       });
       expect(context.deps.analyzeTab).not.toHaveBeenCalled();
-      expect(context.deps.activateWorkerTab).toHaveBeenCalledWith(7, 'batch-1');
     }
   );
 
@@ -815,6 +811,11 @@ describe('batch runner', () => {
       prepared.expected.url,
       prepared.fingerprint
     );
+    expect(context.deps.setBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [expect.objectContaining({ status: 'checking_public' })],
+      })
+    );
     expect(context.read()).toMatchObject({
       status: 'completed',
       items: [
@@ -851,6 +852,41 @@ describe('batch runner', () => {
     expect(context.read()).toMatchObject({
       status: 'completed',
       items: [{ status: 'published', message: 'COMMENT_PUBLISHED' }],
+    });
+  });
+
+  it('recovers an interrupted anonymous public visibility check', async () => {
+    let batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    batch = updateBatchProgress(
+      batch,
+      {
+        item: {
+          status: 'checking_public',
+          message: 'PUBLIC_CHECK_ACCEPTED',
+        },
+      },
+      4
+    );
+    const context = dependencies(batch, {
+      isCommentPubliclyVisible: vi.fn(async () => false),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.isCommentPubliclyVisible).toHaveBeenCalledWith(
+      prepared.expected.url,
+      prepared.fingerprint
+    );
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'submitted_not_visible' }],
     });
   });
 

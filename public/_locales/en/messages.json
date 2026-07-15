@@ -279,13 +279,16 @@
     "message": "Generating comment"
   },
   "batchStatusPrepared": {
-    "message": "Comment prepared"
+    "message": "Form filled"
   },
   "batchStatusSubmitting": {
     "message": "Submitting comment"
   },
   "batchStatusVerifying": {
     "message": "Verifying result"
+  },
+  "batchStatusCheckingPublic": {
+    "message": "Checking public visibility"
   },
   "batchStatusPublished": {
     "message": "Immediately published"
@@ -337,5 +340,65 @@
   },
   "siteRejectedByPriorResult": {
     "message": "Skipped because an earlier result rejected this website."
+  },
+  "siteFlowTitle": {
+    "message": "Website activity"
+  },
+  "backgroundWorkerNotice": {
+    "message": "Runs in a collapsed background tab"
+  },
+  "generatedCommentLabel": {
+    "message": "Generated comment"
+  },
+  "copyGeneratedComment": {
+    "message": "Copy comment"
+  },
+  "generatedCommentCopied": {
+    "message": "Comment copied"
+  },
+  "generatedCommentCopyFailed": {
+    "message": "The comment could not be copied"
+  },
+  "activityOpeningTarget": {
+    "message": "Opening the target page"
+  },
+  "activityWaitingForPage": {
+    "message": "Waiting for the page to finish loading"
+  },
+  "activityAnalyzingContent": {
+    "message": "Reading the article and comment area"
+  },
+  "activityMappingForm": {
+    "message": "Mapping safe comment form fields"
+  },
+  "activityGeneratingContext": {
+    "message": "Building context for this website"
+  },
+  "activityWritingComment": {
+    "message": "Writing a relevant comment"
+  },
+  "activityPreparingFields": {
+    "message": "Filling the comment form"
+  },
+  "activityCheckingSubmit": {
+    "message": "Checking the submit action"
+  },
+  "activitySubmitting": {
+    "message": "Clicking the submit button"
+  },
+  "activityWaitingResponse": {
+    "message": "Waiting for the website response"
+  },
+  "activityVerifyingPage": {
+    "message": "Inspecting the result page"
+  },
+  "activityReadingFeedback": {
+    "message": "Interpreting the submission feedback"
+  },
+  "activityCheckingAnonymousPage": {
+    "message": "Opening a credential-free public copy"
+  },
+  "activityLookingForFingerprint": {
+    "message": "Looking for the published comment"
   }
 }

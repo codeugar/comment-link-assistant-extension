@@ -15,6 +15,7 @@ const progressStatuses = new Set<BatchItemStatus>([
   'prepared',
   'click_dispatched',
   'verifying',
+  'checking_public',
 ]);
 
 const pauseStatuses = [
@@ -52,6 +53,7 @@ export interface BatchItemProgressUpdate {
     | 'prepared'
     | 'click_dispatched'
     | 'verifying'
+    | 'checking_public'
   >;
   analysis?: BatchItem['analysis'];
   comment?: BatchItem['comment'];
@@ -94,6 +96,19 @@ function replaceCurrentItem(
   );
 }
 
+function appendStatusEvent(
+  item: BatchItem,
+  status: BatchItemStatus,
+  message: string,
+  at: number
+): BatchItem['events'] {
+  if (item.events.at(-1)?.status === status) return item.events;
+  return [
+    ...item.events,
+    { status, message: boundedMessage(message), at },
+  ].slice(-32);
+}
+
 function legalSnapshot(batch: BatchSnapshot): BatchSnapshot {
   return batchSnapshotSchema.parse(batch);
 }
@@ -122,6 +137,7 @@ export function createBatch(input: CreateBatchInput): BatchSnapshot {
       comment: null,
       commentFingerprint: null,
       prepared: null,
+      events: [{ status: 'queued', message: '', at: now }],
       message: '',
       createdAt: now,
       updatedAt: now,
@@ -147,9 +163,12 @@ export function updateBatchProgress(
     if (update.item.status && !progressStatuses.has(update.item.status)) {
       throw new Error('BATCH_ITEM_PROGRESS_INVALID');
     }
+    const status = update.item.status ?? item.status;
+    const message = update.item.message ?? item.message;
     items = replaceCurrentItem(batch, {
       ...item,
       ...update.item,
+      events: appendStatusEvent(item, status, message, now),
       updatedAt: now,
     });
   }
@@ -189,6 +208,7 @@ export function pauseCurrentItem(
       ...item,
       status,
       message: boundedMessage(message),
+      events: appendStatusEvent(item, status, message, now),
       updatedAt: now,
     }),
     updatedAt: now,
@@ -213,9 +233,9 @@ export function completeCurrentItem(
       ...item,
       status,
       analysis: null,
-      comment: null,
       prepared: null,
       message: boundedMessage(message),
+      events: appendStatusEvent(item, status, message, now),
       updatedAt: now,
     }),
     currentIndex: nextIndex,
@@ -241,6 +261,14 @@ export function resumeBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
       message: item.prepared
         ? 'BATCH_RESUME_VERIFICATION_REQUIRED'
         : 'BATCH_RESUME_TARGET_REQUIRED',
+      events: appendStatusEvent(
+        item,
+        'opening',
+        item.prepared
+          ? 'BATCH_RESUME_VERIFICATION_REQUIRED'
+          : 'BATCH_RESUME_TARGET_REQUIRED',
+        now
+      ),
       updatedAt: now,
     }),
     updatedAt: now,
@@ -269,7 +297,12 @@ export function stopBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
     items: batch.items.map((item) =>
       preservedStopStatuses.has(item.status)
         ? item
-        : { ...item, status: 'stopped', updatedAt: now }
+        : {
+            ...item,
+            status: 'stopped',
+            events: appendStatusEvent(item, 'stopped', '', now),
+            updatedAt: now,
+          }
     ),
     updatedAt: now,
   });

@@ -13,12 +13,14 @@ import {
 } from '@/batch/tab-coordinator';
 import type { BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
+import { closeTerminalBatchWorker } from '@/batch/worker-cleanup';
 import type {
   BackgroundResponse,
   PopupMessage,
   PopupMessageResult,
 } from '@/runtime/messages';
 import {
+  closeOwnedWorkerTab,
   createOwnedWorkerTab,
   updateOwnedWorkerTab,
 } from '@/runtime/owned-worker-tab';
@@ -28,6 +30,7 @@ import {
   submitCurrentPage,
 } from '@/runtime/page-commands';
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
+import { configureSidePanel } from '@/runtime/side-panel';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
 import {
   getProviderApiKeys,
@@ -86,7 +89,14 @@ function scheduleLocalWake(delayMs: number): void {
 }
 
 async function reconcileBatchWake(result: BatchStepResult): Promise<void> {
-  const batch = await getBatch();
+  let batch = await getBatch();
+  if (batch) {
+    batch = await closeTerminalBatchWorker(batch, {
+      closeWorkerTab: closeOwnedWorkerTab,
+      setBatch,
+      now: Date.now,
+    });
+  }
   await updateBatchBadge(batch);
   if (batch?.status !== 'running') {
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
@@ -211,9 +221,6 @@ async function continueBatch(): Promise<PopupMessageResult> {
   if (!batch) throw new Error('BATCH_NOT_FOUND');
   const next = resumeBatch(batch);
   if (next !== batch) await setBatch(next);
-  if (next.workerTabId !== undefined) {
-    await updateOwnedWorkerTab(next.id, next.workerTabId, { active: true });
-  }
   requestBatchWake();
   return { type: 'batch.continue', data: next };
 }
@@ -230,8 +237,13 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
       await clearBatchStopIntent();
       return { type: 'batch.stop', data: null };
     }
-    const next = stopBatch(batch);
+    let next = stopBatch(batch);
     if (next !== batch) await setBatch(next);
+    next = await closeTerminalBatchWorker(next, {
+      closeWorkerTab: closeOwnedWorkerTab,
+      setBatch,
+      now: Date.now,
+    });
     await clearBatchStopIntent();
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
     localWakeTimer = undefined;
@@ -263,7 +275,9 @@ async function openCurrentBatchTarget(): Promise<PopupMessageResult> {
       Boolean(await updateOwnedWorkerTab(batchId, tabId, { active: true })),
     createTab: async (batchId, url) => {
       const tab = await createOwnedWorkerTab(batchId, url);
-      return typeof tab.id === 'number' ? tab.id : null;
+      if (typeof tab.id !== 'number') return null;
+      await updateOwnedWorkerTab(batchId, tab.id, { active: true });
+      return tab.id;
     },
     requestBatchWake,
     isStopRequested: () => stopRequested,
@@ -313,6 +327,7 @@ export default defineBackground({
   type: 'module',
   main() {
     const storageReady = restrictStorageToTrustedContexts();
+    void configureSidePanel(chrome.sidePanel);
 
     chrome.runtime.onMessage.addListener(
       (message: PopupMessage, _sender, sendResponse: SendResponse) => {

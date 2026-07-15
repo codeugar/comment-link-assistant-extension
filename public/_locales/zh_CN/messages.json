@@ -279,13 +279,16 @@
     "message": "正在生成评论"
   },
   "batchStatusPrepared": {
-    "message": "评论已准备"
+    "message": "表单已填写"
   },
   "batchStatusSubmitting": {
     "message": "正在提交评论"
   },
   "batchStatusVerifying": {
     "message": "正在检查结果"
+  },
+  "batchStatusCheckingPublic": {
+    "message": "正在匿名验证公开状态"
   },
   "batchStatusPublished": {
     "message": "立即公开"
@@ -337,5 +340,65 @@
   },
   "siteRejectedByPriorResult": {
     "message": "该网站之前已被淘汰，已跳过。"
+  },
+  "siteFlowTitle": {
+    "message": "网站处理信息流"
+  },
+  "backgroundWorkerNotice": {
+    "message": "在折叠的后台标签中运行，不切换当前页面"
+  },
+  "generatedCommentLabel": {
+    "message": "生成的评论"
+  },
+  "copyGeneratedComment": {
+    "message": "复制评论"
+  },
+  "generatedCommentCopied": {
+    "message": "评论已复制"
+  },
+  "generatedCommentCopyFailed": {
+    "message": "无法复制评论"
+  },
+  "activityOpeningTarget": {
+    "message": "正在打开目标页面"
+  },
+  "activityWaitingForPage": {
+    "message": "正在等待页面加载完成"
+  },
+  "activityAnalyzingContent": {
+    "message": "正在读取文章和评论区"
+  },
+  "activityMappingForm": {
+    "message": "正在识别安全的评论表单字段"
+  },
+  "activityGeneratingContext": {
+    "message": "正在整理这个网站的上下文"
+  },
+  "activityWritingComment": {
+    "message": "正在撰写相关评论"
+  },
+  "activityPreparingFields": {
+    "message": "正在填写评论表单"
+  },
+  "activityCheckingSubmit": {
+    "message": "正在确认安全提交按钮"
+  },
+  "activitySubmitting": {
+    "message": "正在点击提交按钮"
+  },
+  "activityWaitingResponse": {
+    "message": "正在等待网站响应"
+  },
+  "activityVerifyingPage": {
+    "message": "正在检查提交结果页面"
+  },
+  "activityReadingFeedback": {
+    "message": "正在解释网站返回信息"
+  },
+  "activityCheckingAnonymousPage": {
+    "message": "正在打开无登录信息的公开页面"
+  },
+  "activityLookingForFingerprint": {
+    "message": "正在查找公开评论指纹"
   }
 }

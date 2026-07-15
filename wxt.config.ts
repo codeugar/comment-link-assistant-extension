@@ -12,7 +12,17 @@ export default defineConfig({
     action: {
       default_title: '__MSG_extensionName__',
     },
-    permissions: ['storage', 'activeTab', 'scripting', 'alarms'],
+    permissions: [
+      'storage',
+      'activeTab',
+      'scripting',
+      'alarms',
+      'sidePanel',
+      'tabGroups',
+    ],
+    side_panel: {
+      default_path: 'sidepanel.html',
+    },
     host_permissions: ['https://api.deepseek.com/*', 'https://api.kie.ai/*'],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
   }),

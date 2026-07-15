@@ -1,5 +1,6 @@
-import type { BatchItemStatus, BatchSnapshot } from '@/batch/types';
+import type { BatchItem, BatchItemStatus, BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
+import { TextLoop } from '@/components/core/text-loop';
 import { translate } from '@/i18n';
 import { sendToBackground } from '@/runtime/messages';
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
@@ -71,6 +72,8 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusSubmitting');
     case 'verifying':
       return translate('batchStatusVerifying');
+    case 'checking_public':
+      return translate('batchStatusCheckingPublic');
     case 'published':
       return translate('batchStatusPublished');
     case 'submitted_not_visible':
@@ -163,6 +166,68 @@ function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
   ];
 }
 
+function formatEventTime(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(timestamp);
+}
+
+function activityCopy(status: BatchItemStatus): string[] {
+  switch (status) {
+    case 'opening':
+      return [
+        translate('activityOpeningTarget'),
+        translate('activityWaitingForPage'),
+      ];
+    case 'analyzing':
+      return [
+        translate('activityAnalyzingContent'),
+        translate('activityMappingForm'),
+      ];
+    case 'generating':
+      return [
+        translate('activityGeneratingContext'),
+        translate('activityWritingComment'),
+      ];
+    case 'prepared':
+      return [
+        translate('activityPreparingFields'),
+        translate('activityCheckingSubmit'),
+      ];
+    case 'click_dispatched':
+      return [
+        translate('activitySubmitting'),
+        translate('activityWaitingResponse'),
+      ];
+    case 'verifying':
+      return [
+        translate('activityVerifyingPage'),
+        translate('activityReadingFeedback'),
+      ];
+    case 'checking_public':
+      return [
+        translate('activityCheckingAnonymousPage'),
+        translate('activityLookingForFingerprint'),
+      ];
+    default:
+      return [batchItemStatusCopy(status)];
+  }
+}
+
+function isTerminalItem(item: BatchItem): boolean {
+  return [
+    'published',
+    'submitted_not_visible',
+    'no_form',
+    'validation_error',
+    'unknown',
+    'failed',
+    'stopped',
+  ].includes(item.status);
+}
+
 export default function App() {
   const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS);
   const [apiKeys, setApiKeys] = useState<ProviderApiKeys>({
@@ -179,6 +244,9 @@ export default function App() {
   );
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   useEffect(() => {
     void Promise.all([
@@ -248,6 +316,14 @@ export default function App() {
         ).length
       : batch.currentIndex
     : 0;
+
+  useEffect(() => {
+    if (!currentItem) return;
+    setExpandedItemIds((current) => {
+      if (current.has(currentItem.id)) return current;
+      return new Set([...current, currentItem.id]);
+    });
+  }, [currentItem]);
 
   const updateSetting = <Key extends keyof ExtensionSettings>(
     key: Key,
@@ -396,6 +472,16 @@ export default function App() {
       setError(friendlyError(caught));
     } finally {
       setBusy('idle');
+    }
+  }
+
+  async function copyGeneratedComment(comment: string) {
+    try {
+      await navigator.clipboard.writeText(comment);
+      setNotice(translate('generatedCommentCopied'));
+      setError('');
+    } catch {
+      setError(translate('generatedCommentCopyFailed'));
     }
   }
 
@@ -669,20 +755,6 @@ export default function App() {
             value={completedBeforeCurrent}
           />
 
-          {currentItem && batchIsActive ? (
-            <div className={`page-card readiness-${currentItem.status}`}>
-              <div className="page-card-copy">
-                <span>{translate('currentTargetLabel')}</span>
-                <strong title={currentItem.url}>
-                  {displayTarget(currentItem.url)}
-                </strong>
-              </div>
-              <div className="field-status">
-                {batchItemStatusCopy(currentItem.status)}
-              </div>
-            </div>
-          ) : null}
-
           {batch.status === 'paused' && currentItem ? (
             <div className="pause-card" aria-live="polite">
               <p>{pauseCopy(currentItem.status)}</p>
@@ -761,31 +833,108 @@ export default function App() {
             </>
           )}
 
-          <details className="queue-details">
-            <summary>{translate('queueDetailsLabel')}</summary>
-            <ol className="queue-list">
+          <section
+            className="site-flow-section"
+            aria-labelledby="site-flow-title"
+          >
+            <div className="site-flow-heading">
+              <h3 id="site-flow-title">{translate('siteFlowTitle')}</h3>
+              <span>{translate('backgroundWorkerNotice')}</span>
+            </div>
+            <div className="site-flow-list">
               {batch.items.map((item) => {
+                const isCurrent = currentItem?.id === item.id;
                 const detail = batchItemMessageCopy(item.message);
                 return (
-                  <li
+                  <details
                     key={item.id}
-                    className={`queue-item status-${item.status}`}
+                    data-site-id={item.id}
+                    className={`site-flow-card status-${item.status}${
+                      isCurrent ? ' is-current' : ''
+                    }${isTerminalItem(item) ? ' is-terminal' : ''}`}
+                    open={expandedItemIds.has(item.id)}
+                    onToggle={(event) => {
+                      const open = event.currentTarget.open;
+                      setExpandedItemIds((current) => {
+                        const next = new Set(current);
+                        if (open) next.add(item.id);
+                        else next.delete(item.id);
+                        return next;
+                      });
+                    }}
                   >
-                    <span className="queue-index" aria-hidden="true" />
-                    <span className="queue-url" title={item.url}>
-                      {displayTarget(item.url)}
-                    </span>
-                    <span className="status-label">
-                      {batchItemStatusCopy(item.status)}
-                    </span>
-                    {detail ? (
-                      <span className="queue-message">{detail}</span>
+                    <summary>
+                      <span className="queue-index" aria-hidden="true" />
+                      <span className="site-flow-summary-copy">
+                        <strong title={item.url}>
+                          {displayTarget(item.url)}
+                        </strong>
+                        <small>{batchItemStatusCopy(item.status)}</small>
+                      </span>
+                      <time dateTime={new Date(item.updatedAt).toISOString()}>
+                        {formatEventTime(item.updatedAt)}
+                      </time>
+                    </summary>
+
+                    {isCurrent && batchIsActive ? (
+                      <div className="live-activity" aria-live="polite">
+                        <span className="live-dot" aria-hidden="true" />
+                        <TextLoop
+                          key={`${item.id}:${item.status}`}
+                          className="activity-loop"
+                          interval={2.2}
+                        >
+                          {activityCopy(item.status).map((copy) => (
+                            <span key={copy}>{copy}</span>
+                          ))}
+                        </TextLoop>
+                      </div>
                     ) : null}
-                  </li>
+
+                    <ol className="node-timeline">
+                      {item.events.map((event, index) => {
+                        const eventDetail = batchItemMessageCopy(event.message);
+                        return (
+                          <li key={`${event.status}:${event.at}:${index}`}>
+                            <span className="node-marker" aria-hidden="true" />
+                            <div>
+                              <strong>
+                                {batchItemStatusCopy(event.status)}
+                              </strong>
+                              {eventDetail ? <p>{eventDetail}</p> : null}
+                            </div>
+                            <time dateTime={new Date(event.at).toISOString()}>
+                              {formatEventTime(event.at)}
+                            </time>
+                          </li>
+                        );
+                      })}
+                    </ol>
+
+                    {detail ? (
+                      <p className="site-result-detail">{detail}</p>
+                    ) : null}
+
+                    {item.comment ? (
+                      <details className="generated-comment">
+                        <summary>{translate('generatedCommentLabel')}</summary>
+                        <p>{item.comment}</p>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() =>
+                            copyGeneratedComment(item.comment ?? '')
+                          }
+                        >
+                          {translate('copyGeneratedComment')}
+                        </button>
+                      </details>
+                    ) : null}
+                  </details>
                 );
               })}
-            </ol>
-          </details>
+            </div>
+          </section>
         </section>
       )}
 

@@ -1,4 +1,8 @@
-import { completeCurrentItem, createBatch } from '@/batch/state';
+import {
+  completeCurrentItem,
+  createBatch,
+  updateBatchProgress,
+} from '@/batch/state';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
@@ -13,7 +17,7 @@ import App from './App';
 let container: HTMLDivElement;
 let root: Root;
 
-async function renderPopup(): Promise<void> {
+async function renderSidePanel(): Promise<void> {
   await act(async () => {
     root.render(<App />);
   });
@@ -62,9 +66,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe('popup navigation', () => {
+describe('side panel navigation', () => {
   it('opens on the target queue and uses a separate settings page', async () => {
-    await renderPopup();
+    await renderSidePanel();
 
     expect(container.textContent).toContain('batchSetupTitle');
     expect(container.textContent).not.toContain('settingsTitle');
@@ -79,7 +83,7 @@ describe('popup navigation', () => {
   });
 
   it('saves incomplete settings and stays on the settings page', async () => {
-    await renderPopup();
+    await renderSidePanel();
     await clickButton('openSettings');
 
     const websiteInput = container.querySelector<HTMLInputElement>(
@@ -99,7 +103,7 @@ describe('popup navigation', () => {
   });
 
   it('shows a settings-specific message when local saving fails', async () => {
-    await renderPopup();
+    await renderSidePanel();
     await clickButton('openSettings');
     vi.spyOn(chrome.storage.local, 'set').mockRejectedValueOnce(
       new Error('STORAGE_WRITE_FAILED')
@@ -140,7 +144,7 @@ describe('popup navigation', () => {
       [BATCH_STORAGE_KEY]: completed,
     });
 
-    await renderPopup();
+    await renderSidePanel();
 
     expect(container.querySelector('.model-strip')?.textContent).toContain(
       'providerKieGemini'
@@ -167,7 +171,7 @@ describe('popup navigation', () => {
       [BATCH_STORAGE_KEY]: completed,
     });
 
-    await renderPopup();
+    await renderSidePanel();
 
     expect(container.textContent).toContain('formNeedsReview');
   });
@@ -192,7 +196,7 @@ describe('popup navigation', () => {
       [BATCH_STORAGE_KEY]: completed,
     });
 
-    await renderPopup();
+    await renderSidePanel();
 
     expect(container.textContent).toContain('unsafeSubmitBlocked');
   });
@@ -217,11 +221,64 @@ describe('popup navigation', () => {
       [BATCH_STORAGE_KEY]: completed,
     });
 
-    await renderPopup();
+    await renderSidePanel();
 
     expect(container.textContent).toContain('batchStatusSubmittedNotVisible');
     expect(
       container.querySelector('.status-submitted_not_visible')
     ).not.toBeNull();
+  });
+
+  it('shows the current website as an expanded persistent node timeline', async () => {
+    let running = createBatch({
+      id: 'batch-flow',
+      targetText: 'https://blog.example/post\nhttps://forum.example/discussion',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://product.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline',
+      },
+      now: 1_000,
+    });
+    running = updateBatchProgress(
+      running,
+      { item: { status: 'opening' } },
+      1_100
+    );
+    running = updateBatchProgress(
+      running,
+      { item: { status: 'analyzing' } },
+      1_200
+    );
+    running = updateBatchProgress(
+      running,
+      {
+        item: {
+          status: 'generating',
+          comment: 'A useful generated comment',
+        },
+      },
+      1_300
+    );
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: running.settings,
+      [BATCH_STORAGE_KEY]: running,
+    });
+
+    await renderSidePanel();
+
+    const currentFlow = container.querySelector(
+      '[data-site-id="batch-flow:0"]'
+    );
+    expect(currentFlow).not.toBeNull();
+    expect(currentFlow).toHaveProperty('open', true);
+    expect(currentFlow?.textContent).toContain('batchStatusQueued');
+    expect(currentFlow?.textContent).toContain('batchStatusOpening');
+    expect(currentFlow?.textContent).toContain('batchStatusAnalyzing');
+    expect(currentFlow?.textContent).toContain('batchStatusGenerating');
+    expect(currentFlow?.textContent).toContain('A useful generated comment');
+    expect(currentFlow?.querySelector('.activity-loop')).not.toBeNull();
   });
 });

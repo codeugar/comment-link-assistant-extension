@@ -12,6 +12,7 @@ export const BATCH_ITEM_STATUSES = [
   'prepared',
   'click_dispatched',
   'verifying',
+  'checking_public',
   'published',
   'submitted_not_visible',
   'login_required',
@@ -24,6 +25,12 @@ export const BATCH_ITEM_STATUSES = [
 ] as const;
 
 export type BatchItemStatus = (typeof BATCH_ITEM_STATUSES)[number];
+
+export interface BatchItemEvent {
+  status: BatchItemStatus;
+  message: string;
+  at: number;
+}
 
 export const BATCH_STATUSES = [
   'running',
@@ -47,6 +54,7 @@ export interface BatchItem {
   comment: string | null;
   commentFingerprint: string | null;
   prepared: PreparedPageSubmission | null;
+  events: BatchItemEvent[];
   formPlanRefreshes?: number;
   message: string;
   createdAt: number;
@@ -162,6 +170,14 @@ const preparedPageSubmissionSchema: z.ZodType<PreparedPageSubmission> = z
   })
   .strict();
 
+const batchItemEventSchema: z.ZodType<BatchItemEvent> = z
+  .object({
+    status: z.enum(BATCH_ITEM_STATUSES),
+    message: z.string().max(500),
+    at: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const batchItemSchema: z.ZodType<BatchItem> = z
   .object({
     id: z.string().min(1).max(200),
@@ -171,6 +187,7 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
     comment: z.string().max(2_000).nullable(),
     commentFingerprint: z.string().max(64).nullable(),
     prepared: preparedPageSubmissionSchema.nullable(),
+    events: z.array(batchItemEventSchema).min(1).max(32),
     formPlanRefreshes: z.number().int().nonnegative().max(1).optional(),
     message: z.string().max(500),
     createdAt: z.number().int().nonnegative(),

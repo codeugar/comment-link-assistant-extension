@@ -8,10 +8,38 @@ export async function createOwnedWorkerTab(
   batchId: string,
   url: string
 ): Promise<chrome.tabs.Tab & { id: number }> {
-  const tab = await chrome.tabs.create({ active: true, url });
+  const [activeTab] = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true,
+    windowType: 'normal',
+  });
+  if (typeof activeTab?.id !== 'number') {
+    throw new Error('ACTIVE_TAB_NOT_FOUND');
+  }
+  const tab = await chrome.tabs.create({
+    active: false,
+    index: activeTab.index + 1,
+    openerTabId: activeTab.id,
+    windowId: activeTab.windowId,
+    url,
+  });
   if (typeof tab.id !== 'number') throw new Error('WORKER_TAB_CREATE_FAILED');
-  await claimWorkerTab(batchId, tab.id);
-  return { ...tab, id: tab.id };
+  try {
+    const groupId = await chrome.tabs.group({
+      createProperties: { windowId: activeTab.windowId },
+      tabIds: tab.id,
+    });
+    await chrome.tabGroups.update(groupId, {
+      collapsed: true,
+      color: 'orange',
+      title: 'Comment Assistant',
+    });
+    await claimWorkerTab(batchId, tab.id);
+    return { ...tab, id: tab.id };
+  } catch (error) {
+    await chrome.tabs.remove(tab.id).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function getOwnedWorkerTab(
@@ -22,6 +50,16 @@ export async function getOwnedWorkerTab(
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) await releaseWorkerTab(tabId);
   return tab;
+}
+
+export async function closeOwnedWorkerTab(
+  batchId: string,
+  tabId: number
+): Promise<boolean> {
+  if (!(await ownsWorkerTab(batchId, tabId))) return false;
+  await chrome.tabs.remove(tabId).catch(() => undefined);
+  await releaseWorkerTab(tabId);
+  return true;
 }
 
 export async function updateOwnedWorkerTab(
