@@ -148,6 +148,7 @@ function dependencies(
       return published;
     }),
     verifyTabSubmission: vi.fn(async () => published),
+    isCommentPubliclyVisible: vi.fn(async () => true),
     now: () => now++,
     ...overrides,
   };
@@ -739,14 +740,15 @@ describe('batch runner', () => {
       },
       3
     );
-    const pending: PageSubmissionResult = {
-      status: 'pending_moderation',
-      message: 'COMMENT_PENDING_MODERATION',
+    const submittedNotVisible: PageSubmissionResult = {
+      status: 'submitted_not_visible',
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
     const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => pending),
+      verifyTabSubmission: vi.fn(async () => submittedNotVisible),
+      isCommentPubliclyVisible: vi.fn(async () => false),
     });
 
     await advanceBatchStep(context.deps);
@@ -756,13 +758,164 @@ describe('batch runner', () => {
     expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'pending_moderation' }],
+      items: [{ status: 'submitted_not_visible' }],
+    });
+  });
+
+  it('records an unconfirmed click error once and continues without retrying', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'prepared',
+          analysis: analysis(),
+          comment: prepared.comment,
+          prepared,
+        },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      clickPreparedTabSubmission: vi.fn(async () => {
+        throw new Error('SCRIPT_FAILED_AFTER_CLICK_BOUNDARY');
+      }),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledTimes(1);
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        {
+          status: 'unknown',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        },
+      ],
+    });
+  });
+
+  it('rejects a comment that is visible only in the submitting session', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      isCommentPubliclyVisible: vi.fn(async () => false),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.isCommentPubliclyVisible).toHaveBeenCalledWith(
+      prepared.expected.url,
+      prepared.fingerprint
+    );
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        {
+          status: 'submitted_not_visible',
+          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+        },
+      ],
+    });
+  });
+
+  it('keeps an accepted comment when the ordinary public page contains it', async () => {
+    const accepted: PageSubmissionResult = {
+      status: 'submitted_not_visible',
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      fingerprint: prepared.fingerprint,
+      clickOccurred: true,
+    };
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      verifyTabSubmission: vi.fn(async () => accepted),
+      isCommentPubliclyVisible: vi.fn(async () => true),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'published', message: 'COMMENT_PUBLISHED' }],
+    });
+  });
+
+  it('skips later targets from a site rejected by an earlier result', async () => {
+    let batch = initialBatch(
+      'https://blog.example/first\nhttps://www.blog.example/second'
+    );
+    batch = completeCurrentItem(
+      batch,
+      'submitted_not_visible',
+      'COMMENT_SUBMITTED_NOT_VISIBLE',
+      3
+    );
+    const context = dependencies(batch);
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        { status: 'submitted_not_visible' },
+        { status: 'failed', message: 'SITE_REJECTED_BY_PRIOR_RESULT' },
+      ],
+    });
+  });
+
+  it('publishes an otherwise unknown result when the ordinary public page contains it', async () => {
+    const unknownResult = {
+      status: 'unknown' as const,
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+      fingerprint: prepared.fingerprint,
+      clickOccurred: true,
+      verificationObservation: {
+        url: 'https://blog.example/post',
+        language: 'en',
+        feedbackMessages: [],
+        editorCleared: false,
+        renderedCommentAdded: false,
+      },
+    } satisfies PageSubmissionResult;
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      verifyTabSubmission: vi.fn(async () => unknownResult),
+      isCommentPubliclyVisible: vi.fn(async () => true),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.classifySubmissionOutcome).not.toHaveBeenCalled();
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'published', message: 'COMMENT_PUBLISHED' }],
     });
   });
 
   it.each([
-    ['published', 'published'],
-    ['pending_moderation', 'pending_moderation'],
+    ['submitted_not_visible', 'submitted_not_visible'],
     ['validation_error', 'validation_error'],
   ] as const)(
     'classifies an observed unknown submission as %s without clicking again',
@@ -796,6 +949,7 @@ describe('batch runner', () => {
       const context = dependencies(batch, {
         verifyTabSubmission: vi.fn(async () => unknownResult),
         classifySubmissionOutcome,
+        isCommentPubliclyVisible: vi.fn(async () => false),
       });
 
       await advanceBatchStep(context.deps);
@@ -811,14 +965,17 @@ describe('batch runner', () => {
         items: [
           {
             status: expectedStatus,
-            message: `AI_${classifiedStatus.toUpperCase()}`,
+            message:
+              classifiedStatus === 'submitted_not_visible'
+                ? 'COMMENT_SUBMITTED_NOT_VISIBLE'
+                : `AI_${classifiedStatus.toUpperCase()}`,
           },
         ],
       });
     }
   );
 
-  it('keeps an AI-classified unknown submission paused without clicking again', async () => {
+  it('completes an AI-classified unknown submission without clicking again', async () => {
     const observation = {
       url: 'https://blog.example/post',
       language: 'sr',
@@ -848,6 +1005,7 @@ describe('batch runner', () => {
     const context = dependencies(batch, {
       verifyTabSubmission: vi.fn(async () => unknownResult),
       classifySubmissionOutcome,
+      isCommentPubliclyVisible: vi.fn(async () => false),
     });
 
     await advanceBatchStep(context.deps);
@@ -855,7 +1013,7 @@ describe('batch runner', () => {
     expect(classifySubmissionOutcome).toHaveBeenCalledTimes(1);
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.read()).toMatchObject({
-      status: 'paused',
+      status: 'completed',
       items: [
         {
           status: 'unknown',
@@ -893,6 +1051,7 @@ describe('batch runner', () => {
         status: 'validation_error' as const,
         reason: 'LINK_PLACEMENT_CHANGED',
       })),
+      isCommentPubliclyVisible: vi.fn(async () => false),
     });
 
     await advanceBatchStep(context.deps);
@@ -909,7 +1068,7 @@ describe('batch runner', () => {
     });
   });
 
-  it('keeps an observed unknown submission paused when AI classification fails', async () => {
+  it('completes an unknown submission when AI classification fails', async () => {
     const unknownResult = {
       status: 'unknown' as const,
       message: 'COMMENT_SUBMISSION_UNCONFIRMED',
@@ -937,6 +1096,7 @@ describe('batch runner', () => {
     const context = dependencies(batch, {
       verifyTabSubmission: vi.fn(async () => unknownResult),
       classifySubmissionOutcome,
+      isCommentPubliclyVisible: vi.fn(async () => false),
     });
 
     await advanceBatchStep(context.deps);
@@ -944,7 +1104,7 @@ describe('batch runner', () => {
     expect(classifySubmissionOutcome).toHaveBeenCalledTimes(1);
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.read()).toMatchObject({
-      status: 'paused',
+      status: 'completed',
       items: [
         {
           status: 'unknown',
@@ -989,13 +1149,17 @@ describe('batch runner', () => {
       const context = dependencies(batch, {
         verifyTabSubmission: vi.fn(async () => unknownResult),
         classifySubmissionOutcome,
+        isCommentPubliclyVisible: vi.fn(async () => false),
       });
 
       await advanceBatchStep(context.deps);
 
       expect(classifySubmissionOutcome).not.toHaveBeenCalled();
       expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-      expect(context.read()?.items[0]).toMatchObject({ status: 'unknown' });
+      expect(context.read()).toMatchObject({
+        status: 'completed',
+        items: [{ status: 'unknown' }],
+      });
     }
   );
 

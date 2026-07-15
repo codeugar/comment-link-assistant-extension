@@ -20,14 +20,14 @@ const progressStatuses = new Set<BatchItemStatus>([
 const pauseStatuses = [
   'login_required',
   'captcha_required',
-  'unknown',
 ] as const satisfies readonly BatchItemStatus[];
 
 const completionStatuses = [
   'published',
-  'pending_moderation',
+  'submitted_not_visible',
   'no_form',
   'validation_error',
+  'unknown',
   'failed',
 ] as const satisfies readonly BatchItemStatus[];
 
@@ -181,7 +181,6 @@ export function pauseCurrentItem(
   requireRunning(batch);
   const now = timestamp(at);
   const item = currentItem(batch);
-  const clearPayload = status === 'unknown';
 
   return legalSnapshot({
     ...batch,
@@ -189,9 +188,6 @@ export function pauseCurrentItem(
     items: replaceCurrentItem(batch, {
       ...item,
       status,
-      analysis: clearPayload ? null : item.analysis,
-      comment: clearPayload ? null : item.comment,
-      prepared: clearPayload ? null : item.prepared,
       message: boundedMessage(message),
       updatedAt: now,
     }),
@@ -232,16 +228,6 @@ export function resumeBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
 
   const now = timestamp(at);
   const item = currentItem(batch);
-  if (item.status === 'unknown') {
-    const nextIndex = batch.currentIndex + 1;
-    return legalSnapshot({
-      ...batch,
-      status: nextIndex === batch.items.length ? 'completed' : 'running',
-      currentIndex: nextIndex,
-      updatedAt: now,
-    });
-  }
-
   if (item.status !== 'login_required' && item.status !== 'captcha_required') {
     throw new Error('BATCH_PAUSE_STATE_INVALID');
   }
@@ -265,7 +251,7 @@ const preservedStopStatuses = new Set<BatchItemStatus>([
   'click_dispatched',
   'verifying',
   'published',
-  'pending_moderation',
+  'submitted_not_visible',
   'no_form',
   'validation_error',
   'unknown',

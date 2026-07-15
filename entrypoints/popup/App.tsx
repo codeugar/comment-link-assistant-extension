@@ -73,8 +73,8 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusVerifying');
     case 'published':
       return translate('batchStatusPublished');
-    case 'pending_moderation':
-      return translate('batchStatusPendingModeration');
+    case 'submitted_not_visible':
+      return translate('batchStatusSubmittedNotVisible');
     case 'login_required':
       return translate('batchStatusLoginRequired');
     case 'captcha_required':
@@ -114,6 +114,9 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'FORM_PLAN_UNSAFE_SUBMIT') {
     return translate('unsafeSubmitBlocked');
   }
+  if (message === 'SITE_REJECTED_BY_PRIOR_RESULT') {
+    return translate('siteRejectedByPriorResult');
+  }
   return null;
 }
 
@@ -121,10 +124,7 @@ function pauseCopy(status?: BatchItemStatus): string {
   if (status === 'login_required') {
     return translate('batchPausedLoginDescription');
   }
-  if (status === 'captcha_required') {
-    return translate('batchPausedCaptchaDescription');
-  }
-  return translate('batchPausedUnknownDescription');
+  return translate('batchPausedCaptchaDescription');
 }
 
 function displayTarget(url: string): string {
@@ -138,13 +138,13 @@ function displayTarget(url: string): string {
 
 function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
   let published = 0;
-  let pending = 0;
+  let submittedNotVisible = 0;
   let failed = 0;
   let unknown = 0;
 
   for (const item of batch.items) {
     if (item.status === 'published') published += 1;
-    else if (item.status === 'pending_moderation') pending += 1;
+    else if (item.status === 'submitted_not_visible') submittedNotVisible += 1;
     else if (item.status === 'unknown') unknown += 1;
     else if (
       item.status === 'no_form' ||
@@ -155,7 +155,12 @@ function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
     }
   }
 
-  return [String(published), String(pending), String(failed), String(unknown)];
+  return [
+    String(published),
+    String(submittedNotVisible),
+    String(failed),
+    String(unknown),
+  ];
 }
 
 export default function App() {
@@ -234,7 +239,7 @@ export default function App() {
       ? batch.items.filter((item) =>
           [
             'published',
-            'pending_moderation',
+            'submitted_not_visible',
             'no_form',
             'validation_error',
             'unknown',

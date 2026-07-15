@@ -102,10 +102,10 @@
     "message": "Comment ready"
   },
   "commentSubmitted": {
-    "message": "Comment submitted successfully"
+    "message": "Comment immediately published"
   },
-  "commentPendingModeration": {
-    "message": "Comment submitted and waiting for moderation"
+  "commentSubmittedNotVisible": {
+    "message": "Comment submitted but not visible"
   },
   "commentFailed": {
     "message": "The comment could not be submitted"
@@ -165,7 +165,7 @@
     "message": "This action fills the form and clicks the page's submit button."
   },
   "submissionUnconfirmed": {
-    "message": "The form was submitted, but the page did not expose a reliable result. Check the page directly."
+    "message": "Unable to confirm whether the server accepted the comment. It will not be submitted again."
   },
   "permissionDenied": {
     "message": "Permission was not granted for the website origin."
@@ -254,9 +254,6 @@
   "batchPausedCaptchaDescription": {
     "message": "The batch is paused. Complete the CAPTCHA on the open target page, then continue."
   },
-  "batchPausedUnknownDescription": {
-    "message": "The page did not expose a reliable submission result. Check it manually; continuing will move to the next URL without submitting this comment again."
-  },
   "batchCompletedTitle": {
     "message": "Batch completed"
   },
@@ -264,7 +261,7 @@
     "message": "Batch stopped"
   },
   "batchSummary": {
-    "message": "$1 published · $2 pending · $3 failed · $4 unconfirmed"
+    "message": "$1 immediately published · $2 submitted but not visible · $3 failed · $4 unconfirmed"
   },
   "startNewBatch": {
     "message": "Start a new batch"
@@ -291,10 +288,10 @@
     "message": "Verifying result"
   },
   "batchStatusPublished": {
-    "message": "Published"
+    "message": "Immediately published"
   },
-  "batchStatusPendingModeration": {
-    "message": "Pending moderation"
+  "batchStatusSubmittedNotVisible": {
+    "message": "Submitted but not visible"
   },
   "batchStatusLoginRequired": {
     "message": "Login required"
@@ -306,10 +303,10 @@
     "message": "No comment form"
   },
   "batchStatusValidationError": {
-    "message": "Form rejected the comment"
+    "message": "Submission failed"
   },
   "batchStatusUnknown": {
-    "message": "Result unconfirmed"
+    "message": "Submission unconfirmed"
   },
   "batchStatusFailed": {
     "message": "Failed"
@@ -337,5 +334,8 @@
   },
   "unsafeSubmitBlocked": {
     "message": "The selected action was blocked because it was not a safe comment submission. Nothing was submitted."
+  },
+  "siteRejectedByPriorResult": {
+    "message": "Skipped because an earlier result rejected this website."
   }
 }

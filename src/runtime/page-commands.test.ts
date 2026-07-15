@@ -183,8 +183,8 @@ describe('page command runtime', () => {
       },
     };
     const result = {
-      status: 'pending_moderation' as const,
-      message: 'COMMENT_PENDING_MODERATION',
+      status: 'submitted_not_visible' as const,
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
       fingerprint: prepared.fingerprint,
     };
     const sendMessage = vi.fn().mockResolvedValue({
@@ -424,8 +424,8 @@ describe('page command runtime', () => {
       .mockResolvedValueOnce({
         type: 'submission',
         result: {
-          status: 'pending_moderation',
-          message: 'COMMENT_PENDING_MODERATION',
+          status: 'submitted_not_visible',
+          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
           fingerprint: prepared.fingerprint,
         },
       });
@@ -469,7 +469,7 @@ describe('page command runtime', () => {
           fillWebsiteField: true,
         }
       )
-    ).resolves.toMatchObject({ status: 'pending_moderation' });
+    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
     expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({
       command: {

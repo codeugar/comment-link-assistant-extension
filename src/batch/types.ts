@@ -13,7 +13,7 @@ export const BATCH_ITEM_STATUSES = [
   'click_dispatched',
   'verifying',
   'published',
-  'pending_moderation',
+  'submitted_not_visible',
   'login_required',
   'captcha_required',
   'no_form',
@@ -181,12 +181,11 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
 const pausedItemStatuses = new Set<BatchItemStatus>([
   'login_required',
   'captcha_required',
-  'unknown',
 ]);
 
 const completedItemStatuses = new Set<BatchItemStatus>([
   'published',
-  'pending_moderation',
+  'submitted_not_visible',
   'no_form',
   'validation_error',
   'unknown',

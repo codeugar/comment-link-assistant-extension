@@ -102,10 +102,10 @@
     "message": "评论已生成"
   },
   "commentSubmitted": {
-    "message": "评论提交成功"
+    "message": "评论立即公开"
   },
-  "commentPendingModeration": {
-    "message": "评论已提交，正在等待审核"
+  "commentSubmittedNotVisible": {
+    "message": "已提交但不可见"
   },
   "commentFailed": {
     "message": "评论提交失败"
@@ -165,7 +165,7 @@
     "message": "此操作会填写评论表单，并点击页面上的提交按钮。"
   },
   "submissionUnconfirmed": {
-    "message": "表单已提交，但页面没有提供可靠结果，请直接检查当前页面。"
+    "message": "无法确认服务器是否接收评论；不会再次提交。"
   },
   "permissionDenied": {
     "message": "尚未授权访问网站来源。"
@@ -254,9 +254,6 @@
   "batchPausedCaptchaDescription": {
     "message": "批次已暂停。请先在打开的目标页面完成 CAPTCHA，然后点击继续。"
   },
-  "batchPausedUnknownDescription": {
-    "message": "页面没有提供可靠的提交结果。请手动检查；继续后只会进入下一个网址，不会再次提交当前评论。"
-  },
   "batchCompletedTitle": {
     "message": "批次已完成"
   },
@@ -264,7 +261,7 @@
     "message": "批次已停止"
   },
   "batchSummary": {
-    "message": "成功 $1 · 待审核 $2 · 失败 $3 · 未确认 $4"
+    "message": "立即公开 $1 · 已提交但不可见 $2 · 提交失败 $3 · 无法确认提交 $4"
   },
   "startNewBatch": {
     "message": "开始新批次"
@@ -291,10 +288,10 @@
     "message": "正在检查结果"
   },
   "batchStatusPublished": {
-    "message": "已发布"
+    "message": "立即公开"
   },
-  "batchStatusPendingModeration": {
-    "message": "等待审核"
+  "batchStatusSubmittedNotVisible": {
+    "message": "已提交但不可见"
   },
   "batchStatusLoginRequired": {
     "message": "需要登录"
@@ -306,10 +303,10 @@
     "message": "未找到评论区"
   },
   "batchStatusValidationError": {
-    "message": "表单拒绝了评论"
+    "message": "提交失败"
   },
   "batchStatusUnknown": {
-    "message": "结果未确认"
+    "message": "无法确认提交"
   },
   "batchStatusFailed": {
     "message": "失败"
@@ -337,5 +334,8 @@
   },
   "unsafeSubmitBlocked": {
     "message": "所选操作不是安全的评论提交动作，插件已拦截且未提交。"
+  },
+  "siteRejectedByPriorResult": {
+    "message": "该网站之前已被淘汰，已跳过。"
   }
 }

@@ -15,14 +15,15 @@ const requiredBatchKeys = [
   'stopBatch',
   'batchPausedLoginDescription',
   'batchPausedCaptchaDescription',
-  'batchPausedUnknownDescription',
   'batchCompletedTitle',
   'batchStoppedTitle',
   'startNewBatch',
   'batchStatusQueued',
   'batchStatusGenerating',
   'batchStatusPublished',
+  'batchStatusSubmittedNotVisible',
   'batchStatusUnknown',
+  'siteRejectedByPriorResult',
 ] as const;
 
 describe('batch translations', () => {

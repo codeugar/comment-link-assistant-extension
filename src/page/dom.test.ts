@@ -97,7 +97,7 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'published' });
+    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
   });
 
   it('does not select a comment form inside a hidden iframe', () => {
@@ -370,10 +370,10 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'published' });
+    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
   });
 
-  it('fills all matching fields, clicks submit, and recognizes success', async () => {
+  it('marks an accepted comment as not visible when the page only shows a success message', async () => {
     document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment"></textarea>
@@ -403,7 +403,10 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('published');
+    expect(result).toMatchObject({
+      status: 'submitted_not_visible',
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+    });
     expect(
       (document.querySelector('textarea') as HTMLTextAreaElement).value
     ).toContain('testing approach');
@@ -414,6 +417,36 @@ describe('comment page DOM helpers', () => {
       (document.querySelector('input[name="website"]') as HTMLInputElement)
         .value
     ).toBe('https://example.com');
+  });
+
+  it('marks a comment as immediately published only when it is rendered on the page', async () => {
+    const comment = 'The state-machine example makes the tradeoff clear.';
+    document.body.innerHTML = `
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+    document.querySelector('form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const editor = document.querySelector('textarea');
+      if (editor instanceof HTMLTextAreaElement) editor.value = '';
+      const rendered = document.createElement('article');
+      rendered.className = 'comment-body';
+      rendered.textContent = comment;
+      document.body.append(rendered);
+      const notice = document.createElement('p');
+      notice.setAttribute('role', 'alert');
+      notice.textContent = 'Your comment was published.';
+      document.body.append(notice);
+    });
+
+    await expect(
+      fillAndSubmitDocument(document, { comment, websiteUrl: '' }, 0)
+    ).resolves.toMatchObject({
+      status: 'published',
+      message: 'COMMENT_PUBLISHED',
+    });
   });
 
   it('never selects a destructive comment action as the submit control', async () => {
@@ -445,7 +478,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted_not_visible');
     expect(destructiveClicks).toBe(0);
     expect(postClicks).toBe(1);
   });
@@ -481,7 +514,7 @@ describe('comment page DOM helpers', () => {
         0
       );
 
-      expect(result.status).toBe('published');
+      expect(result.status).toBe('submitted_not_visible');
       expect(socialClicks).toBe(0);
       expect(postClicks).toBe(1);
     }
@@ -570,7 +603,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted_not_visible');
     expect(
       (document.querySelector('input[name="author"]') as HTMLInputElement).value
     ).toBe('');
@@ -1315,7 +1348,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted_not_visible');
     expect(
       (document.querySelector('input[name="website"]') as HTMLInputElement)
         .value
@@ -1506,7 +1539,10 @@ describe('comment page DOM helpers', () => {
       }
     );
 
-    expect(result).toMatchObject({ status: 'published', clickOccurred: true });
+    expect(result).toMatchObject({
+      status: 'submitted_not_visible',
+      clickOccurred: true,
+    });
   });
 
   it('recognizes a newly added generic success status element', async () => {
@@ -1530,7 +1566,10 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result).toMatchObject({ status: 'published', clickOccurred: true });
+    expect(result).toMatchObject({
+      status: 'submitted_not_visible',
+      clickOccurred: true,
+    });
     expect(result).not.toHaveProperty('verificationObservation');
   });
 
@@ -1602,7 +1641,10 @@ describe('comment page DOM helpers', () => {
         { comment: 'A useful comment.', websiteUrl: '' },
         0
       )
-    ).resolves.toMatchObject({ status: 'published', clickOccurred: true });
+    ).resolves.toMatchObject({
+      status: 'submitted_not_visible',
+      clickOccurred: true,
+    });
   });
 
   it('does not treat feedback that existed before the click as success', async () => {
@@ -2021,7 +2063,7 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted_not_visible');
   });
 
   it('detects success text appended to an existing live region', async () => {
@@ -2048,15 +2090,18 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted_not_visible');
   });
 
   it('distinguishes moderation from an unconfirmed result', () => {
     document.body.innerHTML =
       '<p class="comment-awaiting-moderation">Your comment is awaiting moderation.</p>';
-    const pending = verifySubmissionDocument(document, 'A useful point');
-    expect(pending.status).toBe('pending_moderation');
-    expect(pending).not.toHaveProperty('verificationObservation');
+    const submittedNotVisible = verifySubmissionDocument(
+      document,
+      'A useful point'
+    );
+    expect(submittedNotVisible.status).toBe('submitted_not_visible');
+    expect(submittedNotVisible).not.toHaveProperty('verificationObservation');
 
     document.body.innerHTML = '<p>No status message here.</p>';
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
@@ -2072,6 +2117,18 @@ describe('comment page DOM helpers', () => {
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
       'unknown'
     );
+  });
+
+  it('keeps conflicting success and error feedback unconfirmed', () => {
+    document.body.innerHTML =
+      '<p role="alert">Your comment was submitted. Error submitting comment.</p>';
+
+    const result = verifySubmissionDocument(document, 'A useful point');
+    expect(result).toMatchObject({
+      status: 'unknown',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+    });
+    expect(result).not.toHaveProperty('verificationObservation');
   });
 
   it.each([
@@ -2178,7 +2235,7 @@ describe('comment page DOM helpers', () => {
 
     expect(result).toMatchObject({
       type: 'submission',
-      result: { status: 'pending_moderation' },
+      result: { status: 'submitted_not_visible' },
     });
     document.defaultView?.history.replaceState({}, '', '/');
   });

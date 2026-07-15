@@ -22,8 +22,11 @@ dedicated tab. Login and CAPTCHA gates pause the queue for manual handling.
 Before a provider request or page click, the next phase is persisted. A
 recovered generation request with an unknown outcome is not repeated, and a
 recovered `click_dispatched` item is verified instead of clicked again. An
-unconfirmed submission pauses for manual review and is never automatically
-retried.
+unconfirmed submission is recorded as terminal and is never automatically
+retried. A comment counts as published only when its fingerprint is rendered on
+the page and also appears in a credential-free public-page fetch. Explicit
+acceptance without a publicly visible comment is recorded as submitted but not
+visible, and later targets from that website are skipped.
 
 The dedicated worker tab has a `{ batchId, tabId }` ownership marker in
 `chrome.storage.session`. Every read, activation, navigation, and page command

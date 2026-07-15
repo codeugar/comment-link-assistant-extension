@@ -196,4 +196,32 @@ describe('popup navigation', () => {
 
     expect(container.textContent).toContain('unsafeSubmitBlocked');
   });
+
+  it('shows submitted but not visible as a rejected terminal result', async () => {
+    const completed = completeCurrentItem(
+      createBatch({
+        targetText: 'https://blog.example/post',
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+      }),
+      'submitted_not_visible',
+      'COMMENT_SUBMITTED_NOT_VISIBLE'
+    );
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: completed.settings,
+      [BATCH_STORAGE_KEY]: completed,
+    });
+
+    await renderPopup();
+
+    expect(container.textContent).toContain('batchStatusSubmittedNotVisible');
+    expect(
+      container.querySelector('.status-submitted_not_visible')
+    ).not.toBeNull();
+  });
 });

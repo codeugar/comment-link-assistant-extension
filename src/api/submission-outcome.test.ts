@@ -23,7 +23,7 @@ describe('submission outcome classification', () => {
     expect(prompt).toContain('Classify only');
     expect(prompt).toContain('Do not suggest or request any action');
     expect(prompt).toContain(
-      'published | pending_moderation | validation_error | unknown'
+      'published | submitted_not_visible | validation_error | unknown'
     );
   });
 
@@ -51,13 +51,13 @@ describe('submission outcome classification', () => {
     expect(
       parseSubmissionOutcome(
         JSON.stringify({
-          status: 'pending_moderation',
+          status: 'submitted_not_visible',
           reason: 'The feedback says the comment is awaiting approval.',
         }),
         observation
       )
     ).toEqual({
-      status: 'pending_moderation',
+      status: 'submitted_not_visible',
       reason: 'The feedback says the comment is awaiting approval.',
     });
 
@@ -80,5 +80,20 @@ describe('submission outcome classification', () => {
         observation
       )
     ).toThrow('SUBMISSION_OUTCOME_INVALID_SCHEMA');
+  });
+
+  it('does not accept an AI publication claim when the comment was not rendered', () => {
+    expect(
+      parseSubmissionOutcome(
+        JSON.stringify({
+          status: 'published',
+          reason: 'The page says the comment was published.',
+        }),
+        observation
+      )
+    ).toEqual({
+      status: 'submitted_not_visible',
+      reason: 'The page says the comment was published.',
+    });
   });
 });

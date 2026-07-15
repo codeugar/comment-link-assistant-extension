@@ -324,9 +324,7 @@ textarea:focus {
 }
 
 .page-card.readiness-login_required,
-.page-card.readiness-captcha_required,
-.page-card.readiness-unknown,
-.page-card.readiness-pending_moderation {
+.page-card.readiness-captcha_required {
   border-left-color: var(--yellow);
   background: rgba(166, 106, 9, 0.08);
 }
@@ -338,6 +336,8 @@ textarea:focus {
 
 .page-card.readiness-failed,
 .page-card.readiness-validation_error,
+.page-card.readiness-submitted_not_visible,
+.page-card.readiness-unknown,
 .page-card.readiness-no_form {
   border-left-color: var(--red);
   background: rgba(167, 56, 42, 0.08);
@@ -554,15 +554,15 @@ textarea:focus {
   background: var(--green);
 }
 
-.status-pending_moderation .queue-index,
 .status-login_required .queue-index,
-.status-captcha_required .queue-index,
-.status-unknown .queue-index {
+.status-captcha_required .queue-index {
   background: var(--yellow);
 }
 
 .status-no_form .queue-index,
 .status-validation_error .queue-index,
+.status-submitted_not_visible .queue-index,
+.status-unknown .queue-index,
 .status-failed .queue-index {
   background: var(--red);
 }
@@ -588,13 +588,13 @@ textarea:focus {
 }
 
 .success-toast,
-.result-published,
-.result-pending_moderation {
+.result-published {
   border-left: 3px solid var(--green);
 }
 
 .error-toast,
-.result-validation_error {
+.result-validation_error,
+.result-submitted_not_visible {
   border-left: 3px solid var(--red);
 }
 

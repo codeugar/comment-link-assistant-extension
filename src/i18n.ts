@@ -34,7 +34,7 @@ export const MESSAGE_KEYS = [
   'noCommentForm',
   'commentGenerated',
   'commentSubmitted',
-  'commentPendingModeration',
+  'commentSubmittedNotVisible',
   'commentFailed',
   'missingSettings',
   'invalidWebsiteUrl',
@@ -84,7 +84,6 @@ export const MESSAGE_KEYS = [
   'openCurrentTarget',
   'batchPausedLoginDescription',
   'batchPausedCaptchaDescription',
-  'batchPausedUnknownDescription',
   'batchCompletedTitle',
   'batchStoppedTitle',
   'batchSummary',
@@ -97,7 +96,7 @@ export const MESSAGE_KEYS = [
   'batchStatusSubmitting',
   'batchStatusVerifying',
   'batchStatusPublished',
-  'batchStatusPendingModeration',
+  'batchStatusSubmittedNotVisible',
   'batchStatusLoginRequired',
   'batchStatusCaptchaRequired',
   'batchStatusNoForm',
@@ -112,6 +111,7 @@ export const MESSAGE_KEYS = [
   'requiredFieldNotMapped',
   'websiteRequiredForTarget',
   'unsafeSubmitBlocked',
+  'siteRejectedByPriorResult',
 ] as const;
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number];

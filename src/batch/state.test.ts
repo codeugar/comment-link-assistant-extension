@@ -214,42 +214,38 @@ describe('batch state', () => {
     }
   );
 
-  it('never retries an unknown result and advances at most once on resume', () => {
-    const paused = pauseCurrentItem(
+  it('records an unknown result once and immediately advances', () => {
+    const completed = completeCurrentItem(
       createTwoItemBatch(),
       'unknown',
       'Submission could not be confirmed',
       2_000
     );
 
-    const resumed = resumeBatch(paused, 3_000);
-    expect(resumed).toMatchObject({ status: 'running', currentIndex: 1 });
-    expect(resumed.items[0]).toMatchObject({
+    expect(completed).toMatchObject({ status: 'running', currentIndex: 1 });
+    expect(completed.items[0]).toMatchObject({
       status: 'unknown',
       message: 'Submission could not be confirmed',
       updatedAt: 2_000,
     });
-    expect(resumed.items[1]?.status).toBe('queued');
-
-    expect(resumeBatch(resumed, 4_000)).toEqual(resumed);
+    expect(completed.items[1]?.status).toBe('queued');
   });
 
-  it('completes when the final unknown result is acknowledged', () => {
+  it('completes when the final result is unknown', () => {
     let batch = createTwoItemBatch();
     batch = completeCurrentItem(batch, 'published', '', 2_000);
-    batch = pauseCurrentItem(batch, 'unknown', '', 3_000);
+    batch = completeCurrentItem(batch, 'unknown', '', 3_000);
 
-    const resumed = resumeBatch(batch, 4_000);
-    expect(resumed).toMatchObject({
+    expect(batch).toMatchObject({
       status: 'completed',
       currentIndex: 2,
     });
-    expect(resumed.items[1]?.status).toBe('unknown');
+    expect(batch.items[1]?.status).toBe('unknown');
   });
 
   it('stops only unprocessed items and preserves attempted outcomes', () => {
     let batch = createTwoItemBatch();
-    batch = pauseCurrentItem(batch, 'unknown', 'Unconfirmed click', 2_000);
+    batch = completeCurrentItem(batch, 'unknown', 'Unconfirmed click', 2_000);
 
     const stopped = stopBatch(batch, 3_000);
     expect(stopped).toMatchObject({ status: 'stopped', updatedAt: 3_000 });

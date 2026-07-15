@@ -461,7 +461,7 @@ describe('comment form planning', () => {
 describe('submission outcome classification', () => {
   it('classifies an outcome with the selected DeepSeek provider', async () => {
     const classification = {
-      status: 'pending_moderation',
+      status: 'submitted_not_visible',
       reason: 'The feedback says the comment awaits approval.',
     };
     const fetchMock = vi.fn(

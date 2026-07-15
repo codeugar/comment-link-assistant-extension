@@ -5,6 +5,7 @@ import {
   generateComment,
   planCommentForm,
 } from '@/api/client';
+import { fetchPublicPageContainsFingerprint } from '@/page/public-visibility';
 import {
   applyFormPlan,
   buildFormPlanningObservation,
@@ -93,6 +94,7 @@ export interface BatchRunnerDependencies {
     expectedUrl: string,
     batchId: string
   ): Promise<PageSubmissionResult>;
+  isCommentPubliclyVisible(url: string, fingerprint: string): Promise<boolean>;
   now(): number;
 }
 
@@ -157,6 +159,7 @@ const defaultDependencies: BatchRunnerDependencies = {
     await assertWorkerTabOwnership(batchId, tabId);
     return verifyTabSubmission(tabId, prepared, expectedUrl);
   },
+  isCommentPubliclyVisible: fetchPublicPageContainsFingerprint,
   now: Date.now,
 };
 
@@ -297,7 +300,7 @@ function hasAttemptedCanonicalTarget(
 ): boolean {
   const attemptedStatuses = new Set([
     'published',
-    'pending_moderation',
+    'submitted_not_visible',
     'unknown',
   ]);
   const key = canonicalTargetKey(resolvedUrl);
@@ -307,6 +310,25 @@ function hasAttemptedCanonicalTarget(
       (item) =>
         attemptedStatuses.has(item.status) &&
         canonicalTargetKey(item.url) === key
+    );
+}
+
+function targetSiteKey(value: string): string {
+  return new URL(value).hostname.replace(/^www\./i, '').toLowerCase();
+}
+
+function hasRejectedSite(batch: BatchSnapshot, value: string): boolean {
+  const rejectedStatuses = new Set([
+    'submitted_not_visible',
+    'validation_error',
+    'unknown',
+  ]);
+  const site = targetSiteKey(value);
+  return batch.items
+    .slice(0, batch.currentIndex)
+    .some(
+      (item) =>
+        rejectedStatuses.has(item.status) && targetSiteKey(item.url) === site
     );
 }
 
@@ -376,9 +398,24 @@ async function saveFailure(
   return afterTerminal(next);
 }
 
+async function saveUnconfirmedSubmission(
+  batch: BatchSnapshot,
+  dependencies: BatchRunnerDependencies,
+  message = 'COMMENT_SUBMISSION_UNCONFIRMED'
+): Promise<BatchStepResult> {
+  const next = completeCurrentItem(
+    batch,
+    'unknown',
+    message,
+    dependencies.now()
+  );
+  await dependencies.setBatch(next);
+  return afterTerminal(next);
+}
+
 async function savePause(
   batch: BatchSnapshot,
-  status: 'login_required' | 'captcha_required' | 'unknown',
+  status: 'login_required' | 'captcha_required',
   message: string,
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
@@ -443,11 +480,20 @@ async function saveSubmissionResult(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (result.status === 'published' || result.status === 'pending_moderation') {
+  if (
+    result.status === 'published' ||
+    result.status === 'submitted_not_visible'
+  ) {
+    const publiclyVisible = await dependencies
+      .isCommentPubliclyVisible(
+        item.prepared?.expected.url ?? item.url,
+        result.fingerprint
+      )
+      .catch(() => false);
     const next = completeCurrentItem(
       batch,
-      result.status,
-      result.message,
+      publiclyVisible ? 'published' : 'submitted_not_visible',
+      publiclyVisible ? 'COMMENT_PUBLISHED' : 'COMMENT_SUBMITTED_NOT_VISIBLE',
       dependencies.now()
     );
     await dependencies.setBatch(next);
@@ -479,6 +525,24 @@ async function saveSubmissionResult(
     );
   }
   if (result.status === 'unknown') {
+    if (
+      result.clickOccurred &&
+      (await dependencies
+        .isCommentPubliclyVisible(
+          item.prepared?.expected.url ?? item.url,
+          result.fingerprint
+        )
+        .catch(() => false))
+    ) {
+      const next = completeCurrentItem(
+        batch,
+        'published',
+        'COMMENT_PUBLISHED',
+        dependencies.now()
+      );
+      await dependencies.setBatch(next);
+      return afterTerminal(next);
+    }
     if (result.clickOccurred && result.verificationObservation) {
       try {
         const keys = await dependencies.getProviderApiKeys();
@@ -505,7 +569,7 @@ async function saveSubmissionResult(
         // retryable failure or cause another submission attempt.
       }
     }
-    return savePause(batch, 'unknown', result.message, dependencies);
+    return saveUnconfirmedSubmission(batch, dependencies, result.message);
   }
 
   const next = completeCurrentItem(
@@ -523,6 +587,16 @@ async function openWorkerTab(
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
+  if (hasRejectedSite(batch, item.url)) {
+    const skipped = completeCurrentItem(
+      batch,
+      'failed',
+      'SITE_REJECTED_BY_PRIOR_RESULT',
+      dependencies.now()
+    );
+    await dependencies.setBatch(skipped);
+    return afterTerminal(skipped);
+  }
   let current = batch;
   try {
     if (batch.workerTabId !== undefined) {
@@ -1032,12 +1106,7 @@ async function dispatchPreparedComment(
     if (errorMessage(error) === 'PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS') {
       return 'wait';
     }
-    return savePause(
-      dispatched,
-      'unknown',
-      'COMMENT_SUBMISSION_UNCONFIRMED',
-      dependencies
-    );
+    return saveUnconfirmedSubmission(dispatched, dependencies);
   }
 }
 
@@ -1047,12 +1116,7 @@ async function advanceDispatchedClick(
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
   if (batch.workerTabId === undefined) {
-    return savePause(
-      batch,
-      'unknown',
-      'COMMENT_SUBMISSION_UNCONFIRMED',
-      dependencies
-    );
+    return saveUnconfirmedSubmission(batch, dependencies);
   }
   const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
   if (tab?.status === 'loading') return 'wait';
@@ -1108,12 +1172,7 @@ async function verifyDispatchedComment(
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
   if (batch.workerTabId === undefined || !item.prepared) {
-    return savePause(
-      batch,
-      'unknown',
-      'COMMENT_SUBMISSION_UNCONFIRMED',
-      dependencies
-    );
+    return saveUnconfirmedSubmission(batch, dependencies);
   }
   const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
   if (tab?.status === 'loading') return 'wait';
@@ -1126,12 +1185,7 @@ async function verifyDispatchedComment(
     );
     return saveSubmissionResult(batch, result, dependencies);
   } catch {
-    return savePause(
-      batch,
-      'unknown',
-      'COMMENT_SUBMISSION_UNCONFIRMED',
-      dependencies
-    );
+    return saveUnconfirmedSubmission(batch, dependencies);
   }
 }
 

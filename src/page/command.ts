@@ -151,8 +151,8 @@ export async function runPageCommand(
       return {
         type: 'submission',
         result: {
-          status: 'pending_moderation',
-          message: 'COMMENT_PENDING_MODERATION',
+          status: 'submitted_not_visible',
+          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
           fingerprint: command.fingerprint,
           clickOccurred: true,
         },

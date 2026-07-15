@@ -72,7 +72,7 @@ export type PageSubmissionPreparation =
 
 export type SubmissionStatus =
   | 'published'
-  | 'pending_moderation'
+  | 'submitted_not_visible'
   | 'login_required'
   | 'captcha_required'
   | 'validation_error'

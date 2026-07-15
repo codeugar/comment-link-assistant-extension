@@ -110,8 +110,8 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'pending_moderation',
-        message: 'COMMENT_PENDING_MODERATION',
+        status: 'submitted_not_visible',
+        message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
       },
     });
     document.defaultView?.history.replaceState({}, '', '/');

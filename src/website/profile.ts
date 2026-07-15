@@ -1,3 +1,5 @@
+import { decodeHtmlEntities, readHtmlAttributes } from '@/html';
+
 export interface WebsiteProfile {
   url: string;
   title: string;
@@ -7,45 +9,10 @@ export interface WebsiteProfile {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_HTML_LENGTH = 1_000_000;
 
-function decodeHtmlEntities(value: string): string {
-  const named: Record<string, string> = {
-    amp: '&',
-    apos: "'",
-    gt: '>',
-    lt: '<',
-    nbsp: ' ',
-    quot: '"',
-  };
-  return value
-    .replace(/&#(\d+);/g, (_match, decimal: string) =>
-      String.fromCodePoint(Number.parseInt(decimal, 10))
-    )
-    .replace(/&#x([\da-f]+);/gi, (_match, hexadecimal: string) =>
-      String.fromCodePoint(Number.parseInt(hexadecimal, 16))
-    )
-    .replace(
-      /&([a-z]+);/gi,
-      (match, name: string) => named[name.toLowerCase()] ?? match
-    )
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function readAttributes(tag: string): Record<string, string> {
-  const attributes: Record<string, string> = {};
-  const pattern = /([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
-  for (const match of tag.matchAll(pattern)) {
-    const name = match[1]?.toLowerCase();
-    const value = match[2] ?? match[3] ?? match[4] ?? '';
-    if (name) attributes[name] = decodeHtmlEntities(value);
-  }
-  return attributes;
-}
-
 function readMetaContent(html: string, keys: string[]): string {
   const wanted = new Set(keys.map((key) => key.toLowerCase()));
   for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attributes = readAttributes(match[0]);
+    const attributes = readHtmlAttributes(match[0]);
     const key = (attributes.name ?? attributes.property ?? '').toLowerCase();
     if (wanted.has(key) && attributes.content?.trim()) {
       return attributes.content.trim();
@@ -136,7 +103,7 @@ export async function fetchWebsiteProfile(
   }
 }
 
-function isSafeWebsiteRedirect(
+export function isSafeWebsiteRedirect(
   sourceValue: string,
   targetValue: string
 ): boolean {

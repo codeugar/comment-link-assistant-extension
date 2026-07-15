@@ -1064,18 +1064,32 @@ export function verifySubmissionDocument(
     renderedComment &&
     !(baseline?.renderedComment ?? false) &&
     !draftStillInEditor;
-  if (feedbackChanged && PENDING_COPY.test(feedback)) {
+  const pendingFeedback = feedbackChanged && PENDING_COPY.test(feedback);
+  const successFeedback = feedbackChanged && SUCCESS_COPY.test(feedback);
+  const errorFeedback = feedbackChanged && ERROR_COPY.test(feedback);
+  if (
+    errorFeedback &&
+    (pendingFeedback || successFeedback || renderedCommentAdded)
+  ) {
     return {
-      status: 'pending_moderation',
-      message: 'COMMENT_PENDING_MODERATION',
+      status: 'unknown',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       fingerprint,
       clickOccurred: true,
     };
   }
   if (
-    (feedbackChanged && SUCCESS_COPY.test(feedback)) ||
-    renderedCommentAdded
+    !errorFeedback &&
+    (pendingFeedback || (successFeedback && !renderedCommentAdded))
   ) {
+    return {
+      status: 'submitted_not_visible',
+      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      fingerprint,
+      clickOccurred: true,
+    };
+  }
+  if (!errorFeedback && renderedCommentAdded) {
     return {
       status: 'published',
       message: 'COMMENT_PUBLISHED',
@@ -1083,7 +1097,12 @@ export function verifySubmissionDocument(
       clickOccurred: true,
     };
   }
-  if (feedbackChanged && ERROR_COPY.test(feedback)) {
+  if (
+    errorFeedback &&
+    !pendingFeedback &&
+    !successFeedback &&
+    !renderedCommentAdded
+  ) {
     return {
       status: 'validation_error',
       message: feedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
