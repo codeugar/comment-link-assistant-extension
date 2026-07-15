@@ -536,7 +536,8 @@ describe('page probe', () => {
       <a class="comments__add-btn" href="#addComment">+ Add Comments</a>
       ${Array.from(
         { length: 180 },
-        () => '<a class="comments__reply" href="javascript:void(0)">Reply</a>'
+        (_, index) =>
+          `<a class="comments__reply" href="#reply-${index}">Reply</a>`
       ).join('')}
       <form id="commentform">
         <textarea name="comment"></textarea>

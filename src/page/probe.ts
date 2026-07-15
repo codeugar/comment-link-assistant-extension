@@ -487,11 +487,6 @@ function boundedFallbackControls(
       text: normalizeText(readButtonText(element)),
       class: semanticClassNames(element),
       role: normalizeText(element.getAttribute('role')),
-      href: safeAttributeValue(
-        element,
-        'href',
-        element.getAttribute('href') ?? ''
-      ),
     });
     if (signatures.has(signature)) return false;
     signatures.add(signature);
