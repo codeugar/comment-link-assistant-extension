@@ -30,10 +30,11 @@ export async function createOwnedWorkerTab(
       tabIds: tab.id,
     });
     await chrome.tabGroups.update(groupId, {
-      collapsed: true,
+      collapsed: false,
       color: 'orange',
       title: 'Comment Assistant',
     });
+    await chrome.tabs.update(tab.id, { autoDiscardable: false });
     await claimWorkerTab(batchId, tab.id);
     return { ...tab, id: tab.id };
   } catch (error) {

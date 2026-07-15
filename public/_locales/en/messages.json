@@ -351,7 +351,7 @@
     "message": "Website activity"
   },
   "backgroundWorkerNotice": {
-    "message": "Runs in a collapsed background tab"
+    "message": "Runs in a background tab group without switching pages"
   },
   "generatedCommentLabel": {
     "message": "Generated comment"

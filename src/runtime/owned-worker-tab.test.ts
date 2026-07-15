@@ -55,7 +55,7 @@ describe('owned worker tab runtime', () => {
     expect(get).toHaveBeenCalledOnce();
   });
 
-  it('creates one inactive worker to the right and collapses its group', async () => {
+  it('creates one inactive worker to the right without freezing its group', async () => {
     const activeTab = {
       id: 5,
       index: 2,
@@ -81,6 +81,7 @@ describe('owned worker tab runtime', () => {
     const create = vi
       .spyOn(chrome.tabs, 'create')
       .mockResolvedValue(workerTab as never);
+    const update = vi.spyOn(chrome.tabs, 'update').mockResolvedValue(undefined);
     const group = vi.fn(async () => 11);
     Object.defineProperty(chrome.tabs, 'group', {
       configurable: true,
@@ -90,7 +91,7 @@ describe('owned worker tab runtime', () => {
       async () =>
         ({
           id: 11,
-          collapsed: true,
+          collapsed: false,
           color: 'orange',
           title: 'Comment Assistant',
           windowId: 1,
@@ -117,10 +118,11 @@ describe('owned worker tab runtime', () => {
       tabIds: 7,
     });
     expect(updateGroup).toHaveBeenCalledWith(11, {
-      collapsed: true,
+      collapsed: false,
       color: 'orange',
       title: 'Comment Assistant',
     });
+    expect(update).toHaveBeenCalledWith(7, { autoDiscardable: false });
   });
 
   it('closes only the worker tab owned by the completed batch', async () => {

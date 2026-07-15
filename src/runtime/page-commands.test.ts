@@ -9,6 +9,7 @@ import {
 
 describe('page command runtime', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -102,6 +103,34 @@ describe('page command runtime', () => {
         expected: prepared.expected,
       },
     });
+  });
+
+  it('times out when the page command listener never responds', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: vi.fn(() => new Promise(() => {})) },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+    });
+
+    const result = expect(
+      prepareTabSubmission(
+        42,
+        {
+          comment: 'A relevant comment',
+          websiteUrl: 'https://product.example',
+        },
+        {
+          url: 'https://blog.example/article',
+          editorLabel: 'Comment',
+          submitLabel: 'Post comment',
+          hasWebsiteField: true,
+        }
+      )
+    ).rejects.toThrow('PAGE_COMMAND_TIMEOUT');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await result;
   });
 
   it('clicks an already prepared submission without injecting again', async () => {

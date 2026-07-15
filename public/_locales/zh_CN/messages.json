@@ -351,7 +351,7 @@
     "message": "网站处理信息流"
   },
   "backgroundWorkerNotice": {
-    "message": "在折叠的后台标签中运行，不切换当前页面"
+    "message": "在后台标签组中运行，不切换当前页面"
   },
   "generatedCommentLabel": {
     "message": "生成的评论"

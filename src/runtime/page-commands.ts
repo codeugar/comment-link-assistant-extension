@@ -14,7 +14,27 @@ import type {
 } from '@/page/types';
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
+const PAGE_COMMAND_TIMEOUT_MS = 10_000;
 const activeSubmissionTabs = new Set<number>();
+
+function withPageCommandTimeout<T>(operation: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('PAGE_COMMAND_TIMEOUT')),
+      PAGE_COMMAND_TIMEOUT_MS
+    );
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 async function activeTab(): Promise<chrome.tabs.Tab> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -32,10 +52,12 @@ async function executePageCommand(
   tabId: number,
   command: PageCommand
 ): Promise<PageCommandResult> {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: [PAGE_COMMAND_SCRIPT],
-  });
+  await withPageCommandTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId },
+      files: [PAGE_COMMAND_SCRIPT],
+    })
+  );
   return sendPageCommand(tabId, command);
 }
 
@@ -43,10 +65,12 @@ async function sendPageCommand(
   tabId: number,
   command: PageCommand
 ): Promise<PageCommandResult> {
-  const result = (await chrome.tabs.sendMessage(tabId, {
-    type: PAGE_COMMAND_MESSAGE_TYPE,
-    command,
-  })) as PageCommandResult | undefined;
+  const result = (await withPageCommandTimeout(
+    chrome.tabs.sendMessage(tabId, {
+      type: PAGE_COMMAND_MESSAGE_TYPE,
+      command,
+    })
+  )) as PageCommandResult | undefined;
   if (!result) throw new Error('PAGE_COMMAND_NO_RESULT');
   return result;
 }
