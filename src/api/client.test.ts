@@ -426,6 +426,35 @@ describe('comment form planning', () => {
     });
   });
 
+  it('keeps the extension worker alive as soon as a request starts', async () => {
+    vi.useFakeTimers();
+    const getPlatformInfo = vi.fn(async () => ({}));
+    vi.stubGlobal('chrome', { runtime: { getPlatformInfo } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, request?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            request?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+          })
+      )
+    );
+
+    const request = generateComment(
+      { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+      input
+    ).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getPlatformInfo).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(request).resolves.toMatchObject({
+      message: 'COMMENT_GENERATION_TIMEOUT',
+    });
+  });
+
   it('returns the form-plan validation error for unsafe model output', async () => {
     vi.stubGlobal(
       'fetch',

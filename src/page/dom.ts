@@ -421,19 +421,16 @@ function isConfidentCommentForm(
     container
   );
   const actionContext = `${structuralContext} ${headingCopy}`;
-  if (
-    NEGATIVE_EDITOR.test(structuralContext) ||
-    NON_COMMENT_FORM_CONTEXT.test(actionContext)
-  ) {
+  const explicitCommentControls =
+    POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
+    STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit));
+  if (NEGATIVE_EDITOR.test(structuralContext)) return false;
+  if (NON_COMMENT_FORM_CONTEXT.test(actionContext) && !explicitCommentControls)
     return false;
-  }
   if (POSITIVE_EDITOR.test(structuralContext)) return true;
   if (COMMENT_HEADING.test(headingCopy)) return true;
 
-  return (
-    POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
-    STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit))
-  );
+  return explicitCommentControls;
 }
 
 type InputKind = 'name' | 'email' | 'website';

@@ -159,6 +159,24 @@ describe('comment page DOM helpers', () => {
     });
   });
 
+  it('trusts explicit comment controls even when the theme uses checkout classes', () => {
+    document.body.innerHTML = `
+      <form class="checkout-form">
+        <input name="author">
+        <input name="email">
+        <textarea name="comment" placeholder="Enter your comment"></textarea>
+        <button type="submit" class="checkout-form__btn">Submit Comment</button>
+      </form>
+    `;
+
+    expect(analyzePageDocument(document).form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+      hasNameField: true,
+      hasEmailField: true,
+    });
+  });
+
   it('finds and submits a comment form inside a same-origin iframe', async () => {
     document.body.innerHTML =
       '<article><p>A practical article about embedded discussions.</p></article><iframe></iframe>';

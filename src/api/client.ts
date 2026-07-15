@@ -223,12 +223,20 @@ function providerRequest(
 async function requestProvider(request: ProviderRequest): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
+  const keepWorkerAlive = () => {
+    try {
+      void chrome.runtime.getPlatformInfo().catch(() => undefined);
+    } catch {
+      // The extension request still has its own timeout and error handling.
+    }
+  };
   const keepAlive =
     typeof chrome === 'undefined'
       ? undefined
-      : setInterval(() => {
-          void chrome.runtime.getPlatformInfo().catch(() => undefined);
-        }, KEEP_ALIVE_INTERVAL_MS);
+      : (() => {
+          keepWorkerAlive();
+          return setInterval(keepWorkerAlive, KEEP_ALIVE_INTERVAL_MS);
+        })();
   try {
     for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
       let response: Response;
