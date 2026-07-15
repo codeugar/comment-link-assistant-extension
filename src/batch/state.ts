@@ -61,6 +61,7 @@ export interface BatchItemProgressUpdate {
   prepared?: BatchItem['prepared'];
   formPlanRefreshes?: BatchItem['formPlanRefreshes'];
   formRevealAttempted?: BatchItem['formRevealAttempted'];
+  partialPageAllowed?: BatchItem['partialPageAllowed'];
   message?: string;
 }
 

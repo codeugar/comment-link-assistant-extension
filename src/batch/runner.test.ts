@@ -156,6 +156,150 @@ function dependencies(
 }
 
 describe('batch runner', () => {
+  it('finishes a target from the available DOM when loading never completes', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        status: 'loading',
+      })),
+      now: () => 30_004,
+    });
+
+    for (let step = 0; step < 8; step += 1) {
+      await advanceBatchStep(context.deps);
+      if (context.read()?.status === 'completed') break;
+    }
+
+    expect(context.deps.analyzeTab).toHaveBeenCalledWith(7, 'batch-1');
+    expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledOnce();
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'published' }],
+    });
+  });
+
+  it('does not accept a different same-origin page from a loading redirect', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/different-post',
+        status: 'loading',
+      })),
+      now: () => 30_004,
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+    expect(context.deps.generateComment).not.toHaveBeenCalled();
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'failed',
+      message: 'TARGET_PAGE_REDIRECT_UNSUPPORTED',
+    });
+  });
+
+  it('does not analyze the old DOM while a different URL is pending', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        pendingUrl: 'https://blog.example/login',
+        status: 'loading',
+      })),
+      now: () => 30_004,
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+    expect(context.deps.generateComment).not.toHaveBeenCalled();
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'failed',
+      message: 'TARGET_PAGE_LOAD_UNCONFIRMED',
+    });
+  });
+
+  it('does not prepare or click during an unapproved page reload', async () => {
+    let batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: analysis(),
+          comment: prepared.comment,
+        },
+      },
+      3
+    );
+    const loadingTab = vi.fn(async () => ({
+      id: 7,
+      url: 'https://blog.example/post',
+      status: 'loading',
+    }));
+    const generating = dependencies(batch, {
+      getWorkerTab: loadingTab,
+      now: () => 4,
+    });
+
+    await advanceBatchStep(generating.deps);
+
+    expect(generating.deps.prepareTabSubmission).not.toHaveBeenCalled();
+
+    batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'prepared', prepared },
+      },
+      3
+    );
+    const preparedContext = dependencies(batch, {
+      getWorkerTab: loadingTab,
+      now: () => 4,
+    });
+
+    await advanceBatchStep(preparedContext.deps);
+
+    expect(
+      preparedContext.deps.clickPreparedTabSubmission
+    ).not.toHaveBeenCalled();
+  });
+
   it('adopts an HTTP to HTTPS canonical redirect before analysis', async () => {
     const canonicalUrl = 'https://blog.example/post';
     const batch = updateBatchProgress(
@@ -973,6 +1117,32 @@ describe('batch runner', () => {
       status: 'completed',
       items: [{ status: 'submitted_not_visible' }],
     });
+  });
+
+  it('verifies once when post-submit navigation never finishes loading', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'click_dispatched', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        status: 'loading',
+      })),
+      now: () => 30_004,
+    });
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
+    expect(context.deps.verifyTabSubmission).toHaveBeenCalledOnce();
+    expect(context.read()?.items[0]).toMatchObject({ status: 'published' });
   });
 
   it('records an unconfirmed click error once and continues without retrying', async () => {

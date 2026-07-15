@@ -48,8 +48,10 @@ const TARGET_NAVIGATION_PENDING = 'BATCH_TARGET_NAVIGATION_PENDING';
 const RESUME_TARGET_REQUIRED = 'BATCH_RESUME_TARGET_REQUIRED';
 const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
+const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const PUBLIC_CHECK_ACCEPTED = 'PUBLIC_CHECK_ACCEPTED';
 const PUBLIC_CHECK_UNKNOWN = 'PUBLIC_CHECK_UNKNOWN';
+const TARGET_LOAD_GRACE_MS = 30_000;
 
 export interface WorkerTab {
   id: number;
@@ -200,6 +202,15 @@ function tabLocation(tab: WorkerTab): string {
   return tab.pendingUrl || tab.url || '';
 }
 
+function canUsePartialPage(item: BatchItem, tab: WorkerTab): boolean {
+  return (
+    item.partialPageAllowed === true &&
+    !tab.pendingUrl &&
+    Boolean(tab.url) &&
+    isSamePage(tab.url ?? '', item.url)
+  );
+}
+
 function hasSameOrigin(left: string, right: string): boolean {
   try {
     return new URL(left).origin === new URL(right).origin;
@@ -340,7 +351,8 @@ function hasRejectedSite(batch: BatchSnapshot, value: string): boolean {
 async function advanceResolvedPage(
   batch: BatchSnapshot,
   resolvedUrl: string,
-  dependencies: BatchRunnerDependencies
+  dependencies: BatchRunnerDependencies,
+  partial = false
 ): Promise<BatchStepResult> {
   const url = canonicalPageUrl(resolvedUrl);
   const nextStatus =
@@ -350,7 +362,14 @@ async function advanceResolvedPage(
       : 'analyzing';
   const resolved = updateBatchProgress(
     batch,
-    { item: { url, status: nextStatus, message: '' } },
+    {
+      item: {
+        url,
+        status: nextStatus,
+        message: partial ? PARTIAL_PAGE_READY : '',
+        partialPageAllowed: partial,
+      },
+    },
     dependencies.now()
   );
   if (hasAttemptedCanonicalTarget(resolved, url)) {
@@ -683,6 +702,7 @@ async function openWorkerTab(
           {
             item: {
               status: 'opening',
+              partialPageAllowed: false,
               message: alreadyOnTarget
                 ? item.message
                 : item.message === RESUME_VERIFICATION_REQUIRED
@@ -725,6 +745,7 @@ async function openWorkerTab(
         workerTabId: tab.id,
         item: {
           status: 'opening',
+          partialPageAllowed: false,
           message:
             item.message === RESUME_VERIFICATION_REQUIRED
               ? VERIFICATION_NAVIGATION_PENDING
@@ -762,8 +783,21 @@ async function advanceOpening(
 
   const location = tabLocation(tab);
   if (tab.status !== 'complete') {
-    if (!location || hasSameOrigin(location, item.url)) return 'wait';
-  } else if (isSamePage(location, item.url)) {
+    if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
+      return 'wait';
+    }
+    if (!tab.pendingUrl && tab.url && isSamePage(tab.url, item.url)) {
+      return advanceResolvedPage(batch, tab.url, dependencies, true);
+    }
+    return saveFailure(
+      batch,
+      tab.pendingUrl
+        ? 'TARGET_PAGE_LOAD_UNCONFIRMED'
+        : 'TARGET_PAGE_REDIRECT_UNSUPPORTED',
+      dependencies
+    );
+  }
+  if (isSamePage(location, item.url)) {
     return advanceResolvedPage(batch, location, dependencies);
   }
 
@@ -821,6 +855,7 @@ async function advanceOpening(
     {
       item: {
         status: 'opening',
+        partialPageAllowed: false,
         message:
           item.message === RESUME_VERIFICATION_REQUIRED
             ? VERIFICATION_NAVIGATION_PENDING
@@ -859,14 +894,20 @@ async function advanceAnalysis(
       batch,
       {
         workerTabId: tab ? batch.workerTabId : null,
-        item: { status: 'opening', message: RESUME_TARGET_REQUIRED },
+        item: {
+          status: 'opening',
+          partialPageAllowed: false,
+          message: RESUME_TARGET_REQUIRED,
+        },
       },
       dependencies.now()
     );
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (tab.status !== 'complete') return 'wait';
+  if (tab.status !== 'complete' && !canUsePartialPage(item, tab)) {
+    return 'wait';
+  }
   let analysis: PageAnalysis;
   try {
     analysis = await dependencies.analyzeTab(tab.id, batch.id);
@@ -1066,6 +1107,7 @@ async function prepareGeneratedComment(
         item: {
           status: 'opening',
           prepared: null,
+          partialPageAllowed: false,
           message: 'WORKER_TAB_MISSING',
         },
       },
@@ -1074,7 +1116,12 @@ async function prepareGeneratedComment(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (tab.status !== 'complete') return 'wait';
+  if (tab.status !== 'complete' && !canUsePartialPage(item, tab)) {
+    if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
+      return 'wait';
+    }
+    return saveFailure(batch, 'PAGE_CHANGED_SINCE_GENERATION', dependencies);
+  }
   const input: PageSubmissionInput = {
     comment: item.comment,
     displayName: batch.settings.displayName || undefined,
@@ -1201,6 +1248,7 @@ async function dispatchPreparedComment(
         item: {
           status: 'opening',
           prepared: null,
+          partialPageAllowed: false,
           message: 'WORKER_TAB_CHANGED',
         },
       },
@@ -1209,7 +1257,12 @@ async function dispatchPreparedComment(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (tab.status !== 'complete') return 'wait';
+  if (tab.status !== 'complete' && !canUsePartialPage(item, tab)) {
+    if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
+      return 'wait';
+    }
+    return saveFailure(batch, 'PAGE_CHANGED_SINCE_GENERATION', dependencies);
+  }
   if (shouldStop()) return 'wait';
 
   const dispatched = updateBatchProgress(
@@ -1266,7 +1319,12 @@ async function advanceDispatchedClick(
     return saveUnconfirmedSubmission(batch, dependencies);
   }
   const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
-  if (tab?.status === 'loading') return 'wait';
+  if (
+    tab?.status === 'loading' &&
+    dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS
+  ) {
+    return 'wait';
+  }
   const location = tab ? tabLocation(tab) : '';
   const gateStatus = manualGateStatus(location);
   if (gateStatus) {
@@ -1306,7 +1364,12 @@ async function advanceDispatchedClick(
   }
   const next = updateBatchProgress(
     batch,
-    { item: { status: 'verifying', message: '' } },
+    {
+      item: {
+        status: 'verifying',
+        message: tab?.status === 'loading' ? PARTIAL_PAGE_READY : '',
+      },
+    },
     dependencies.now()
   );
   await dependencies.setBatch(next);
@@ -1322,7 +1385,9 @@ async function verifyDispatchedComment(
     return saveUnconfirmedSubmission(batch, dependencies);
   }
   const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
-  if (tab?.status === 'loading') return 'wait';
+  if (tab?.status === 'loading' && item.message !== PARTIAL_PAGE_READY) {
+    return 'wait';
+  }
   try {
     const result = await dependencies.verifyTabSubmission(
       batch.workerTabId,

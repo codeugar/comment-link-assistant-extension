@@ -57,6 +57,7 @@ export interface BatchItem {
   events: BatchItemEvent[];
   formPlanRefreshes?: number;
   formRevealAttempted?: boolean;
+  partialPageAllowed?: boolean;
   message: string;
   createdAt: number;
   updatedAt: number;
@@ -191,6 +192,7 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
     events: z.array(batchItemEventSchema).min(1).max(32),
     formPlanRefreshes: z.number().int().nonnegative().max(1).optional(),
     formRevealAttempted: z.boolean().optional(),
+    partialPageAllowed: z.boolean().optional(),
     message: z.string().max(500),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
