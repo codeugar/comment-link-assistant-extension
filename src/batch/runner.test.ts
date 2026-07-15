@@ -253,6 +253,59 @@ describe('batch runner', () => {
     });
   });
 
+  it('does not analyze the old DOM when the target URL is still pending', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'about:blank',
+        pendingUrl: 'https://blog.example/post',
+        status: 'complete',
+      })),
+      now: () => 4,
+    });
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'opening',
+      message: 'BATCH_TARGET_NAVIGATION_PENDING',
+    });
+  });
+
+  it('retries a timed-out read-only analysis once on the same tab', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const analyzeTab = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('PAGE_COMMAND_TIMEOUT'))
+      .mockResolvedValueOnce(analysis());
+    const context = dependencies(batch, { analyzeTab });
+
+    await advanceBatchStep(context.deps);
+
+    expect(analyzeTab).toHaveBeenCalledTimes(2);
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'generating',
+      message: 'COMMENT_GENERATION_READY',
+    });
+  });
+
   it('does not prepare or click during an unapproved page reload', async () => {
     let batch = updateBatchProgress(
       initialBatch(),
@@ -769,11 +822,11 @@ describe('batch runner', () => {
         {
           candidateId: 'control-1',
           formId: null,
-          tag: 'button',
+          tag: 'div',
           type: 'button',
-          attributes: { id: 'show-comment' },
-          labels: ['Escribe una respuesta'],
-          nearbyText: [],
+          attributes: { id: 'show-comment', class: 'btn write-comment-btn' },
+          labels: [],
+          nearbyText: ['Skriv kommentar'],
           ancestorTokens: ['section.responses'],
           requiredSignals: [],
           visible: true,
@@ -787,6 +840,7 @@ describe('batch runner', () => {
       { workerTabId: 7, item: { status: 'analyzing' } },
       3
     );
+    let now = 1_000;
     const revealCommentForm = vi.fn(async () => {
       expect(context.read()?.items[0]).toMatchObject({
         status: 'opening',
@@ -811,6 +865,7 @@ describe('batch runner', () => {
         })
       ),
       revealCommentForm,
+      now: () => now,
     });
 
     await advanceBatchStep(context.deps);
@@ -827,6 +882,11 @@ describe('batch runner', () => {
       message: 'COMMENT_FORM_REVEALED',
     });
 
+    await advanceBatchStep(context.deps);
+    expect(context.deps.analyzeTab).toHaveBeenCalledTimes(1);
+    expect(context.read()?.items[0]).toMatchObject({ status: 'opening' });
+
+    now += 601;
     await advanceBatchStep(context.deps);
     await advanceBatchStep(context.deps);
 
@@ -942,6 +1002,44 @@ describe('batch runner', () => {
       7,
       expect.objectContaining({ websiteUrl: 'https://product.example' }),
       expect.objectContaining({ formPlan: planned.formPlan }),
+      'batch-1'
+    );
+  });
+
+  it('uses a required website field discovered by deterministic analysis', async () => {
+    const detected = analysis();
+    detected.form.hasWebsiteField = true;
+    detected.form.requiresWebsiteField = true;
+    let batch = initialBatch();
+    batch = {
+      ...batch,
+      settings: { ...batch.settings, linkMode: 'inline' },
+    };
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: detected,
+          message: 'COMMENT_GENERATION_READY',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch);
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.generateComment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ linkMode: 'prefer-website-field' })
+    );
+    expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ websiteUrl: 'https://product.example' }),
+      expect.anything(),
       'batch-1'
     );
   });

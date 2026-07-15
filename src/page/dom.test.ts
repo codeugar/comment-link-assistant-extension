@@ -48,6 +48,36 @@ describe('comment page DOM helpers', () => {
     });
   });
 
+  it('skips an empty theme entry-content before the article body', () => {
+    document.body.innerHTML = `
+      <header><div class="entry-content"></div></header>
+      <article>
+        <div class="entry-content">
+          This article explains nonlinear dynamics, chaos theory, and the
+          workshop program in enough detail to generate a relevant response.
+        </div>
+      </article>
+    `;
+
+    expect(analyzePageDocument(document).page.excerpt).toContain(
+      'This article explains nonlinear dynamics'
+    );
+  });
+
+  it('skips a short decorative entry-content before the article body', () => {
+    const body = 'Nonlinear dynamics and chaos theory '.repeat(10);
+    document.body.innerHTML = `
+      <article>
+        <div class="entry-content">Share</div>
+        <div class="post-content">${body}</div>
+      </article>
+    `;
+
+    const excerpt = analyzePageDocument(document).page.excerpt;
+    expect(excerpt).toContain('Nonlinear dynamics and chaos theory');
+    expect(excerpt).not.toBe('Share');
+  });
+
   it('clicks an AI-selected localized control to reveal the comment form', () => {
     document.body.innerHTML = `
       <article><p>Long-form article copy.</p></article>
@@ -79,6 +109,42 @@ describe('comment page DOM helpers', () => {
       )
     ).toBe(true);
     expect(analyzePageDocument(document).form.readiness).toBe('ready');
+  });
+
+  it('clicks an AI-selected button-like div to reveal a localized form', () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <div id="reveal" class="btn write-comment-btn">Skriv kommentar</div>
+      <section id="slot"></section>
+    `;
+    document.querySelector('#reveal')?.addEventListener('click', () => {
+      const slot = document.querySelector('#slot');
+      if (slot) {
+        slot.innerHTML = `
+          <form id="commentform">
+            <textarea name="comment"></textarea>
+            <button type="submit">Skicka kommentar</button>
+          </form>
+        `;
+      }
+    });
+    const probe = probePageDocument(document);
+    const reveal = probe.controlCandidates.find(
+      (candidate) => candidate.attributes.id === 'reveal'
+    );
+
+    expect(reveal).toMatchObject({
+      type: 'button',
+      nearbyText: expect.arrayContaining(['Skriv kommentar']),
+    });
+    expect(
+      revealPlannedCommentFormDocument(
+        document,
+        probe.snapshotId,
+        reveal?.candidateId ?? ''
+      )
+    ).toBe(true);
+    expect(document.querySelector('#commentform textarea')).toBeTruthy();
   });
 
   it('refuses an AI-selected link that navigates away from the article', () => {
@@ -1608,6 +1674,71 @@ describe('comment page DOM helpers', () => {
       (document.querySelector('input[name="website"]') as HTMLInputElement)
         .value
     ).toBe('');
+  });
+
+  it('enables submit controls that listen for editor keyup events', async () => {
+    document.body.innerHTML = `
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <button type="submit" disabled>Post comment</button>
+      </form>
+    `;
+    const editor = document.querySelector('textarea') as HTMLTextAreaElement;
+    const submit = document.querySelector('button') as HTMLButtonElement;
+    document.querySelector('form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+    });
+    editor.addEventListener('keyup', () => {
+      submit.disabled = editor.value.trim().length === 0;
+    });
+
+    const preparation = await prepareSubmissionDocument(document, {
+      comment: 'A useful comment.',
+      websiteUrl: '',
+    });
+
+    expect(preparation).toMatchObject({ ok: true });
+    expect(submit.disabled).toBe(false);
+    if (preparation.ok) {
+      await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+    }
+  });
+
+  it('prepares submissions on HTTP pages without crypto.randomUUID', async () => {
+    document.body.innerHTML = `
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+    document.querySelector('form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+    });
+    const randomUUID = globalThis.crypto.randomUUID;
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      configurable: true,
+      value: undefined,
+    });
+
+    try {
+      const preparation = await prepareSubmissionDocument(document, {
+        comment: 'A useful comment.',
+        websiteUrl: '',
+      });
+      expect(preparation).toMatchObject({ ok: true });
+      if (preparation.ok) {
+        await clickPreparedSubmissionDocument(
+          document,
+          preparation.prepared,
+          0
+        );
+      }
+    } finally {
+      Object.defineProperty(globalThis.crypto, 'randomUUID', {
+        configurable: true,
+        value: randomUUID,
+      });
+    }
   });
 
   it.each([

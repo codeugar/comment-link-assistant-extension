@@ -42,7 +42,7 @@ function isMultilineEditor(candidate: PageControlCandidate): boolean {
 
 function isActionControl(candidate: PageControlCandidate): boolean {
   return (
-    candidate.tag === 'button' ||
+    candidate.type === 'button' ||
     (candidate.tag === 'input' &&
       (candidate.type === 'submit' || candidate.type === 'button')) ||
     candidate.attributes.role === 'button'

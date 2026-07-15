@@ -47,14 +47,85 @@ describe('page command runtime', () => {
     await expect(analyzeTab(42)).resolves.toEqual(analysis);
 
     expect(query).not.toHaveBeenCalled();
-    expect(executeScript).toHaveBeenCalledWith({
-      target: { tabId: 42 },
-      files: ['content-scripts/page-command.js'],
-    });
+    expect(executeScript).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(42, {
       type: 'comment-link-assistant:page-command',
       command: { type: 'analyze' },
     });
+  });
+
+  it('uses an existing listener without injecting again', async () => {
+    const analysis = {
+      page: {
+        url: 'http://blog.example/article',
+        title: 'Article',
+        description: 'Description',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'Comment',
+        submitLabel: 'Post comment',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'analysis',
+      analysis,
+    });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript: vi.fn(() => new Promise(() => {})) },
+    });
+
+    await expect(analyzeTab(42)).resolves.toEqual(analysis);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('injects once when the page has no listener yet', async () => {
+    const analysis = {
+      page: {
+        url: 'http://blog.example/article',
+        title: 'Article',
+        description: 'Description',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'not_found' as const,
+        editorLabel: '',
+        submitLabel: '',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_NOT_FOUND',
+      },
+    };
+    const executeScript = vi.fn().mockResolvedValue([]);
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    await expect(analyzeTab(42)).resolves.toEqual(analysis);
+
+    expect(executeScript).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it('prepares a submission in the specified tab', async () => {
@@ -218,10 +289,17 @@ describe('page command runtime', () => {
       message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
       fingerprint: prepared.fingerprint,
     };
-    const sendMessage = vi.fn().mockResolvedValue({
-      type: 'submission',
-      result,
-    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({
+        type: 'submission',
+        result,
+      });
     const executeScript = vi.fn().mockResolvedValue([]);
     vi.stubGlobal('chrome', {
       tabs: {

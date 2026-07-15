@@ -779,12 +779,31 @@ function readMeta(document: Document, names: string[]): string {
 }
 
 function readPageExcerpt(document: Document): string {
-  const source =
-    document.querySelector(
-      'article, main, [role="main"], .entry-content, .post-content, .article-content, #content'
-    ) ?? document.body;
-  if (!source) return '';
-  return normalizeWhitespace(renderedPageText(source)).slice(0, 8_000);
+  const selectors = [
+    'article .entry-content',
+    'article',
+    '.post-content',
+    '.article-content',
+    'main',
+    '[role="main"]',
+    '#content',
+    '.entry-content',
+  ];
+  let fallback = '';
+  for (const selector of selectors) {
+    for (const source of document.querySelectorAll(selector)) {
+      const text = normalizeWhitespace(renderedPageText(source));
+      if (text.length >= 200) return text.slice(0, 8_000);
+      if (text.length > fallback.length) fallback = text;
+    }
+  }
+  const bodyText = document.body
+    ? normalizeWhitespace(renderedPageText(document.body))
+    : '';
+  return (bodyText.length > fallback.length ? bodyText : fallback).slice(
+    0,
+    8_000
+  );
 }
 
 function hasCaptcha(document: Document): boolean {
@@ -902,6 +921,7 @@ function buildFormSummary(document: Document): CommentFormSummary {
     hasNameField: Boolean(findInput(container, 'name')),
     hasEmailField: Boolean(findInput(container, 'email')),
     hasWebsiteField: Boolean(findInput(container, 'website')),
+    requiresWebsiteField: isRequiredInput(findInput(container, 'website')),
     message: loginGate
       ? 'LOGIN_REQUIRED'
       : !submit
@@ -981,7 +1001,10 @@ export function revealPlannedCommentFormDocument(
     if (candidate.type !== 'button' || candidate.form) return false;
   } else if (isInputElement(candidate)) {
     if (candidate.type !== 'button' || candidate.form) return false;
-  } else if (candidate.getAttribute('role') !== 'button') {
+  } else if (
+    candidate.getAttribute('role') !== 'button' &&
+    !candidate.matches('[class~="btn"], [class~="button"]')
+  ) {
     return false;
   }
 
@@ -1006,6 +1029,10 @@ function setNativeValue(
 function setEditorValue(editor: HTMLElement, value: string): void {
   if (isTextAreaElement(editor) || isInputElement(editor)) {
     setNativeValue(editor, value);
+    const view = editor.ownerDocument.defaultView;
+    editor.dispatchEvent(
+      new (view?.KeyboardEvent ?? KeyboardEvent)('keyup', { bubbles: true })
+    );
     return;
   }
   editor.focus();
@@ -1487,7 +1514,10 @@ export async function prepareSubmissionDocument(
   if (existingSubmission) {
     releaseDomSubmission(document, existingSubmission.token);
   }
-  const domToken = globalThis.crypto.randomUUID();
+  const tokenBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const domToken = Array.from(tokenBytes, (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
   activeDomSubmissions.set(document, {
     token: domToken,
     expiresAt: Date.now() + PREPARATION_TTL_MS,

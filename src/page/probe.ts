@@ -52,6 +52,8 @@ const CONTROL_SELECTOR = [
   '[contenteditable]:not([contenteditable="false"])',
   'button',
   '[role="button"]',
+  '[class~="btn"]',
+  '[class~="button"]',
   'a[href]',
 ].join(',');
 
@@ -285,7 +287,11 @@ function readContextHeadings(element: HTMLElement): string[] {
 }
 
 function readButtonText(element: HTMLElement): string | null {
-  if (element.matches('button, [role="button"], a[href]')) {
+  if (
+    element.matches(
+      'button, [role="button"], [class~="btn"], [class~="button"], a[href]'
+    )
+  ) {
     return readStaticText(element);
   }
   if (isInputElement(element) && ['button', 'submit'].includes(element.type)) {
@@ -360,7 +366,12 @@ function controlType(element: HTMLElement): string {
   if (isInputElement(element)) return element.type;
   if (isTextAreaElement(element)) return 'textarea';
   if (element.hasAttribute('contenteditable')) return 'contenteditable';
-  if (element.matches('button, [role="button"]')) return 'button';
+  if (
+    element.matches(
+      'button, [role="button"], [class~="btn"], [class~="button"]'
+    )
+  )
+    return 'button';
   return element.tagName.toLowerCase();
 }
 
@@ -398,7 +409,8 @@ function isActionControl(element: HTMLElement): boolean {
     element.tagName === 'BUTTON' ||
     (isInputElement(element) &&
       (element.type === 'button' || element.type === 'submit')) ||
-    element.getAttribute('role') === 'button'
+    element.getAttribute('role') === 'button' ||
+    element.matches('[class~="btn"], [class~="button"]')
   );
 }
 
@@ -494,10 +506,34 @@ function boundedFallbackControls(
     return true;
   });
   if (deduplicated.length <= limit) return deduplicated;
-  const leadingCount = Math.ceil(limit / 2);
+  const visibleActions = deduplicated.filter(
+    (element) => isActionControl(element) && isVisible(element)
+  );
+  const actionLimit = Math.min(visibleActions.length, Math.floor(limit * 0.8));
+  const leadingActionCount = Math.ceil(actionLimit / 2);
+  const trailingActionCount = actionLimit - leadingActionCount;
+  const selectedActions =
+    visibleActions.length > actionLimit
+      ? [
+          ...visibleActions.slice(0, leadingActionCount),
+          ...(trailingActionCount > 0
+            ? visibleActions.slice(-trailingActionCount)
+            : []),
+        ]
+      : visibleActions;
+  const visibleActionSet = new Set(visibleActions);
+  const remaining = deduplicated.filter(
+    (element) => !visibleActionSet.has(element)
+  );
+  const remainingLimit = limit - selectedActions.length;
+  if (remaining.length <= remainingLimit) {
+    return [...selectedActions, ...remaining];
+  }
+  const leadingCount = Math.ceil(remainingLimit / 2);
   return [
-    ...deduplicated.slice(0, leadingCount),
-    ...deduplicated.slice(-(limit - leadingCount)),
+    ...selectedActions,
+    ...remaining.slice(0, leadingCount),
+    ...remaining.slice(-(remainingLimit - leadingCount)),
   ];
 }
 

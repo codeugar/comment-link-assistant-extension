@@ -85,6 +85,7 @@ export function buildFormPlanningPrompt(
     'Select the comment editor, identity fields, and submit control from the same blog-comment or forum-reply form.',
     'Use semantic evidence from label, type, name, id, class, headings, ancestorTokens, and nearbyText; the submit control may be in any language.',
     'When no comment editor is visible, use decision "reveal_form" only for one visible control that opens or reveals the comment form; its wording may be in any language.',
+    'When multiple visible equivalent reveal controls have the same meaning and context, choose the first candidate in the observation.',
     'Never classify login, registration, search, checkout, deletion, or social reactions such as like or upvote as a comment submission.',
     'If any visible required control cannot be mapped safely, use decision "needs_review".',
     'Do not output CSS selectors, XPath, JavaScript, executable code, or new element identifiers.',

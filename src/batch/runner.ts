@@ -52,6 +52,7 @@ const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const PUBLIC_CHECK_ACCEPTED = 'PUBLIC_CHECK_ACCEPTED';
 const PUBLIC_CHECK_UNKNOWN = 'PUBLIC_CHECK_UNKNOWN';
 const TARGET_LOAD_GRACE_MS = 30_000;
+const FORM_REVEAL_SETTLE_MS = 600;
 
 export interface WorkerTab {
   id: number;
@@ -781,6 +782,19 @@ async function advanceOpening(
     return openWorkerTab(withoutTab, dependencies);
   }
 
+  if (tab.pendingUrl) {
+    if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
+      return 'wait';
+    }
+    return saveFailure(batch, 'TARGET_PAGE_LOAD_UNCONFIRMED', dependencies);
+  }
+  if (
+    item.message === 'COMMENT_FORM_REVEALED' &&
+    dependencies.now() - item.updatedAt < FORM_REVEAL_SETTLE_MS
+  ) {
+    return 'wait';
+  }
+
   const location = tabLocation(tab);
   if (tab.status !== 'complete') {
     if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
@@ -887,9 +901,9 @@ async function advanceAnalysis(
     batch.workerTabId === undefined
       ? null
       : await dependencies.getWorkerTab(batch.workerTabId, batch.id);
-  const location = tab ? tabLocation(tab) : '';
+  const location = tab?.url ?? '';
   const onTarget = tab ? isSamePage(location, item.url) : false;
-  if (!tab || !onTarget) {
+  if (!tab || tab.pendingUrl || !onTarget) {
     const next = updateBatchProgress(
       batch,
       {
@@ -912,7 +926,14 @@ async function advanceAnalysis(
   try {
     analysis = await dependencies.analyzeTab(tab.id, batch.id);
   } catch (error) {
-    return saveFailure(batch, errorMessage(error), dependencies);
+    if (errorMessage(error) !== 'PAGE_COMMAND_TIMEOUT') {
+      return saveFailure(batch, errorMessage(error), dependencies);
+    }
+    try {
+      analysis = await dependencies.analyzeTab(tab.id, batch.id);
+    } catch (retryError) {
+      return saveFailure(batch, errorMessage(retryError), dependencies);
+    }
   }
 
   if (analysis.form.readiness === 'login_required') {
@@ -942,7 +963,7 @@ async function advanceAnalysis(
       (candidate) =>
         candidate.visible &&
         candidate.enabled &&
-        (candidate.tag === 'button' ||
+        (candidate.type === 'button' ||
           candidate.tag === 'a' ||
           candidate.attributes.role === 'button' ||
           (candidate.tag === 'input' && candidate.type === 'button'))
@@ -1129,6 +1150,7 @@ async function prepareGeneratedComment(
     websiteUrl:
       item.analysis.form.hasWebsiteField &&
       (batch.settings.linkMode === 'prefer-website-field' ||
+        item.analysis.form.requiresWebsiteField ||
         item.analysis.formPlan?.requiredRoles.includes('website'))
         ? batch.settings.websiteUrl
         : '',
@@ -1205,8 +1227,10 @@ async function advanceGeneration(
     dependencies.now()
   );
   await dependencies.setBatch(requested);
-  const websiteFieldRequired =
-    item.analysis.formPlan?.requiredRoles.includes('website') ?? false;
+  const websiteFieldRequired = Boolean(
+    item.analysis.form.requiresWebsiteField ||
+      item.analysis.formPlan?.requiredRoles.includes('website')
+  );
   const effectiveLinkMode = websiteFieldRequired
     ? 'prefer-website-field'
     : requested.settings.linkMode === 'prefer-website-field' &&

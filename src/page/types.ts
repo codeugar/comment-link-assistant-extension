@@ -23,6 +23,7 @@ export interface CommentFormSummary {
   hasNameField: boolean;
   hasEmailField: boolean;
   hasWebsiteField: boolean;
+  requiresWebsiteField?: boolean;
   message: string;
 }
 

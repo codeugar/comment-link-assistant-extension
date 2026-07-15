@@ -137,6 +137,7 @@ const commentFormSummarySchema = z
     hasNameField: z.boolean(),
     hasEmailField: z.boolean(),
     hasWebsiteField: z.boolean(),
+    requiresWebsiteField: z.boolean().optional(),
     message: z.string().max(500),
   })
   .strict();

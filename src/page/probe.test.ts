@@ -581,6 +581,50 @@ describe('page probe', () => {
     expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
   });
 
+  it('keeps a visible button-like reveal control between thousands of links', () => {
+    document.body.innerHTML = `
+      ${Array.from(
+        { length: 200 },
+        (_, index) => `<a href="/before-${index}">Before ${index}</a>`
+      ).join('')}
+      <div id="write-comment" class="btn write-comment-btn">
+        Skriv kommentar
+      </div>
+      ${Array.from(
+        { length: 200 },
+        (_, index) => `<a href="/after-${index}">After ${index}</a>`
+      ).join('')}
+    `;
+
+    const snapshot = probePageDocument(document);
+
+    expect(
+      snapshot.controlCandidates.find(
+        (candidate) => candidate.attributes.id === 'write-comment'
+      )
+    ).toMatchObject({ type: 'button', visible: true, enabled: true });
+    expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
+  });
+
+  it('reserves candidate space for a comment link among many buttons', () => {
+    document.body.innerHTML = `
+      ${Array.from(
+        { length: 200 },
+        (_, index) => `<button type="button">Action ${index}</button>`
+      ).join('')}
+      <a id="write-comment" href="#respond">Leave a comment</a>
+    `;
+
+    const snapshot = probePageDocument(document);
+
+    expect(
+      snapshot.controlCandidates.find(
+        (candidate) => candidate.attributes.id === 'write-comment'
+      )
+    ).toBeDefined();
+    expect(snapshot.controlCandidates.length).toBeLessThanOrEqual(120);
+  });
+
   it('bounds aria-labelledby references before resolving or serializing them', () => {
     const labelIds = Array.from({ length: 20 }, (_, index) => `label-${index}`);
     document.body.innerHTML = `

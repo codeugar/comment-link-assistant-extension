@@ -118,6 +118,9 @@ describe('form planning prompt', () => {
     expect(prompt).toContain('submit control may be in any language');
     expect(prompt).toContain('opens or reveals the comment form');
     expect(prompt).toContain(
+      'equivalent reveal controls have the same meaning and context, choose the first'
+    );
+    expect(prompt).toContain(
       'login, registration, search, checkout, deletion, or social reactions'
     );
     expect(prompt).toContain(

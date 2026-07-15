@@ -52,6 +52,16 @@ async function executePageCommand(
   tabId: number,
   command: PageCommand
 ): Promise<PageCommandResult> {
+  try {
+    return await sendPageCommand(tabId, command);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes('Receiving end does not exist')
+    ) {
+      throw error;
+    }
+  }
   await withPageCommandTimeout(
     chrome.scripting.executeScript({
       target: { tabId },
