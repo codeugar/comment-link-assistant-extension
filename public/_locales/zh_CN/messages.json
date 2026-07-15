@@ -1,0 +1,341 @@
+{
+  "extensionName": {
+    "message": "评论外链助手"
+  },
+  "extensionDescription": {
+    "message": "按网址队列逐个生成不同的相关评论，自动提交，并检查发布结果。"
+  },
+  "settingsTitle": {
+    "message": "设置"
+  },
+  "deepSeekApiKeyLabel": {
+    "message": "DeepSeek API Key"
+  },
+  "deepSeekApiKeyPlaceholder": {
+    "message": "填写你的 DeepSeek API Key"
+  },
+  "kieApiKeyLabel": {
+    "message": "KIE API Key"
+  },
+  "kieApiKeyPlaceholder": {
+    "message": "填写你的 KIE API Key"
+  },
+  "providerLabel": {
+    "message": "评论模型"
+  },
+  "providerDeepSeek": {
+    "message": "DeepSeek V4 Flash"
+  },
+  "providerKieGemini": {
+    "message": "Gemini 3.5 Flash（KIE）"
+  },
+  "websiteUrlLabel": {
+    "message": "要推广的网站"
+  },
+  "websiteUrlPlaceholder": {
+    "message": "https://your-site.example"
+  },
+  "displayNameLabel": {
+    "message": "显示名称（可选）"
+  },
+  "displayNamePlaceholder": {
+    "message": "你的名字"
+  },
+  "emailLabel": {
+    "message": "邮箱（可选）"
+  },
+  "emailPlaceholder": {
+    "message": "you@example.com"
+  },
+  "linkModeLabel": {
+    "message": "链接放置方式"
+  },
+  "linkModePreferWebsiteField": {
+    "message": "优先填写网站字段"
+  },
+  "linkModeInline": {
+    "message": "允许在评论中自然加入链接"
+  },
+  "saveSettings": {
+    "message": "保存设置"
+  },
+  "settingsSaved": {
+    "message": "设置已保存"
+  },
+  "settingsSaveFailed": {
+    "message": "设置无法保存"
+  },
+  "scanPage": {
+    "message": "扫描当前页面"
+  },
+  "generateComment": {
+    "message": "生成评论"
+  },
+  "submitComment": {
+    "message": "提交评论"
+  },
+  "analyzingPage": {
+    "message": "正在分析页面…"
+  },
+  "generatingComment": {
+    "message": "正在生成相关评论…"
+  },
+  "fillingForm": {
+    "message": "正在填写评论表单…"
+  },
+  "submittingComment": {
+    "message": "正在提交评论…"
+  },
+  "verifyingSubmission": {
+    "message": "正在检查提交结果…"
+  },
+  "loginRequired": {
+    "message": "需要登录"
+  },
+  "loginRequiredDescription": {
+    "message": "请先在当前页面手动登录，然后重新运行助手。"
+  },
+  "noCommentForm": {
+    "message": "当前页面没有找到支持的评论表单。"
+  },
+  "commentGenerated": {
+    "message": "评论已生成"
+  },
+  "commentSubmitted": {
+    "message": "评论提交成功"
+  },
+  "commentPendingModeration": {
+    "message": "评论已提交，正在等待审核"
+  },
+  "commentFailed": {
+    "message": "评论提交失败"
+  },
+  "missingSettings": {
+    "message": "请先完成必填设置。"
+  },
+  "invalidWebsiteUrl": {
+    "message": "请输入有效的 HTTP 或 HTTPS 网站地址。"
+  },
+  "websiteProfileFailed": {
+    "message": "要推广的网站必须同时提供 Meta Title 和 Meta Description。"
+  },
+  "missingDeepSeekApiKey": {
+    "message": "请填写所选 DeepSeek 模型的 API Key。"
+  },
+  "missingKieApiKey": {
+    "message": "请填写所选 KIE 模型的 API Key。"
+  },
+  "openSettings": {
+    "message": "打开设置"
+  },
+  "backToQueue": {
+    "message": "返回目标队列"
+  },
+  "workflowEyebrow": {
+    "message": "语境化外链工作台"
+  },
+  "settingsDescription": {
+    "message": "填写服务商 API Key、选择模型，并填写要推广的网站。"
+  },
+  "currentPageLabel": {
+    "message": "当前页面"
+  },
+  "formReady": {
+    "message": "评论表单已就绪"
+  },
+  "websiteFieldFound": {
+    "message": "已找到独立的网站地址字段"
+  },
+  "websiteFieldMissing": {
+    "message": "未找到网站字段；可在草稿中自然放入链接"
+  },
+  "captchaRequired": {
+    "message": "需要处理 CAPTCHA"
+  },
+  "captchaRequiredDescription": {
+    "message": "请在页面上手动完成 CAPTCHA，然后重新扫描；助手不会绕过验证。"
+  },
+  "draftLabel": {
+    "message": "评论草稿"
+  },
+  "draftHint": {
+    "message": "发布前请先检查，你也可以直接修改。"
+  },
+  "submitConfirmation": {
+    "message": "此操作会填写评论表单，并点击页面上的提交按钮。"
+  },
+  "submissionUnconfirmed": {
+    "message": "表单已提交，但页面没有提供可靠结果，请直接检查当前页面。"
+  },
+  "permissionDenied": {
+    "message": "尚未授权访问网站来源。"
+  },
+  "apiKeySecurityNote": {
+    "message": "API Key 保存在当前 Chrome 配置的本地存储中，只会发送给当前选择的服务商。"
+  },
+  "pageChangedSinceGeneration": {
+    "message": "生成草稿后，当前页面或评论表单已经变化。请重新生成草稿再提交。"
+  },
+  "batchSetupTitle": {
+    "message": "目标队列"
+  },
+  "batchSetupDescription": {
+    "message": "粘贴你要发表评论的博客或论坛页面。"
+  },
+  "targetUrlsLabel": {
+    "message": "目标网址"
+  },
+  "targetUrlsPlaceholder": {
+    "message": "https://blog.example/post\nhttps://forum.example/thread"
+  },
+  "targetUrlsHint": {
+    "message": "每行一个完整的 HTTP 或 HTTPS URL，最多 200 个，重复项会自动去除。"
+  },
+  "invalidTargetUrls": {
+    "message": "请检查目标网址，最多输入 200 个完整的 HTTP 或 HTTPS URL。"
+  },
+  "prepareBatch": {
+    "message": "检查批次"
+  },
+  "preparingBatch": {
+    "message": "正在读取网站 Meta 信息…"
+  },
+  "batchReviewTitle": {
+    "message": "确认自动发布"
+  },
+  "websiteProfileTitle": {
+    "message": "外链网站信息"
+  },
+  "metaTitleLabel": {
+    "message": "Meta Title"
+  },
+  "metaDescriptionLabel": {
+    "message": "Meta Description"
+  },
+  "targetUrlsSummary": {
+    "message": "已准备 $1 个去重后的目标网址"
+  },
+  "batchConfirmationNotice": {
+    "message": "本次确认后，助手会依次为 $1 个网站生成并提交评论，不再逐条确认；遇到登录或 CAPTCHA 会暂停。"
+  },
+  "confirmAndStartBatch": {
+    "message": "确认并开始"
+  },
+  "startingBatch": {
+    "message": "正在启动批次…"
+  },
+  "batchProgressTitle": {
+    "message": "批次进度"
+  },
+  "batchProgressCount": {
+    "message": "$1 / $2"
+  },
+  "currentTargetLabel": {
+    "message": "当前目标"
+  },
+  "queueDetailsLabel": {
+    "message": "队列明细"
+  },
+  "continueBatch": {
+    "message": "继续批次"
+  },
+  "stopBatch": {
+    "message": "停止批次"
+  },
+  "stopBatchHint": {
+    "message": "停止后不会再提交后续评论；已经提交的评论不会被撤回。"
+  },
+  "openCurrentTarget": {
+    "message": "打开当前目标"
+  },
+  "batchPausedLoginDescription": {
+    "message": "批次已暂停。请先在打开的目标页面手动登录，然后点击继续。"
+  },
+  "batchPausedCaptchaDescription": {
+    "message": "批次已暂停。请先在打开的目标页面完成 CAPTCHA，然后点击继续。"
+  },
+  "batchPausedUnknownDescription": {
+    "message": "页面没有提供可靠的提交结果。请手动检查；继续后只会进入下一个网址，不会再次提交当前评论。"
+  },
+  "batchCompletedTitle": {
+    "message": "批次已完成"
+  },
+  "batchStoppedTitle": {
+    "message": "批次已停止"
+  },
+  "batchSummary": {
+    "message": "成功 $1 · 待审核 $2 · 失败 $3 · 未确认 $4"
+  },
+  "startNewBatch": {
+    "message": "开始新批次"
+  },
+  "batchStatusQueued": {
+    "message": "等待处理"
+  },
+  "batchStatusOpening": {
+    "message": "正在打开页面"
+  },
+  "batchStatusAnalyzing": {
+    "message": "正在分析页面"
+  },
+  "batchStatusGenerating": {
+    "message": "正在生成评论"
+  },
+  "batchStatusPrepared": {
+    "message": "评论已准备"
+  },
+  "batchStatusSubmitting": {
+    "message": "正在提交评论"
+  },
+  "batchStatusVerifying": {
+    "message": "正在检查结果"
+  },
+  "batchStatusPublished": {
+    "message": "已发布"
+  },
+  "batchStatusPendingModeration": {
+    "message": "等待审核"
+  },
+  "batchStatusLoginRequired": {
+    "message": "需要登录"
+  },
+  "batchStatusCaptchaRequired": {
+    "message": "需要 CAPTCHA"
+  },
+  "batchStatusNoForm": {
+    "message": "未找到评论区"
+  },
+  "batchStatusValidationError": {
+    "message": "表单拒绝了评论"
+  },
+  "batchStatusUnknown": {
+    "message": "结果未确认"
+  },
+  "batchStatusFailed": {
+    "message": "失败"
+  },
+  "batchStatusStopped": {
+    "message": "已停止"
+  },
+  "crossOriginCommentFrameUnsupported": {
+    "message": "这个评论组件托管在第三方域名下，需要手动发布。"
+  },
+  "displayNameRequiredForTarget": {
+    "message": "此表单要求填写显示名称，请在下一批次前到设置中补充。"
+  },
+  "emailRequiredForTarget": {
+    "message": "此表单要求填写邮箱，请在下一批次前到设置中补充。"
+  },
+  "formNeedsReview": {
+    "message": "检测到可能的表单，但无法安全确认字段对应关系，因此没有提交。"
+  },
+  "requiredFieldNotMapped": {
+    "message": "此表单包含插件无法安全填写的必填字段，因此没有提交。"
+  },
+  "websiteRequiredForTarget": {
+    "message": "此表单要求填写网站网址，因此没有提交。"
+  },
+  "unsafeSubmitBlocked": {
+    "message": "所选操作不是安全的评论提交动作，插件已拦截且未提交。"
+  }
+}

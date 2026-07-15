@@ -1,0 +1,37 @@
+{
+  "name": "comment-link-assistant-extension",
+  "version": "0.3.3",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "lint": "biome check src entrypoints wxt.config.ts vitest.config.ts",
+    "format": "biome format --write src entrypoints wxt.config.ts vitest.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "linkify-it": "^6.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tlds": "^1.261.0",
+    "zod": "^4.0.17"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "@vitejs/plugin-react": "5.2.0",
+    "@types/chrome": "^0.0.270",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@wxt-dev/module-react": "1.2.2",
+    "happy-dom": "^20.0.0",
+    "typescript": "5.9.3",
+    "vite": "7.2.1",
+    "vitest": "3.2.4",
+    "wxt": "0.20.26"
+  }
+}

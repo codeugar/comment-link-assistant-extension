@@ -1,0 +1,791 @@
+import type { BatchItemStatus, BatchSnapshot } from '@/batch/types';
+import { parseTargetUrls } from '@/batch/urls';
+import { translate } from '@/i18n';
+import { sendToBackground } from '@/runtime/messages';
+import { requestBatchOriginPermissions } from '@/runtime/permissions';
+import { BATCH_STORAGE_KEY, getBatch } from '@/storage/batch';
+import {
+  DEFAULT_SETTINGS,
+  extensionSettingsSchema,
+  getProviderApiKeys,
+  getSettings,
+  setSettings as persistSettings,
+  restrictStorageToTrustedContexts,
+  setProviderApiKeys,
+} from '@/storage/settings';
+import type { ExtensionSettings, ProviderApiKeys } from '@/types';
+import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
+import { useEffect, useMemo, useState } from 'react';
+
+type BusyState =
+  | 'idle'
+  | 'preparing'
+  | 'starting'
+  | 'continuing'
+  | 'stopping'
+  | 'opening'
+  | 'resetting';
+
+function providerLabel(provider: ExtensionSettings['provider']): string {
+  return translate(
+    provider === 'deepseek' ? 'providerDeepSeek' : 'providerKieGemini'
+  );
+}
+
+function friendlyError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const code = raw.split(':', 1)[0];
+  if (code.startsWith('TARGET_URL_')) return translate('invalidTargetUrls');
+  if (code === 'DEEPSEEK_API_KEY_REQUIRED') {
+    return translate('missingDeepSeekApiKey');
+  }
+  if (code === 'KIE_API_KEY_REQUIRED') {
+    return translate('missingKieApiKey');
+  }
+  if (code === 'WEBSITE_URL_REQUIRED') return translate('missingSettings');
+  if (code.includes('PERMISSION')) return translate('permissionDenied');
+  if (
+    code.includes('WEBSITE_FETCH') ||
+    code === 'WEBSITE_META_NOT_FOUND' ||
+    code === 'WEBSITE_RESPONSE_NOT_HTML'
+  ) {
+    return translate('websiteProfileFailed');
+  }
+  if (code.includes('WEBSITE_URL')) return translate('invalidWebsiteUrl');
+  return translate('commentFailed');
+}
+
+function batchItemStatusCopy(status: BatchItemStatus): string {
+  switch (status) {
+    case 'queued':
+      return translate('batchStatusQueued');
+    case 'opening':
+      return translate('batchStatusOpening');
+    case 'analyzing':
+      return translate('batchStatusAnalyzing');
+    case 'generating':
+      return translate('batchStatusGenerating');
+    case 'prepared':
+      return translate('batchStatusPrepared');
+    case 'click_dispatched':
+      return translate('batchStatusSubmitting');
+    case 'verifying':
+      return translate('batchStatusVerifying');
+    case 'published':
+      return translate('batchStatusPublished');
+    case 'pending_moderation':
+      return translate('batchStatusPendingModeration');
+    case 'login_required':
+      return translate('batchStatusLoginRequired');
+    case 'captcha_required':
+      return translate('batchStatusCaptchaRequired');
+    case 'no_form':
+      return translate('batchStatusNoForm');
+    case 'validation_error':
+      return translate('batchStatusValidationError');
+    case 'unknown':
+      return translate('batchStatusUnknown');
+    case 'failed':
+      return translate('batchStatusFailed');
+    case 'stopped':
+      return translate('batchStatusStopped');
+  }
+}
+
+function batchItemMessageCopy(message: string): string | null {
+  if (message === 'CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED') {
+    return translate('crossOriginCommentFrameUnsupported');
+  }
+  if (message === 'DISPLAY_NAME_REQUIRED') {
+    return translate('displayNameRequiredForTarget');
+  }
+  if (message === 'EMAIL_REQUIRED') {
+    return translate('emailRequiredForTarget');
+  }
+  if (message === 'FORM_PLAN_NEEDS_REVIEW') {
+    return translate('formNeedsReview');
+  }
+  if (message === 'FORM_PLAN_REQUIRED_FIELD_MISSING') {
+    return translate('requiredFieldNotMapped');
+  }
+  if (message === 'WEBSITE_REQUIRED') {
+    return translate('websiteRequiredForTarget');
+  }
+  if (message === 'FORM_PLAN_UNSAFE_SUBMIT') {
+    return translate('unsafeSubmitBlocked');
+  }
+  return null;
+}
+
+function pauseCopy(status?: BatchItemStatus): string {
+  if (status === 'login_required') {
+    return translate('batchPausedLoginDescription');
+  }
+  if (status === 'captcha_required') {
+    return translate('batchPausedCaptchaDescription');
+  }
+  return translate('batchPausedUnknownDescription');
+}
+
+function displayTarget(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
+  let published = 0;
+  let pending = 0;
+  let failed = 0;
+  let unknown = 0;
+
+  for (const item of batch.items) {
+    if (item.status === 'published') published += 1;
+    else if (item.status === 'pending_moderation') pending += 1;
+    else if (item.status === 'unknown') unknown += 1;
+    else if (
+      item.status === 'no_form' ||
+      item.status === 'validation_error' ||
+      item.status === 'failed'
+    ) {
+      failed += 1;
+    }
+  }
+
+  return [String(published), String(pending), String(failed), String(unknown)];
+}
+
+export default function App() {
+  const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS);
+  const [apiKeys, setApiKeys] = useState<ProviderApiKeys>({
+    deepseekApiKey: '',
+    kieApiKey: '',
+  });
+  const [loaded, setLoaded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [busy, setBusy] = useState<BusyState>('idle');
+  const [batch, setBatch] = useState<BatchSnapshot | null>(null);
+  const [targetText, setTargetText] = useState('');
+  const [websiteProfile, setWebsiteProfile] = useState<WebsiteProfile | null>(
+    null
+  );
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    void Promise.all([
+      restrictStorageToTrustedContexts(),
+      getSettings(),
+      getProviderApiKeys(),
+      getBatch(),
+    ]).then(([, storedSettings, storedKeys, storedBatch]) => {
+      setSettings(storedSettings);
+      setApiKeys(storedKeys);
+      setBatch(storedBatch);
+      setLoaded(true);
+    });
+
+    const onStorageChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string
+    ) => {
+      if (areaName !== 'local' || !changes[BATCH_STORAGE_KEY]) return;
+      void getBatch().then(setBatch);
+    };
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    return () => chrome.storage.onChanged.removeListener(onStorageChanged);
+  }, []);
+
+  const configured = useMemo(
+    () =>
+      Boolean(
+        settings.websiteUrl &&
+          (settings.provider === 'deepseek'
+            ? apiKeys.deepseekApiKey
+            : apiKeys.kieApiKey)
+      ),
+    [apiKeys, settings.provider, settings.websiteUrl]
+  );
+
+  const targets = useMemo(() => {
+    try {
+      return parseTargetUrls(targetText);
+    } catch {
+      return [];
+    }
+  }, [targetText]);
+
+  const batchIsActive =
+    batch?.status === 'running' || batch?.status === 'paused';
+  const currentItem =
+    batch && batch.currentIndex < batch.items.length
+      ? batch.items[batch.currentIndex]
+      : null;
+  const currentPosition = batch
+    ? batch.status === 'completed'
+      ? batch.items.length
+      : Math.min(batch.currentIndex + 1, batch.items.length)
+    : 0;
+  const completedBeforeCurrent = batch
+    ? batch.status === 'completed' || batch.status === 'stopped'
+      ? batch.items.filter((item) =>
+          [
+            'published',
+            'pending_moderation',
+            'no_form',
+            'validation_error',
+            'unknown',
+            'failed',
+          ].includes(item.status)
+        ).length
+      : batch.currentIndex
+    : 0;
+
+  const updateSetting = <Key extends keyof ExtensionSettings>(
+    key: Key,
+    value: ExtensionSettings[Key]
+  ) => setSettings((current) => ({ ...current, [key]: value }));
+
+  const updateApiKey = <Key extends keyof ProviderApiKeys>(
+    key: Key,
+    value: ProviderApiKeys[Key]
+  ) => setApiKeys((current) => ({ ...current, [key]: value }));
+
+  async function persistConfiguration(permissionUrls?: string[]) {
+    const normalized = extensionSettingsSchema.parse({
+      ...settings,
+      websiteUrl: settings.websiteUrl.trim()
+        ? normalizeWebsiteUrl(settings.websiteUrl)
+        : '',
+    });
+    if (permissionUrls) {
+      const selectedKey =
+        settings.provider === 'deepseek'
+          ? apiKeys.deepseekApiKey
+          : apiKeys.kieApiKey;
+      if (!selectedKey.trim()) {
+        throw new Error(
+          settings.provider === 'deepseek'
+            ? 'DEEPSEEK_API_KEY_REQUIRED'
+            : 'KIE_API_KEY_REQUIRED'
+        );
+      }
+      if (!normalized.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
+      const granted = await requestBatchOriginPermissions(permissionUrls);
+      if (!granted) throw new Error('ORIGIN_PERMISSION_DENIED');
+    }
+    const normalizedKeys = await setProviderApiKeys(apiKeys);
+    await persistSettings(normalized);
+    setSettings(normalized);
+    setApiKeys(normalizedKeys);
+    return normalized;
+  }
+
+  async function saveConfiguration() {
+    setError('');
+    setNotice('');
+    try {
+      await persistConfiguration();
+      setWebsiteProfile(null);
+      setNotice(translate('settingsSaved'));
+    } catch (caught) {
+      const raw = caught instanceof Error ? caught.message : String(caught);
+      if (
+        raw.includes('websiteUrl') ||
+        raw.includes('WEBSITE_URL') ||
+        raw.toLowerCase().includes('invalid url')
+      ) {
+        setError(translate('invalidWebsiteUrl'));
+      } else setError(translate('settingsSaveFailed'));
+    }
+  }
+
+  async function prepareBatch() {
+    if (!configured) {
+      setSettingsOpen(true);
+      setError(translate('missingSettings'));
+      return;
+    }
+    setBusy('preparing');
+    setError('');
+    setNotice('');
+    try {
+      parseTargetUrls(targetText);
+      const normalizedWebsiteUrl = normalizeWebsiteUrl(settings.websiteUrl);
+      const normalized = await persistConfiguration([normalizedWebsiteUrl]);
+      const response = await sendToBackground({
+        type: 'batch.preview',
+        websiteUrl: normalized.websiteUrl,
+      });
+      if (response.type !== 'batch.preview') {
+        throw new Error('BATCH_PREVIEW_FAILED');
+      }
+      setWebsiteProfile(response.data);
+    } catch (caught) {
+      const raw = caught instanceof Error ? caught.message : String(caught);
+      if (raw.includes('websiteUrl')) {
+        setError(translate('invalidWebsiteUrl'));
+      } else if (raw.includes('TARGET_URL_')) {
+        setError(translate('invalidTargetUrls'));
+      } else setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function startBatch() {
+    if (!websiteProfile) return;
+    setBusy('starting');
+    setError('');
+    setNotice('');
+    try {
+      const parsedTargets = parseTargetUrls(targetText);
+      const normalizedWebsiteUrl = normalizeWebsiteUrl(settings.websiteUrl);
+      await persistConfiguration([normalizedWebsiteUrl, ...parsedTargets]);
+
+      const response = await sendToBackground({
+        type: 'batch.start',
+        targetText,
+        websiteProfile,
+      });
+      if (response.type !== 'batch.start') {
+        throw new Error('BATCH_START_FAILED');
+      }
+      setBatch(response.data);
+      setWebsiteProfile(null);
+    } catch (caught) {
+      const raw = caught instanceof Error ? caught.message : String(caught);
+      if (raw.includes('websiteUrl')) {
+        setError(translate('invalidWebsiteUrl'));
+      } else if (raw.includes('TARGET_URL_')) {
+        setError(translate('invalidTargetUrls'));
+      } else setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function runBatchCommand(
+    type:
+      | 'batch.continue'
+      | 'batch.stop'
+      | 'batch.reset'
+      | 'batch.open-current',
+    nextBusy: Exclude<BusyState, 'idle' | 'preparing' | 'starting'>
+  ) {
+    setBusy(nextBusy);
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({ type });
+      if (response.type !== type) throw new Error('BATCH_COMMAND_FAILED');
+      setBatch(response.data);
+      if (type === 'batch.reset') {
+        setTargetText('');
+        setWebsiteProfile(null);
+      }
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  if (!loaded) {
+    return <main className="shell loading">{translate('analyzingPage')}</main>;
+  }
+
+  return (
+    <main className="shell">
+      <header className="masthead">
+        <div className="brand-mark" aria-hidden="true">
+          <span />
+          <span />
+        </div>
+        <div className="brand-copy">
+          <p className="eyebrow">{translate('workflowEyebrow')}</p>
+          <h1>{translate('extensionName')}</h1>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setSettingsOpen((open) => !open)}
+        >
+          {translate(settingsOpen ? 'backToQueue' : 'openSettings')}
+        </button>
+      </header>
+
+      <div className="model-strip">
+        <span className="model-dot" />
+        <span>
+          {providerLabel(
+            batchIsActive ? batch.settings.provider : settings.provider
+          )}
+        </span>
+      </div>
+
+      {settingsOpen ? (
+        <section
+          className="panel settings-panel"
+          aria-labelledby="settings-title"
+        >
+          <div className="section-heading">
+            <div>
+              <h2 id="settings-title">{translate('settingsTitle')}</h2>
+              <p>{translate('settingsDescription')}</p>
+            </div>
+          </div>
+
+          <div className="form-grid">
+            <label className="field field-wide">
+              <span>{translate('deepSeekApiKeyLabel')}</span>
+              <input
+                type="password"
+                value={apiKeys.deepseekApiKey}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateApiKey('deepseekApiKey', event.target.value)
+                }
+                placeholder={translate('deepSeekApiKeyPlaceholder')}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field field-wide">
+              <span>{translate('kieApiKeyLabel')}</span>
+              <input
+                type="password"
+                value={apiKeys.kieApiKey}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateApiKey('kieApiKey', event.target.value)
+                }
+                placeholder={translate('kieApiKeyPlaceholder')}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field field-wide">
+              <span>{translate('websiteUrlLabel')}</span>
+              <input
+                value={settings.websiteUrl}
+                disabled={batchIsActive}
+                onChange={(event) => {
+                  updateSetting('websiteUrl', event.target.value);
+                  setWebsiteProfile(null);
+                }}
+                placeholder={translate('websiteUrlPlaceholder')}
+                inputMode="url"
+              />
+            </label>
+            <label className="field">
+              <span>{translate('providerLabel')}</span>
+              <select
+                value={settings.provider}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateSetting(
+                    'provider',
+                    event.target.value as ExtensionSettings['provider']
+                  )
+                }
+              >
+                <option value="deepseek">
+                  {translate('providerDeepSeek')}
+                </option>
+                <option value="kie-gemini">
+                  {translate('providerKieGemini')}
+                </option>
+              </select>
+            </label>
+            <label className="field">
+              <span>{translate('linkModeLabel')}</span>
+              <select
+                value={settings.linkMode}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateSetting(
+                    'linkMode',
+                    event.target.value as ExtensionSettings['linkMode']
+                  )
+                }
+              >
+                <option value="prefer-website-field">
+                  {translate('linkModePreferWebsiteField')}
+                </option>
+                <option value="inline">{translate('linkModeInline')}</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>{translate('displayNameLabel')}</span>
+              <input
+                value={settings.displayName}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateSetting('displayName', event.target.value)
+                }
+                placeholder={translate('displayNamePlaceholder')}
+              />
+            </label>
+            <label className="field">
+              <span>{translate('emailLabel')}</span>
+              <input
+                type="email"
+                value={settings.email}
+                disabled={batchIsActive}
+                onChange={(event) => updateSetting('email', event.target.value)}
+                placeholder={translate('emailPlaceholder')}
+              />
+            </label>
+          </div>
+          <p className="security-note">{translate('apiKeySecurityNote')}</p>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={batchIsActive || busy !== 'idle'}
+            onClick={saveConfiguration}
+          >
+            {translate('saveSettings')}
+          </button>
+        </section>
+      ) : !batch ? (
+        <>
+          <section className="panel workspace-panel">
+            <div className="section-heading">
+              <p className="step-number">01</p>
+              <div>
+                <h2>{translate('batchSetupTitle')}</h2>
+                <p>{translate('batchSetupDescription')}</p>
+              </div>
+            </div>
+
+            <label className="field">
+              <span>{translate('targetUrlsLabel')}</span>
+              <textarea
+                className="target-editor"
+                value={targetText}
+                onChange={(event) => {
+                  setTargetText(event.target.value);
+                  setWebsiteProfile(null);
+                }}
+                placeholder={translate('targetUrlsPlaceholder')}
+                rows={7}
+              />
+              <small className="field-hint">
+                {translate('targetUrlsHint')}
+              </small>
+            </label>
+
+            <button
+              type="button"
+              className="primary-button full-width-button"
+              disabled={busy !== 'idle'}
+              onClick={prepareBatch}
+            >
+              {busy === 'preparing'
+                ? translate('preparingBatch')
+                : translate('prepareBatch')}
+            </button>
+          </section>
+
+          {websiteProfile ? (
+            <section className="panel review-panel">
+              <div className="section-heading">
+                <p className="step-number">02</p>
+                <div>
+                  <h2>{translate('batchReviewTitle')}</h2>
+                  <p>
+                    {translate('targetUrlsSummary', String(targets.length))}
+                  </p>
+                </div>
+              </div>
+
+              <div className="profile-card">
+                <p className="profile-label">
+                  {translate('websiteProfileTitle')}
+                </p>
+                <dl>
+                  <div>
+                    <dt>{translate('websiteUrlLabel')}</dt>
+                    <dd>{websiteProfile.url}</dd>
+                  </div>
+                  <div>
+                    <dt>{translate('metaTitleLabel')}</dt>
+                    <dd>{websiteProfile.title}</dd>
+                  </div>
+                  <div>
+                    <dt>{translate('metaDescriptionLabel')}</dt>
+                    <dd>{websiteProfile.description}</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <p className="confirmation-note">
+                {translate('batchConfirmationNotice', String(targets.length))}
+              </p>
+              <button
+                type="button"
+                className="publish-button full-width-button"
+                disabled={busy !== 'idle'}
+                onClick={startBatch}
+              >
+                {busy === 'starting'
+                  ? translate('startingBatch')
+                  : translate('confirmAndStartBatch')}
+              </button>
+            </section>
+          ) : null}
+        </>
+      ) : (
+        <section className="panel batch-panel">
+          <div className="batch-heading">
+            <div>
+              <p className="step-number">01</p>
+              <h2>
+                {batch.status === 'completed'
+                  ? translate('batchCompletedTitle')
+                  : batch.status === 'stopped'
+                    ? translate('batchStoppedTitle')
+                    : translate('batchProgressTitle')}
+              </h2>
+            </div>
+            <strong>
+              {translate('batchProgressCount', [
+                String(currentPosition),
+                String(batch.items.length),
+              ])}
+            </strong>
+          </div>
+
+          <progress
+            className="batch-progress"
+            max={batch.items.length}
+            value={completedBeforeCurrent}
+          />
+
+          {currentItem && batchIsActive ? (
+            <div className={`page-card readiness-${currentItem.status}`}>
+              <div className="page-card-copy">
+                <span>{translate('currentTargetLabel')}</span>
+                <strong title={currentItem.url}>
+                  {displayTarget(currentItem.url)}
+                </strong>
+              </div>
+              <div className="field-status">
+                {batchItemStatusCopy(currentItem.status)}
+              </div>
+            </div>
+          ) : null}
+
+          {batch.status === 'paused' && currentItem ? (
+            <div className="pause-card" aria-live="polite">
+              <p>{pauseCopy(currentItem.status)}</p>
+              <div className="action-row">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy !== 'idle'}
+                  onClick={() =>
+                    runBatchCommand('batch.open-current', 'opening')
+                  }
+                >
+                  {translate('openCurrentTarget')}
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={busy !== 'idle'}
+                  onClick={() =>
+                    runBatchCommand('batch.continue', 'continuing')
+                  }
+                >
+                  {translate('continueBatch')}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {batch.status === 'running' ? (
+            <div className="action-row">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy !== 'idle'}
+                onClick={() => runBatchCommand('batch.open-current', 'opening')}
+              >
+                {translate('openCurrentTarget')}
+              </button>
+              <button
+                type="button"
+                className="secondary-button stop-button"
+                disabled={busy !== 'idle'}
+                onClick={() => runBatchCommand('batch.stop', 'stopping')}
+              >
+                {translate('stopBatch')}
+              </button>
+            </div>
+          ) : null}
+
+          {batch.status === 'paused' ? (
+            <button
+              type="button"
+              className="secondary-button stop-button full-width-button"
+              disabled={busy !== 'idle'}
+              onClick={() => runBatchCommand('batch.stop', 'stopping')}
+            >
+              {translate('stopBatch')}
+            </button>
+          ) : null}
+
+          {batchIsActive ? (
+            <p className="stop-hint">{translate('stopBatchHint')}</p>
+          ) : (
+            <>
+              <p className="batch-summary">
+                {translate('batchSummary', batchSummary(batch))}
+              </p>
+              <button
+                type="button"
+                className="primary-button full-width-button"
+                disabled={busy !== 'idle'}
+                onClick={() => runBatchCommand('batch.reset', 'resetting')}
+              >
+                {translate('startNewBatch')}
+              </button>
+            </>
+          )}
+
+          <details className="queue-details">
+            <summary>{translate('queueDetailsLabel')}</summary>
+            <ol className="queue-list">
+              {batch.items.map((item) => {
+                const detail = batchItemMessageCopy(item.message);
+                return (
+                  <li
+                    key={item.id}
+                    className={`queue-item status-${item.status}`}
+                  >
+                    <span className="queue-index" aria-hidden="true" />
+                    <span className="queue-url" title={item.url}>
+                      {displayTarget(item.url)}
+                    </span>
+                    <span className="status-label">
+                      {batchItemStatusCopy(item.status)}
+                    </span>
+                    {detail ? (
+                      <span className="queue-message">{detail}</span>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </details>
+        </section>
+      )}
+
+      {notice ? <p className="toast success-toast">{notice}</p> : null}
+      {error ? <p className="toast error-toast">{error}</p> : null}
+    </main>
+  );
+}

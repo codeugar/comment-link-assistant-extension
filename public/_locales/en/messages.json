@@ -1,0 +1,341 @@
+{
+  "extensionName": {
+    "message": "Comment Link Assistant"
+  },
+  "extensionDescription": {
+    "message": "Process a URL queue, generate a distinct contextual comment for each target, submit it, and verify the result."
+  },
+  "settingsTitle": {
+    "message": "Settings"
+  },
+  "deepSeekApiKeyLabel": {
+    "message": "DeepSeek API key"
+  },
+  "deepSeekApiKeyPlaceholder": {
+    "message": "Enter your DeepSeek API key"
+  },
+  "kieApiKeyLabel": {
+    "message": "KIE API key"
+  },
+  "kieApiKeyPlaceholder": {
+    "message": "Enter your KIE API key"
+  },
+  "providerLabel": {
+    "message": "Comment model"
+  },
+  "providerDeepSeek": {
+    "message": "DeepSeek V4 Flash"
+  },
+  "providerKieGemini": {
+    "message": "Gemini 3.5 Flash via KIE"
+  },
+  "websiteUrlLabel": {
+    "message": "Website to promote"
+  },
+  "websiteUrlPlaceholder": {
+    "message": "https://your-site.example"
+  },
+  "displayNameLabel": {
+    "message": "Display name (optional)"
+  },
+  "displayNamePlaceholder": {
+    "message": "Your name"
+  },
+  "emailLabel": {
+    "message": "Email (optional)"
+  },
+  "emailPlaceholder": {
+    "message": "you@example.com"
+  },
+  "linkModeLabel": {
+    "message": "Link placement"
+  },
+  "linkModePreferWebsiteField": {
+    "message": "Prefer the website field"
+  },
+  "linkModeInline": {
+    "message": "Allow a natural inline link"
+  },
+  "saveSettings": {
+    "message": "Save settings"
+  },
+  "settingsSaved": {
+    "message": "Settings saved"
+  },
+  "settingsSaveFailed": {
+    "message": "Settings could not be saved"
+  },
+  "scanPage": {
+    "message": "Scan this page"
+  },
+  "generateComment": {
+    "message": "Generate comment"
+  },
+  "submitComment": {
+    "message": "Submit comment"
+  },
+  "analyzingPage": {
+    "message": "Analyzing the page…"
+  },
+  "generatingComment": {
+    "message": "Generating a relevant comment…"
+  },
+  "fillingForm": {
+    "message": "Filling the comment form…"
+  },
+  "submittingComment": {
+    "message": "Submitting the comment…"
+  },
+  "verifyingSubmission": {
+    "message": "Checking the result…"
+  },
+  "loginRequired": {
+    "message": "Login required"
+  },
+  "loginRequiredDescription": {
+    "message": "Log in on this page, then run the assistant again."
+  },
+  "noCommentForm": {
+    "message": "No supported comment form was found on this page."
+  },
+  "commentGenerated": {
+    "message": "Comment ready"
+  },
+  "commentSubmitted": {
+    "message": "Comment submitted successfully"
+  },
+  "commentPendingModeration": {
+    "message": "Comment submitted and waiting for moderation"
+  },
+  "commentFailed": {
+    "message": "The comment could not be submitted"
+  },
+  "missingSettings": {
+    "message": "Complete the required settings first."
+  },
+  "invalidWebsiteUrl": {
+    "message": "Enter a valid HTTP or HTTPS website URL."
+  },
+  "websiteProfileFailed": {
+    "message": "The promoted website must expose both a Meta Title and Meta Description."
+  },
+  "missingDeepSeekApiKey": {
+    "message": "Add a DeepSeek API key for the selected model."
+  },
+  "missingKieApiKey": {
+    "message": "Add a KIE API key for the selected model."
+  },
+  "openSettings": {
+    "message": "Open settings"
+  },
+  "backToQueue": {
+    "message": "Back to queue"
+  },
+  "workflowEyebrow": {
+    "message": "Contextual outreach desk"
+  },
+  "settingsDescription": {
+    "message": "Add provider keys, choose a model, and identify the website you want to promote."
+  },
+  "currentPageLabel": {
+    "message": "Current page"
+  },
+  "formReady": {
+    "message": "Comment form ready"
+  },
+  "websiteFieldFound": {
+    "message": "Dedicated website field found"
+  },
+  "websiteFieldMissing": {
+    "message": "No website field; the link can be placed naturally in the draft"
+  },
+  "captchaRequired": {
+    "message": "CAPTCHA requires attention"
+  },
+  "captchaRequiredDescription": {
+    "message": "Complete the CAPTCHA on the page, then scan again. The assistant will not bypass it."
+  },
+  "draftLabel": {
+    "message": "Draft"
+  },
+  "draftHint": {
+    "message": "Review and edit this comment before publishing it."
+  },
+  "submitConfirmation": {
+    "message": "This action fills the form and clicks the page's submit button."
+  },
+  "submissionUnconfirmed": {
+    "message": "The form was submitted, but the page did not expose a reliable result. Check the page directly."
+  },
+  "permissionDenied": {
+    "message": "Permission was not granted for the website origin."
+  },
+  "apiKeySecurityNote": {
+    "message": "Keys are stored locally in this Chrome profile and sent only to the selected provider."
+  },
+  "pageChangedSinceGeneration": {
+    "message": "The active page or comment form changed after this draft was generated. Generate a new draft before submitting."
+  },
+  "batchSetupTitle": {
+    "message": "Target queue"
+  },
+  "batchSetupDescription": {
+    "message": "Paste the blog or forum pages where you want to publish comments."
+  },
+  "targetUrlsLabel": {
+    "message": "Target URLs"
+  },
+  "targetUrlsPlaceholder": {
+    "message": "https://blog.example/post\nhttps://forum.example/thread"
+  },
+  "targetUrlsHint": {
+    "message": "One HTTP or HTTPS URL per line, up to 200. Duplicates are removed."
+  },
+  "invalidTargetUrls": {
+    "message": "Check the target URLs. Use up to 200 complete HTTP or HTTPS URLs."
+  },
+  "prepareBatch": {
+    "message": "Review batch"
+  },
+  "preparingBatch": {
+    "message": "Reading website metadata…"
+  },
+  "batchReviewTitle": {
+    "message": "Confirm automatic publishing"
+  },
+  "websiteProfileTitle": {
+    "message": "Website context"
+  },
+  "metaTitleLabel": {
+    "message": "Meta title"
+  },
+  "metaDescriptionLabel": {
+    "message": "Meta description"
+  },
+  "targetUrlsSummary": {
+    "message": "$1 unique target URLs ready"
+  },
+  "batchConfirmationNotice": {
+    "message": "After this one confirmation, the assistant will generate and submit comments to $1 sites in sequence. It pauses for login or CAPTCHA."
+  },
+  "confirmAndStartBatch": {
+    "message": "Confirm and start"
+  },
+  "startingBatch": {
+    "message": "Starting batch…"
+  },
+  "batchProgressTitle": {
+    "message": "Batch progress"
+  },
+  "batchProgressCount": {
+    "message": "$1 of $2"
+  },
+  "currentTargetLabel": {
+    "message": "Current target"
+  },
+  "queueDetailsLabel": {
+    "message": "Queue details"
+  },
+  "continueBatch": {
+    "message": "Continue batch"
+  },
+  "stopBatch": {
+    "message": "Stop batch"
+  },
+  "stopBatchHint": {
+    "message": "Stopping prevents future submissions. Comments already submitted are not undone."
+  },
+  "openCurrentTarget": {
+    "message": "Open current target"
+  },
+  "batchPausedLoginDescription": {
+    "message": "The batch is paused. Log in on the open target page, then continue."
+  },
+  "batchPausedCaptchaDescription": {
+    "message": "The batch is paused. Complete the CAPTCHA on the open target page, then continue."
+  },
+  "batchPausedUnknownDescription": {
+    "message": "The page did not expose a reliable submission result. Check it manually; continuing will move to the next URL without submitting this comment again."
+  },
+  "batchCompletedTitle": {
+    "message": "Batch completed"
+  },
+  "batchStoppedTitle": {
+    "message": "Batch stopped"
+  },
+  "batchSummary": {
+    "message": "$1 published · $2 pending · $3 failed · $4 unconfirmed"
+  },
+  "startNewBatch": {
+    "message": "Start a new batch"
+  },
+  "batchStatusQueued": {
+    "message": "Queued"
+  },
+  "batchStatusOpening": {
+    "message": "Opening page"
+  },
+  "batchStatusAnalyzing": {
+    "message": "Analyzing page"
+  },
+  "batchStatusGenerating": {
+    "message": "Generating comment"
+  },
+  "batchStatusPrepared": {
+    "message": "Comment prepared"
+  },
+  "batchStatusSubmitting": {
+    "message": "Submitting comment"
+  },
+  "batchStatusVerifying": {
+    "message": "Verifying result"
+  },
+  "batchStatusPublished": {
+    "message": "Published"
+  },
+  "batchStatusPendingModeration": {
+    "message": "Pending moderation"
+  },
+  "batchStatusLoginRequired": {
+    "message": "Login required"
+  },
+  "batchStatusCaptchaRequired": {
+    "message": "CAPTCHA required"
+  },
+  "batchStatusNoForm": {
+    "message": "No comment form"
+  },
+  "batchStatusValidationError": {
+    "message": "Form rejected the comment"
+  },
+  "batchStatusUnknown": {
+    "message": "Result unconfirmed"
+  },
+  "batchStatusFailed": {
+    "message": "Failed"
+  },
+  "batchStatusStopped": {
+    "message": "Stopped"
+  },
+  "crossOriginCommentFrameUnsupported": {
+    "message": "This comment widget is hosted on another origin and requires manual posting."
+  },
+  "displayNameRequiredForTarget": {
+    "message": "This form requires a display name. Add one in Settings before the next batch."
+  },
+  "emailRequiredForTarget": {
+    "message": "This form requires an email. Add one in Settings before the next batch."
+  },
+  "formNeedsReview": {
+    "message": "A possible form was found, but its fields could not be mapped safely. Nothing was submitted."
+  },
+  "requiredFieldNotMapped": {
+    "message": "This form has a required field the extension cannot fill safely. Nothing was submitted."
+  },
+  "websiteRequiredForTarget": {
+    "message": "This form requires a website URL. Nothing was submitted."
+  },
+  "unsafeSubmitBlocked": {
+    "message": "The selected action was blocked because it was not a safe comment submission. Nothing was submitted."
+  }
+}

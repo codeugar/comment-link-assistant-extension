@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "jsx": "react-jsx",
+    "types": ["chrome", "vite/client", "node"],
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "wxt.config.ts",
+    "vitest.config.ts",
+    "entrypoints/**/*.ts",
+    "entrypoints/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".wxt/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".output"]
+}
