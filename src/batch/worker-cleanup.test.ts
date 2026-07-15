@@ -32,4 +32,32 @@ describe('terminal batch worker cleanup', () => {
     expect(cleaned).not.toHaveProperty('workerTabId');
     expect(setBatch).toHaveBeenCalledWith(cleaned);
   });
+
+  it('retains the worker reference when Chrome cannot close the tab', async () => {
+    let batch = createBatch({
+      id: 'batch-1',
+      targetText: 'https://blog.example/post',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://product.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline',
+      },
+      now: 1,
+    });
+    batch = updateBatchProgress(batch, { workerTabId: 7 }, 2);
+    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 3);
+    const setBatch = vi.fn(async (value) => value);
+
+    const unchanged = await closeTerminalBatchWorker(batch, {
+      closeWorkerTab: vi.fn(async () => false),
+      setBatch,
+      now: () => 4,
+    });
+
+    expect(unchanged).toBe(batch);
+    expect(unchanged).toHaveProperty('workerTabId', 7);
+    expect(setBatch).not.toHaveBeenCalled();
+  });
 });

@@ -861,6 +861,74 @@ export function analyzePageDocument(document: Document): PageAnalysis {
   };
 }
 
+export function revealPlannedCommentFormDocument(
+  document: Document,
+  snapshotId: string,
+  candidateId: string
+): boolean {
+  const candidate = resolveProbeCandidate(document, snapshotId, candidateId);
+  if (
+    !candidate ||
+    !isVisible(candidate) ||
+    candidate.getAttribute('aria-disabled') === 'true' ||
+    candidate.closest('form') ||
+    candidate.hasAttribute('form') ||
+    candidate.hasAttribute('formaction') ||
+    candidate.hasAttribute('formmethod')
+  ) {
+    return false;
+  }
+
+  const evidence = normalizeWhitespace(
+    [
+      visibleTextContent(candidate),
+      candidate.getAttribute('aria-label'),
+      candidate.getAttribute('title'),
+      candidate.getAttribute('id'),
+      candidate.getAttribute('name'),
+      candidate.getAttribute('class'),
+      isInputElement(candidate) ? candidate.value : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+  );
+  if (
+    AUTH_CONTROL.test(evidence) ||
+    DESTRUCTIVE_SUBMIT.test(evidence) ||
+    NON_COMMENT_FORM_CONTEXT.test(evidence)
+  ) {
+    return false;
+  }
+
+  if (candidate.tagName === 'A') {
+    const href = candidate.getAttribute('href');
+    if (!href || candidate.getAttribute('target')) return false;
+    try {
+      const current = new URL(document.location.href);
+      const target = new URL(href, document.baseURI);
+      if (
+        target.origin !== current.origin ||
+        target.pathname !== current.pathname ||
+        target.search !== current.search
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  } else if (isButtonElement(candidate)) {
+    if (candidate.type !== 'button' || candidate.form) return false;
+  } else if (isInputElement(candidate)) {
+    if (candidate.type !== 'button' || candidate.form) return false;
+  } else if (candidate.getAttribute('role') !== 'button') {
+    return false;
+  }
+
+  if ('disabled' in candidate && candidate.disabled) return false;
+  candidate.click();
+  return true;
+}
+
 function setNativeValue(
   element: HTMLInputElement | HTMLTextAreaElement,
   value: string

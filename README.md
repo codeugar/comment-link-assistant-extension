@@ -20,6 +20,10 @@ website metadata and target count, then confirms the whole batch once. The
 service worker processes one URL at a time in a reusable inactive tab placed in
 a collapsed `Comment Assistant` group. Automated work never activates that tab;
 login and CAPTCHA gates pause the queue until the user explicitly opens it.
+If the comment form is initially hidden, the same constrained AI planner can
+select a visible same-page control that reveals it, including controls written
+in other languages. The page operator accepts only an observed candidate ID,
+blocks navigation and form-submission controls, and attempts the reveal once.
 
 Before a provider request or page click, the next phase is persisted. A
 recovered generation request with an unknown outcome is not repeated, and a

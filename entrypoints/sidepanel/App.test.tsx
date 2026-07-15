@@ -280,5 +280,21 @@ describe('side panel navigation', () => {
     expect(currentFlow?.textContent).toContain('batchStatusGenerating');
     expect(currentFlow?.textContent).toContain('A useful generated comment');
     expect(currentFlow?.querySelector('.activity-loop')).not.toBeNull();
+
+    const advanced = completeCurrentItem(
+      running,
+      'published',
+      'COMMENT_PUBLISHED',
+      1_400
+    );
+    await act(async () => {
+      await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: advanced });
+    });
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[data-site-id="batch-flow:1"]')
+      ).toHaveProperty('open', true);
+    });
+    expect(currentFlow).toHaveProperty('open', false);
   });
 });

@@ -113,6 +113,8 @@ export const MESSAGE_KEYS = [
   'websiteRequiredForTarget',
   'unsafeSubmitBlocked',
   'siteRejectedByPriorResult',
+  'commentFormRevealed',
+  'commentFormRevealDispatched',
   'siteFlowTitle',
   'backgroundWorkerNotice',
   'generatedCommentLabel',

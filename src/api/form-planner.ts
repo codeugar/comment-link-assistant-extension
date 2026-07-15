@@ -34,7 +34,12 @@ export const formPlanSchema = z
   .object({
     schemaVersion: z.literal(1),
     snapshotId: z.string().min(1).max(100),
-    decision: z.enum(['commentable', 'not_commentable', 'needs_review']),
+    decision: z.enum([
+      'commentable',
+      'reveal_form',
+      'not_commentable',
+      'needs_review',
+    ]),
     formCandidateId: z.string().min(1).max(100).nullable(),
     bindings: z
       .object({
@@ -45,6 +50,7 @@ export const formPlanSchema = z
       })
       .strict(),
     submitCandidateId: z.string().min(1).max(100).nullable(),
+    revealCandidateId: z.string().min(1).max(100).nullable().optional(),
     requiredRoles: z.array(formRoleSchema).max(4),
     uncertainties: z.array(z.string().trim().min(1).max(500)).max(20),
   })
@@ -58,7 +64,7 @@ export function buildFormPlanningPrompt(
   const responseContract = {
     schemaVersion: 1,
     snapshotId: observation.snapshotId,
-    decision: 'commentable | not_commentable | needs_review',
+    decision: 'commentable | reveal_form | not_commentable | needs_review',
     formCandidateId: 'candidate-id or null',
     bindings: {
       comment: 'candidate-id (optional)',
@@ -67,6 +73,7 @@ export function buildFormPlanningPrompt(
       website: 'candidate-id (optional)',
     },
     submitCandidateId: 'candidate-id or null',
+    revealCandidateId: 'candidate-id or null',
     requiredRoles: ['comment | name | email | website'],
     uncertainties: ['short evidence-based reason'],
   };
@@ -77,6 +84,7 @@ export function buildFormPlanningPrompt(
     'Only reference candidateId values that appear in the observation.',
     'Select the comment editor, identity fields, and submit control from the same blog-comment or forum-reply form.',
     'Use semantic evidence from label, type, name, id, class, headings, ancestorTokens, and nearbyText; the submit control may be in any language.',
+    'When no comment editor is visible, use decision "reveal_form" only for one visible control that opens or reveals the comment form; its wording may be in any language.',
     'Never classify login, registration, search, checkout, deletion, or social reactions such as like or upvote as a comment submission.',
     'If any visible required control cannot be mapped safely, use decision "needs_review".',
     'Do not output CSS selectors, XPath, JavaScript, executable code, or new element identifiers.',
@@ -84,6 +92,7 @@ export function buildFormPlanningPrompt(
     'Use exactly these keys and return one JSON object with no extra keys, prose, or Markdown:',
     JSON.stringify(responseContract, null, 2),
     'Use decision "commentable" only when both a comment binding and a submitCandidateId are present. Otherwise use "not_commentable" or "needs_review".',
+    'Use decision "reveal_form" only when revealCandidateId identifies a visible enabled button or same-page link, and leave the form, bindings, and submit fields empty.',
     'Use an empty uncertainties array for a confident commentable plan. If any uncertainty remains, use decision "needs_review".',
     '<UNTRUSTED_WEB_OBSERVATION_JSON>',
     JSON.stringify(observation),
@@ -114,6 +123,7 @@ export function parseFormPlan(
   const referencedCandidateIds = [
     parsed.data.formCandidateId,
     parsed.data.submitCandidateId,
+    parsed.data.revealCandidateId,
     ...Object.values(parsed.data.bindings),
   ];
   if (
@@ -131,6 +141,18 @@ export function parseFormPlan(
     (!parsed.data.bindings.comment || !parsed.data.submitCandidateId)
   ) {
     throw new Error('FORM_PLAN_COMMENTABLE_INCOMPLETE');
+  }
+  if (
+    parsed.data.decision === 'reveal_form' &&
+    !parsed.data.revealCandidateId
+  ) {
+    throw new Error('FORM_PLAN_REVEAL_INCOMPLETE');
+  }
+  if (
+    parsed.data.decision === 'reveal_form' &&
+    parsed.data.uncertainties.length > 0
+  ) {
+    throw new Error('FORM_PLAN_REVEAL_UNCERTAIN');
   }
 
   const bindingCandidateIds = Object.values(parsed.data.bindings).filter(

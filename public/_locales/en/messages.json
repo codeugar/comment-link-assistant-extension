@@ -341,6 +341,12 @@
   "siteRejectedByPriorResult": {
     "message": "Skipped because an earlier result rejected this website."
   },
+  "commentFormRevealed": {
+    "message": "AI identified and opened the control that reveals the comment form."
+  },
+  "commentFormRevealDispatched": {
+    "message": "AI identified the control that reveals the comment form and is opening it."
+  },
   "siteFlowTitle": {
     "message": "Website activity"
   },

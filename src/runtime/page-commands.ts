@@ -58,6 +58,13 @@ function readAnalysis(result: PageCommandResult): PageAnalysis {
   );
 }
 
+function readFormReveal(result: PageCommandResult): boolean {
+  if (result.type === 'form.reveal') return result.clicked;
+  throw new Error(
+    result.type === 'error' ? result.message : 'PAGE_FORM_REVEAL_FAILED'
+  );
+}
+
 function readSubmission(result: PageCommandResult): PageSubmissionResult {
   if (result.type === 'submission') return result.result;
   throw new Error(
@@ -101,6 +108,20 @@ export async function analyzeCurrentPage(): Promise<PageAnalysis> {
 
 export async function analyzeTab(tabId: number): Promise<PageAnalysis> {
   return readAnalysis(await executePageCommand(tabId, { type: 'analyze' }));
+}
+
+export async function revealCommentFormTab(
+  tabId: number,
+  snapshotId: string,
+  candidateId: string
+): Promise<boolean> {
+  return readFormReveal(
+    await sendPageCommand(tabId, {
+      type: 'form.reveal',
+      snapshotId,
+      candidateId,
+    })
+  );
 }
 
 export async function prepareTabSubmission(

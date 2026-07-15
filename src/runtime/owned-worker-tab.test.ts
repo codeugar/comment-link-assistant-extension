@@ -125,11 +125,41 @@ describe('owned worker tab runtime', () => {
 
   it('closes only the worker tab owned by the completed batch', async () => {
     await claimWorkerTab('batch-1', 7);
+    const workerTab = {
+      id: 7,
+    } as chrome.tabs.Tab;
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([workerTab]);
     const remove = vi.spyOn(chrome.tabs, 'remove').mockResolvedValue(undefined);
 
-    await expect(closeOwnedWorkerTab('batch-1', 7)).resolves.toBe(true);
     await expect(closeOwnedWorkerTab('batch-2', 7)).resolves.toBe(false);
+    await expect(closeOwnedWorkerTab('batch-1', 7)).resolves.toBe(true);
 
     expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it('keeps ownership when Chrome rejects the close request', async () => {
+    await claimWorkerTab('batch-1', 7);
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      {
+        id: 7,
+      } as chrome.tabs.Tab,
+    ]);
+    vi.spyOn(chrome.tabs, 'remove').mockRejectedValue(
+      new Error('TAB_EDIT_REJECTED')
+    );
+
+    await expect(closeOwnedWorkerTab('batch-1', 7)).resolves.toBe(false);
+    await expect(
+      assertWorkerTabOwnership('batch-1', 7)
+    ).resolves.toBeUndefined();
+  });
+
+  it('treats an already absent tab as cleaned after ownership is lost', async () => {
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([]);
+    const remove = vi.spyOn(chrome.tabs, 'remove');
+
+    await expect(closeOwnedWorkerTab('batch-1', 7)).resolves.toBe(true);
+
+    expect(remove).not.toHaveBeenCalled();
   });
 });

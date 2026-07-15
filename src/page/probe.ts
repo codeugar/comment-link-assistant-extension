@@ -52,6 +52,7 @@ const CONTROL_SELECTOR = [
   '[contenteditable]:not([contenteditable="false"])',
   'button',
   '[role="button"]',
+  'a[href]',
 ].join(',');
 
 const CONTROL_ATTRIBUTES = [
@@ -68,6 +69,8 @@ const CONTROL_ATTRIBUTES = [
   'form',
   'formaction',
   'formmethod',
+  'href',
+  'target',
 ] as const;
 
 const FORM_ATTRIBUTES = [
@@ -99,6 +102,8 @@ const STABLE_EVIDENCE_ATTRIBUTES = new Set([
   'form',
   'formaction',
   'formmethod',
+  'href',
+  'target',
   'required',
   'hidden',
   'contenteditable',
@@ -159,7 +164,9 @@ function safeAttributeValue(
       .slice(0, MAX_ARIA_LABEL_REFERENCES)
       .join(' ');
   }
-  if (name !== 'action' && name !== 'formaction') return rawValue;
+  if (name !== 'action' && name !== 'formaction' && name !== 'href') {
+    return rawValue;
+  }
   if (!rawValue.trim()) return '';
   try {
     const url = new URL(rawValue, element.ownerDocument.baseURI);
@@ -278,7 +285,7 @@ function readContextHeadings(element: HTMLElement): string[] {
 }
 
 function readButtonText(element: HTMLElement): string | null {
-  if (element.matches('button, [role="button"]')) {
+  if (element.matches('button, [role="button"], a[href]')) {
     return readStaticText(element);
   }
   if (isInputElement(element) && ['button', 'submit'].includes(element.type)) {
@@ -766,11 +773,12 @@ export function probePageDocument(document: Document): PageProbeSnapshot {
     (element) =>
       !editorSet.has(element) && !controlsInAnyEditorGroup.has(element)
   );
+  const fallbackControlLimit =
+    MAX_CONTROL_CANDIDATES - selectedGroupedControls.length;
   const controls = [
     ...selectedGroupedControls,
     ...fallbackControls.slice(
-      0,
-      MAX_CONTROL_CANDIDATES - selectedGroupedControls.length
+      Math.max(0, fallbackControls.length - fallbackControlLimit)
     ),
   ];
   const controlCandidates = controls.map((element, index) => {

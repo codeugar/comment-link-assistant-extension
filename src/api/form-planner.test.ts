@@ -97,11 +97,12 @@ describe('form planning prompt', () => {
     expect(prompt).toContain('"schemaVersion": 1');
     expect(prompt).toContain('"snapshotId": "snapshot-1"');
     expect(prompt).toContain(
-      '"decision": "commentable | not_commentable | needs_review"'
+      '"decision": "commentable | reveal_form | not_commentable | needs_review"'
     );
     expect(prompt).toContain('"formCandidateId"');
     expect(prompt).toContain('"bindings"');
     expect(prompt).toContain('"submitCandidateId"');
+    expect(prompt).toContain('"revealCandidateId"');
     expect(prompt).toContain('"requiredRoles"');
     expect(prompt).toContain('"uncertainties"');
     expect(prompt).toContain('Use exactly these keys');
@@ -115,6 +116,7 @@ describe('form planning prompt', () => {
       'label, type, name, id, class, headings, ancestorTokens, and nearbyText'
     );
     expect(prompt).toContain('submit control may be in any language');
+    expect(prompt).toContain('opens or reveals the comment form');
     expect(prompt).toContain(
       'login, registration, search, checkout, deletion, or social reactions'
     );
@@ -137,6 +139,74 @@ describe('form plan parsing', () => {
   it('accepts a complete plan that only references observed candidates', () => {
     expect(parseFormPlan(JSON.stringify(commentablePlan), observation)).toEqual(
       commentablePlan
+    );
+  });
+
+  it('accepts a multilingual AI-selected control that reveals the form', () => {
+    const revealObservation = {
+      ...observation,
+      candidates: [
+        ...observation.candidates,
+        {
+          candidateId: 'button-reveal',
+          kind: 'button' as const,
+          controlType: 'button',
+          labels: ['Escribe una respuesta'],
+          visible: true,
+          enabled: true,
+        },
+      ],
+    };
+    const plan = {
+      schemaVersion: 1,
+      snapshotId: 'snapshot-1',
+      decision: 'reveal_form',
+      formCandidateId: null,
+      bindings: {},
+      submitCandidateId: null,
+      revealCandidateId: 'button-reveal',
+      requiredRoles: [],
+      uncertainties: [],
+    };
+
+    expect(parseFormPlan(JSON.stringify(plan), revealObservation)).toEqual(
+      plan
+    );
+  });
+
+  it('rejects a reveal plan without an observed reveal control', () => {
+    const plan = {
+      schemaVersion: 1,
+      snapshotId: 'snapshot-1',
+      decision: 'reveal_form',
+      formCandidateId: null,
+      bindings: {},
+      submitCandidateId: null,
+      revealCandidateId: null,
+      requiredRoles: [],
+      uncertainties: [],
+    };
+
+    expect(() => parseFormPlan(JSON.stringify(plan), observation)).toThrow(
+      'FORM_PLAN_REVEAL_INCOMPLETE'
+    );
+  });
+
+  it('rejects an uncertain reveal plan before any click is possible', () => {
+    const plan = {
+      schemaVersion: 1,
+      snapshotId: 'snapshot-1',
+      decision: 'reveal_form',
+      formCandidateId: null,
+      bindings: {},
+      submitCandidateId: null,
+      revealCandidateId: 'button-submit',
+      requiredRoles: [],
+      uncertainties: ['Could be a purchase action'],
+    };
+
+    expect(() => parseFormPlan(JSON.stringify(plan), observation)).toThrow(
+      'FORM_PLAN_REVEAL_UNCERTAIN'
     );
   });
 

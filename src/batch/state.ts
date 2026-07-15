@@ -60,6 +60,7 @@ export interface BatchItemProgressUpdate {
   commentFingerprint?: BatchItem['commentFingerprint'];
   prepared?: BatchItem['prepared'];
   formPlanRefreshes?: BatchItem['formPlanRefreshes'];
+  formRevealAttempted?: BatchItem['formRevealAttempted'];
   message?: string;
 }
 

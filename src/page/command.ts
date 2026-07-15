@@ -3,6 +3,7 @@ import {
   analyzePageDocument,
   clickPreparedSubmissionDocument,
   prepareSubmissionDocument,
+  revealPlannedCommentFormDocument,
   verifySubmissionDocument,
 } from './dom';
 import type {
@@ -19,6 +20,7 @@ export const PAGE_COMMAND_MESSAGE_TYPE = 'comment-link-assistant:page-command';
 
 export type PageCommand =
   | { type: 'analyze' }
+  | { type: 'form.reveal'; snapshotId: string; candidateId: string }
   | {
       type: 'submit.prepare';
       input: PageSubmissionInput;
@@ -39,6 +41,7 @@ export interface PageCommandMessage {
 
 export type PageCommandResult =
   | { type: 'analysis'; analysis: PageAnalysis }
+  | { type: 'form.reveal'; clicked: boolean }
   | { type: 'preparation'; preparation: PageSubmissionPreparation }
   | { type: 'submission'; result: PageSubmissionResult }
   | { type: 'error'; message: string };
@@ -47,6 +50,12 @@ export function isPageCommand(value: unknown): value is PageCommand {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (record.type === 'analyze') return true;
+  if (record.type === 'form.reveal') {
+    return (
+      typeof record.snapshotId === 'string' &&
+      typeof record.candidateId === 'string'
+    );
+  }
   if (record.type === 'verify') {
     return (
       typeof record.fingerprint === 'string' &&
@@ -124,6 +133,16 @@ export async function runPageCommand(
 ): Promise<PageCommandResult> {
   if (command.type === 'analyze') {
     return { type: 'analysis', analysis: analyzePageDocument(document) };
+  }
+  if (command.type === 'form.reveal') {
+    return {
+      type: 'form.reveal',
+      clicked: revealPlannedCommentFormDocument(
+        document,
+        command.snapshotId,
+        command.candidateId
+      ),
+    };
   }
   if (command.type === 'verify') {
     if (

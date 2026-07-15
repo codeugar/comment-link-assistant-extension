@@ -49,6 +49,10 @@ function isActionControl(candidate: PageControlCandidate): boolean {
   );
 }
 
+function isRevealControl(candidate: PageControlCandidate): boolean {
+  return isActionControl(candidate) || candidate.tag === 'a';
+}
+
 function isIdentityField(
   candidate: PageControlCandidate,
   role: Exclude<FormRole, 'comment'>
@@ -99,7 +103,7 @@ export function buildFormPlanningObservation(
       })),
       ...snapshot.controlCandidates.map((candidate) => ({
         candidateId: candidate.candidateId,
-        kind: isActionControl(candidate)
+        kind: isRevealControl(candidate)
           ? ('button' as const)
           : ('field' as const),
         ...(candidate.formId ? { formCandidateId: candidate.formId } : {}),

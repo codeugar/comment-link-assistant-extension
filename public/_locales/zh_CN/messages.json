@@ -341,6 +341,12 @@
   "siteRejectedByPriorResult": {
     "message": "该网站之前已被淘汰，已跳过。"
   },
+  "commentFormRevealed": {
+    "message": "AI 已识别并点击用于展开评论表单的入口。"
+  },
+  "commentFormRevealDispatched": {
+    "message": "AI 已识别用于展开评论表单的入口，正在打开。"
+  },
   "siteFlowTitle": {
     "message": "网站处理信息流"
   },

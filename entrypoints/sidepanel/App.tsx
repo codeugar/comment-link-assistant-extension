@@ -120,6 +120,12 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'SITE_REJECTED_BY_PRIOR_RESULT') {
     return translate('siteRejectedByPriorResult');
   }
+  if (message === 'COMMENT_FORM_REVEALED') {
+    return translate('commentFormRevealed');
+  }
+  if (message === 'COMMENT_FORM_REVEAL_DISPATCHED') {
+    return translate('commentFormRevealDispatched');
+  }
   return null;
 }
 
@@ -244,9 +250,9 @@ export default function App() {
   );
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [expandedItemIds, setExpandedItemIds] = useState<Set<string>>(
-    () => new Set()
-  );
+  const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
+    Set<string>
+  >(() => new Set());
 
   useEffect(() => {
     void Promise.all([
@@ -316,14 +322,6 @@ export default function App() {
         ).length
       : batch.currentIndex
     : 0;
-
-  useEffect(() => {
-    if (!currentItem) return;
-    setExpandedItemIds((current) => {
-      if (current.has(currentItem.id)) return current;
-      return new Set([...current, currentItem.id]);
-    });
-  }, [currentItem]);
 
   const updateSetting = <Key extends keyof ExtensionSettings>(
     key: Key,
@@ -852,10 +850,11 @@ export default function App() {
                     className={`site-flow-card status-${item.status}${
                       isCurrent ? ' is-current' : ''
                     }${isTerminalItem(item) ? ' is-terminal' : ''}`}
-                    open={expandedItemIds.has(item.id)}
+                    open={isCurrent || manuallyExpandedItemIds.has(item.id)}
                     onToggle={(event) => {
+                      if (isCurrent) return;
                       const open = event.currentTarget.open;
-                      setExpandedItemIds((current) => {
+                      setManuallyExpandedItemIds((current) => {
                         const next = new Set(current);
                         if (open) next.add(item.id);
                         else next.delete(item.id);

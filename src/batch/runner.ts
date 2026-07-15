@@ -29,6 +29,7 @@ import {
   analyzeTab,
   clickPreparedTabSubmission,
   prepareTabSubmission,
+  revealCommentFormTab,
   verifyTabSubmission,
 } from '@/runtime/page-commands';
 import { getBatch, setBatch } from '@/storage/batch';
@@ -69,6 +70,12 @@ export interface BatchRunnerDependencies {
     batchId: string
   ): Promise<WorkerTab | null>;
   analyzeTab(tabId: number, batchId: string): Promise<PageAnalysis>;
+  revealCommentForm(
+    tabId: number,
+    snapshotId: string,
+    candidateId: string,
+    batchId: string
+  ): Promise<boolean>;
   generateComment(
     keys: ProviderApiKeys,
     input: GenerateCommentInput
@@ -137,6 +144,10 @@ const defaultDependencies: BatchRunnerDependencies = {
   async analyzeTab(tabId, batchId) {
     await assertWorkerTabOwnership(batchId, tabId);
     return analyzeTab(tabId);
+  },
+  async revealCommentForm(tabId, snapshotId, candidateId, batchId) {
+    await assertWorkerTabOwnership(batchId, tabId);
+    return revealCommentFormTab(tabId, snapshotId, candidateId);
   },
   generateComment,
   planCommentForm,
@@ -883,7 +894,22 @@ async function advanceAnalysis(
     return saveFailure(batch, 'TARGET_PAGE_CONTEXT_MISSING', dependencies);
   }
 
-  if (analysis.probe && hasPlausibleCommentControls(analysis.probe)) {
+  const canPlanFormReveal =
+    analysis.form.readiness === 'not_found' &&
+    !item.formRevealAttempted &&
+    analysis.probe?.controlCandidates.some(
+      (candidate) =>
+        candidate.visible &&
+        candidate.enabled &&
+        (candidate.tag === 'button' ||
+          candidate.tag === 'a' ||
+          candidate.attributes.role === 'button' ||
+          (candidate.tag === 'input' && candidate.type === 'button'))
+    );
+  if (
+    analysis.probe &&
+    (hasPlausibleCommentControls(analysis.probe) || canPlanFormReveal)
+  ) {
     try {
       const keys = await dependencies.getProviderApiKeys();
       const plan = await dependencies.planCommentForm(keys, {
@@ -893,6 +919,57 @@ async function advanceAnalysis(
           analysis.page
         ),
       });
+      if (
+        plan.decision === 'reveal_form' &&
+        plan.revealCandidateId &&
+        canPlanFormReveal
+      ) {
+        const dispatched = updateBatchProgress(
+          batch,
+          {
+            item: {
+              status: 'opening',
+              formRevealAttempted: true,
+              message: 'COMMENT_FORM_REVEAL_DISPATCHED',
+            },
+          },
+          dependencies.now()
+        );
+        await dependencies.setBatch(dispatched);
+        let clicked: boolean;
+        try {
+          clicked = await dependencies.revealCommentForm(
+            tab.id,
+            analysis.probe.snapshotId,
+            plan.revealCandidateId,
+            batch.id
+          );
+        } catch (error) {
+          return saveFailure(dispatched, errorMessage(error), dependencies);
+        }
+        if (clicked) {
+          const next = updateBatchProgress(
+            dispatched,
+            {
+              item: {
+                status: 'opening',
+                message: 'COMMENT_FORM_REVEALED',
+              },
+            },
+            dependencies.now()
+          );
+          await dependencies.setBatch(next);
+          return 'continue';
+        }
+        const blocked = completeCurrentItem(
+          dispatched,
+          'no_form',
+          'COMMENT_FORM_REVEAL_BLOCKED',
+          dependencies.now()
+        );
+        await dependencies.setBatch(blocked);
+        return afterTerminal(blocked);
+      }
       const planned = applyFormPlan(analysis, analysis.probe, plan);
       analysis = {
         page: planned.page,
@@ -1162,7 +1239,16 @@ async function dispatchPreparedComment(
       item.prepared,
       batch.id
     );
-    return saveSubmissionResult(dispatched, result, dependencies);
+    if (!result.clickOccurred) {
+      return saveSubmissionResult(dispatched, result, dependencies);
+    }
+    const verifying = updateBatchProgress(
+      dispatched,
+      { item: { status: 'verifying', message: '' } },
+      dependencies.now()
+    );
+    await dependencies.setBatch(verifying);
+    return saveSubmissionResult(verifying, result, dependencies);
   } catch (error) {
     if (errorMessage(error) === 'PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS') {
       return 'wait';

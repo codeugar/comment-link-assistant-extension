@@ -133,6 +133,7 @@ function dependencies(
         uncertainties: [],
       })
     ),
+    revealCommentForm: vi.fn(async () => true),
     classifySubmissionOutcome: vi.fn(async () => ({
       status: 'unknown' as const,
       reason: 'COMMENT_SUBMISSION_UNCONFIRMED',
@@ -459,6 +460,19 @@ describe('batch runner', () => {
     });
     expect(context.deps.generateComment).toHaveBeenCalledTimes(1);
     expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledTimes(1);
+    expect(
+      context.read()?.items[0]?.events.map((event) => event.status)
+    ).toEqual([
+      'queued',
+      'opening',
+      'analyzing',
+      'generating',
+      'prepared',
+      'click_dispatched',
+      'verifying',
+      'checking_public',
+      'published',
+    ]);
   });
 
   it('uses AI semantics to turn a localized candidate form into a ready plan', async () => {
@@ -534,6 +548,145 @@ describe('batch runner', () => {
       },
     });
     expect(context.read()?.items[0]?.analysis?.probe).toBeUndefined();
+  });
+
+  it('uses AI semantics once to reveal a localized hidden comment form', async () => {
+    const hidden = analysis('not_found');
+    hidden.form.message = 'COMMENT_FORM_NOT_FOUND';
+    hidden.probe = {
+      snapshotId: 'snapshot-hidden',
+      url: hidden.page.url,
+      formCandidates: [],
+      controlCandidates: [
+        {
+          candidateId: 'control-1',
+          formId: null,
+          tag: 'button',
+          type: 'button',
+          attributes: { id: 'show-comment' },
+          labels: ['Escribe una respuesta'],
+          nearbyText: [],
+          ancestorTokens: ['section.responses'],
+          requiredSignals: [],
+          visible: true,
+          enabled: true,
+          hasValue: false,
+        },
+      ],
+    };
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const revealCommentForm = vi.fn(async () => {
+      expect(context.read()?.items[0]).toMatchObject({
+        status: 'opening',
+        formRevealAttempted: true,
+        message: 'COMMENT_FORM_REVEAL_DISPATCHED',
+      });
+      return true;
+    });
+    const context = dependencies(batch, {
+      analyzeTab: vi.fn(async () => hidden),
+      planCommentForm: vi.fn(
+        async (): Promise<FormPlan> => ({
+          schemaVersion: 1,
+          snapshotId: 'snapshot-hidden',
+          decision: 'reveal_form',
+          formCandidateId: null,
+          bindings: {},
+          submitCandidateId: null,
+          revealCandidateId: 'control-1',
+          requiredRoles: [],
+          uncertainties: [],
+        })
+      ),
+      revealCommentForm,
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(revealCommentForm).toHaveBeenCalledWith(
+      7,
+      'snapshot-hidden',
+      'control-1',
+      'batch-1'
+    );
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'opening',
+      formRevealAttempted: true,
+      message: 'COMMENT_FORM_REVEALED',
+    });
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(revealCommentForm).toHaveBeenCalledTimes(1);
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'no_form',
+      formRevealAttempted: true,
+    });
+  });
+
+  it('does not retry when a persisted form-reveal click has an unknown result', async () => {
+    const hidden = analysis('not_found');
+    hidden.probe = {
+      snapshotId: 'snapshot-hidden',
+      url: hidden.page.url,
+      formCandidates: [],
+      controlCandidates: [
+        {
+          candidateId: 'control-1',
+          formId: null,
+          tag: 'button',
+          type: 'button',
+          attributes: { id: 'show-comment' },
+          labels: ['Escribe una respuesta'],
+          nearbyText: [],
+          ancestorTokens: [],
+          requiredSignals: [],
+          visible: true,
+          enabled: true,
+          hasValue: false,
+        },
+      ],
+    };
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const revealCommentForm = vi.fn(async () => {
+      throw new Error('PAGE_FORM_REVEAL_RESULT_UNKNOWN');
+    });
+    const context = dependencies(batch, {
+      analyzeTab: vi.fn(async () => hidden),
+      planCommentForm: vi.fn(
+        async (): Promise<FormPlan> => ({
+          schemaVersion: 1,
+          snapshotId: 'snapshot-hidden',
+          decision: 'reveal_form',
+          formCandidateId: null,
+          bindings: {},
+          submitCandidateId: null,
+          revealCandidateId: 'control-1',
+          requiredRoles: [],
+          uncertainties: [],
+        })
+      ),
+      revealCommentForm,
+    });
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(revealCommentForm).toHaveBeenCalledTimes(1);
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'failed',
+      formRevealAttempted: true,
+      message: 'PAGE_FORM_REVEAL_RESULT_UNKNOWN',
+    });
   });
 
   it('uses a required website field even when inline placement was preferred', async () => {

@@ -6,6 +6,7 @@ import {
   clickPreparedSubmissionDocument,
   fillAndSubmitDocument,
   prepareSubmissionDocument,
+  revealPlannedCommentFormDocument,
   verifySubmissionDocument,
 } from './dom';
 import { probePageDocument } from './probe';
@@ -45,6 +46,98 @@ describe('comment page DOM helpers', () => {
       language: 'en',
       hasWebsiteField: true,
     });
+  });
+
+  it('clicks an AI-selected localized control to reveal the comment form', () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <button id="reveal" type="button">Escribe una respuesta</button>
+      <section id="slot"></section>
+    `;
+    document.querySelector('#reveal')?.addEventListener('click', () => {
+      const slot = document.querySelector('#slot');
+      if (slot) {
+        slot.innerHTML = `
+          <form id="commentform">
+            <textarea name="comment"></textarea>
+            <button type="submit">Post comment</button>
+          </form>
+        `;
+      }
+    });
+    const probe = probePageDocument(document);
+    const reveal = probe.controlCandidates.find(
+      (candidate) => candidate.attributes.id === 'reveal'
+    );
+
+    expect(reveal).toBeTruthy();
+    expect(
+      revealPlannedCommentFormDocument(
+        document,
+        probe.snapshotId,
+        reveal?.candidateId ?? ''
+      )
+    ).toBe(true);
+    expect(analyzePageDocument(document).form.readiness).toBe('ready');
+  });
+
+  it('refuses an AI-selected link that navigates away from the article', () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <a id="unsafe-reveal" href="https://other.example/comments">Open</a>
+    `;
+    const probe = probePageDocument(document);
+    const reveal = probe.controlCandidates.find(
+      (candidate) => candidate.attributes.id === 'unsafe-reveal'
+    );
+
+    expect(reveal).toBeTruthy();
+    expect(
+      revealPlannedCommentFormDocument(
+        document,
+        probe.snapshotId,
+        reveal?.candidateId ?? ''
+      )
+    ).toBe(false);
+  });
+
+  it('refuses an AI-selected submit button associated with an external form', () => {
+    document.body.innerHTML = `
+      <form id="newsletter"><input name="email"></form>
+      <button id="unsafe-submit" type="submit" form="newsletter">Open</button>
+    `;
+    const probe = probePageDocument(document);
+    const reveal = probe.controlCandidates.find(
+      (candidate) => candidate.attributes.id === 'unsafe-submit'
+    );
+
+    expect(reveal).toBeTruthy();
+    expect(
+      revealPlannedCommentFormDocument(
+        document,
+        probe.snapshotId,
+        reveal?.candidateId ?? ''
+      )
+    ).toBe(false);
+  });
+
+  it('refuses an AI-selected destructive JavaScript button', () => {
+    document.body.innerHTML = `
+      <button id="unsafe-delete" type="button">Delete account</button>
+    `;
+    const probe = probePageDocument(document);
+    const reveal = probe.controlCandidates.find(
+      (candidate) => candidate.attributes.id === 'unsafe-delete'
+    );
+
+    expect(reveal).toBeTruthy();
+    expect(
+      revealPlannedCommentFormDocument(
+        document,
+        probe.snapshotId,
+        reveal?.candidateId ?? ''
+      )
+    ).toBe(false);
   });
 
   it('recognizes a localized comment form with a structural submit control', () => {

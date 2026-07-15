@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { isPageCommand, runPageCommand } from './command';
 
 describe('page command validation', () => {
+  it('reveals a hidden comment form only through an observed candidate ID', async () => {
+    document.body.innerHTML = `
+      <button id="reveal" type="button">Escribe una respuesta</button>
+      <div id="slot"></div>
+    `;
+    document.querySelector('#reveal')?.addEventListener('click', () => {
+      const slot = document.querySelector('#slot');
+      if (slot) slot.innerHTML = '<textarea name="comment"></textarea>';
+    });
+    const analyzed = await runPageCommand(document, { type: 'analyze' });
+    expect(analyzed.type).toBe('analysis');
+    if (analyzed.type !== 'analysis') return;
+    const candidate = analyzed.analysis.probe?.controlCandidates.find(
+      (control) => control.attributes.id === 'reveal'
+    );
+    expect(candidate).toBeTruthy();
+
+    await expect(
+      runPageCommand(document, {
+        type: 'form.reveal',
+        snapshotId: analyzed.analysis.probe?.snapshotId ?? '',
+        candidateId: candidate?.candidateId ?? '',
+      })
+    ).resolves.toEqual({ type: 'form.reveal', clicked: true });
+    expect(document.querySelector('textarea')).toBeTruthy();
+  });
+
   it('keeps legacy prepare commands without a form plan valid', () => {
     expect(
       isPageCommand({

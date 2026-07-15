@@ -17,7 +17,9 @@ export async function closeTerminalBatchWorker(
     return batch;
   }
 
-  await dependencies.closeWorkerTab(batch.id, batch.workerTabId);
+  if (!(await dependencies.closeWorkerTab(batch.id, batch.workerTabId))) {
+    return batch;
+  }
   const next = { ...batch, updatedAt: dependencies.now() };
   Reflect.deleteProperty(next, 'workerTabId');
   return dependencies.setBatch(batchSnapshotSchema.parse(next));

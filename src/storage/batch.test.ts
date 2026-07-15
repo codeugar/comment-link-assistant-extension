@@ -45,6 +45,26 @@ describe('batch storage', () => {
     ).toEqual(batch);
   });
 
+  it('keeps a pre-timeline batch by adding its current node on read', async () => {
+    const legacy = makeBatch() as unknown as {
+      items: Array<Record<string, unknown>>;
+    };
+    for (const item of legacy.items) Reflect.deleteProperty(item, 'events');
+    await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: legacy });
+
+    await expect(getBatch()).resolves.toMatchObject({
+      id: 'batch-storage',
+      items: [
+        {
+          events: [{ status: 'queued', message: '', at: 1_000 }],
+        },
+      ],
+    });
+    expect(
+      (await chrome.storage.local.get(BATCH_STORAGE_KEY))[BATCH_STORAGE_KEY]
+    ).toHaveProperty('items.0.events');
+  });
+
   it('rejects an invalid snapshot instead of persisting it', async () => {
     const invalid = {
       ...makeBatch(),
