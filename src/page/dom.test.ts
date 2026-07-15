@@ -177,6 +177,54 @@ describe('comment page DOM helpers', () => {
     });
   });
 
+  it('rejects explicit comment controls inside a real checkout form', () => {
+    document.body.innerHTML = `
+      <form action="/checkout/payment">
+        <h2>Checkout payment</h2>
+        <textarea name="comment" placeholder="Enter your comment"></textarea>
+        <button type="submit">Submit Comment</button>
+      </form>
+    `;
+
+    expect(analyzePageDocument(document).form).toMatchObject({
+      readiness: 'not_found',
+      message: 'COMMENT_FORM_NOT_FOUND',
+    });
+  });
+
+  it.each([
+    ['destructive id', 'id="delete-account"'],
+    ['transactional class', 'class="checkout-form payment-form"'],
+  ])(
+    'never submits explicit comment controls inside a %s',
+    async (_, formAttribute) => {
+      document.body.innerHTML = `
+      <form ${formAttribute}>
+        <textarea name="comment" placeholder="Enter your comment"></textarea>
+        <button type="submit">Submit Comment</button>
+      </form>
+    `;
+      let submitted = false;
+      document.querySelector('form')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitted = true;
+      });
+
+      expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+      await expect(
+        fillAndSubmitDocument(
+          document,
+          { comment: 'This must not be submitted here.', websiteUrl: '' },
+          0
+        )
+      ).resolves.toMatchObject({
+        status: 'validation_error',
+        clickOccurred: false,
+      });
+      expect(submitted).toBe(false);
+    }
+  );
+
   it('finds and submits a comment form inside a same-origin iframe', async () => {
     document.body.innerHTML =
       '<article><p>A practical article about embedded discussions.</p></article><iframe></iframe>';

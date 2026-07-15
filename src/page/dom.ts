@@ -41,6 +41,7 @@ const DESTRUCTIVE_SUBMIT =
   /\b(?:delete|remove|report|flag|spam|abuse|edit|update|moderate|approve|reject|ban|block|hide|archive|trash|discard)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄/i;
 const NON_COMMENT_FORM_CONTEXT =
   /\b(?:report|flag|spam|abuse|delete|remove|edit|update|moderat(?:e|ion)|approve|reject|ban|block|hide|archive|trash|discard|share|forward|invite|private[\s_-]*message|direct[\s_-]*message|message[\s_-]*author|order|checkout|payment|purchase|cart|billing|shipping|donat(?:e|ion)|booking|reservation|rsvp|application|apply|log[\s_-]*in|sign[\s_-]*(?:in|up)|register|account)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄|分享|转发|轉發|邀请|邀請|私信|私人消息|私人訊息|站内信|站內信|订单|訂單|结账|結帳|支付|付款|购买|購買|购物车|購物車|账单|帳單|捐赠|捐贈|预订|預訂|预约|預約|申请|申請|登录|登入|注册|註冊|加入|账号|帳號/i;
+const CHECKOUT_THEME_IDENTITY_TOKEN = /(^|[-_])checkout(?=$|[-_])/gi;
 const LOGIN_COPY =
   /log[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*up\s+to\s+(?:comment|reply)|register\s+to\s+(?:comment|reply)|create\s+(?:an?\s+)?account\s+to\s+(?:comment|reply)|you must be logged in|登录后(?:才可)?(?:评论|回复|留言)|请先登录|登入後(?:才可)?(?:評論|回覆)|注册后(?:才可)?(?:评论|回复|留言)|註冊後(?:才可)?(?:評論|回覆)/i;
 const CAPTCHA_SELECTOR = [
@@ -217,13 +218,22 @@ function isUnsafePlannedSubmit(element: Element): boolean {
   );
 }
 
-function structuralDescriptor(element: Element | null): string {
+function structuralDescriptor(
+  element: Element | null,
+  ignoreCheckoutThemeIdentity = false
+): string {
   if (!element) return '';
+  const identityAttribute = (name: 'id' | 'class') => {
+    const value = element.getAttribute(name);
+    return ignoreCheckoutThemeIdentity
+      ? value?.replace(CHECKOUT_THEME_IDENTITY_TOKEN, '$1')
+      : value;
+  };
   return normalizeWhitespace(
     [
-      element.getAttribute('id'),
+      identityAttribute('id'),
       element.getAttribute('name'),
-      element.getAttribute('class'),
+      identityAttribute('class'),
       element.getAttribute('placeholder'),
       element.getAttribute('aria-label'),
       element.getAttribute('data-testid'),
@@ -398,7 +408,7 @@ function readFormSemanticContext(
     structuralDescriptor(container),
     structuralDescriptor(parent),
     structuralDescriptor(parent?.parentElement ?? null),
-    ...additionalElements.map(structuralDescriptor),
+    ...additionalElements.map((element) => structuralDescriptor(element)),
   ].join(' ');
   const headingCopy = normalizeWhitespace(
     Array.from(
@@ -424,9 +434,21 @@ function isConfidentCommentForm(
   const explicitCommentControls =
     POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
     STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit));
+  const safetyContext = explicitCommentControls
+    ? [
+        structuralDescriptor(editor, true),
+        structuralDescriptor(container, true),
+        structuralDescriptor(container.parentElement, true),
+        structuralDescriptor(
+          container.parentElement?.parentElement ?? null,
+          true
+        ),
+        headingCopy,
+        controlActionDescriptor(submit),
+      ].join(' ')
+    : `${actionContext} ${controlActionDescriptor(submit)}`;
   if (NEGATIVE_EDITOR.test(structuralContext)) return false;
-  if (NON_COMMENT_FORM_CONTEXT.test(actionContext) && !explicitCommentControls)
-    return false;
+  if (NON_COMMENT_FORM_CONTEXT.test(safetyContext)) return false;
   if (POSITIVE_EDITOR.test(structuralContext)) return true;
   if (COMMENT_HEADING.test(headingCopy)) return true;
 
