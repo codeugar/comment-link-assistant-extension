@@ -588,6 +588,59 @@ describe('page command runtime', () => {
     });
   });
 
+  it('gives the read-only analyze command headroom past the 10s command timeout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: vi.fn(() => new Promise(() => {})) },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+    });
+
+    const pending = analyzeTab(42);
+    const outcome = vi.fn();
+    void pending.then(
+      () => outcome('resolved'),
+      () => outcome('rejected')
+    );
+
+    // The 10s submit/verify timeout must not apply to a read-only analyze.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(outcome).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(outcome).not.toHaveBeenCalled();
+
+    // Analyze still has a hard 30s bound so it can never hang forever.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toHaveBeenCalledWith('rejected');
+    await expect(pending).rejects.toThrow('PAGE_COMMAND_TIMEOUT');
+  });
+
+  it('keeps the 10s command timeout for a submit click', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      comment: 'A relevant comment',
+      domToken: 'dom-token',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      expected: {
+        url: 'https://blog.example/article',
+        editorLabel: 'Comment',
+        submitLabel: 'Post comment',
+        hasWebsiteField: true,
+      },
+    };
+    vi.useFakeTimers();
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage: vi.fn(() => new Promise(() => {})) },
+    });
+
+    const pending = clickPreparedTabSubmission(42, prepared);
+    const rejection = expect(pending).rejects.toThrow(
+      'PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS'
+    );
+    // A mutating submit.click must still reject at 10s, not the analyze 30s.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+  });
+
   it('allows only one submission flow per tab at a time', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',

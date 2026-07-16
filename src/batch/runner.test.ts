@@ -185,6 +185,43 @@ describe('batch runner', () => {
     });
   });
 
+  it('analyzes a still-loading on-target tab without waiting for full load', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      1
+    );
+    let currentNow = 5_000;
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        status: 'loading',
+      })),
+      now: () => currentNow++,
+    });
+
+    for (let step = 0; step < 8; step += 1) {
+      await advanceBatchStep(context.deps);
+      if (context.read()?.status === 'completed') break;
+    }
+
+    // Analyze ran even though the tab never reached `complete`, and the whole
+    // run stayed far below the 30s TARGET_LOAD_GRACE_MS — no dead-wait.
+    expect(context.deps.analyzeTab).toHaveBeenCalledWith(7, 'batch-1');
+    expect(currentNow).toBeLessThan(30_000);
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'submitted' }],
+    });
+  });
+
   it('does not accept a different same-origin page from a loading redirect', async () => {
     const batch = updateBatchProgress(
       initialBatch(),

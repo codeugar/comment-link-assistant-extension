@@ -15,13 +15,27 @@ import type {
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
 const PAGE_COMMAND_TIMEOUT_MS = 10_000;
+// A read-only analyze now self-settles heavy pages (bounded DOMContentLoaded +
+// mutation waits) and has no double-submit risk, so it gets generous headroom.
+// Mutating commands (submit.prepare / submit.click / verify / form.reveal) keep
+// the tight 10s bound.
+const ANALYZE_COMMAND_TIMEOUT_MS = 30_000;
 const activeSubmissionTabs = new Set<number>();
 
-function withPageCommandTimeout<T>(operation: Promise<T>): Promise<T> {
+function commandTimeout(command: PageCommand): number {
+  return command.type === 'analyze'
+    ? ANALYZE_COMMAND_TIMEOUT_MS
+    : PAGE_COMMAND_TIMEOUT_MS;
+}
+
+function withPageCommandTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number = PAGE_COMMAND_TIMEOUT_MS
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error('PAGE_COMMAND_TIMEOUT')),
-      PAGE_COMMAND_TIMEOUT_MS
+      timeoutMs
     );
     operation.then(
       (value) => {
@@ -66,7 +80,8 @@ async function executePageCommand(
     chrome.scripting.executeScript({
       target: { tabId },
       files: [PAGE_COMMAND_SCRIPT],
-    })
+    }),
+    commandTimeout(command)
   );
   return sendPageCommand(tabId, command);
 }
@@ -79,7 +94,8 @@ async function sendPageCommand(
     chrome.tabs.sendMessage(tabId, {
       type: PAGE_COMMAND_MESSAGE_TYPE,
       command,
-    })
+    }),
+    commandTimeout(command)
   )) as PageCommandResult | undefined;
   if (!result) throw new Error('PAGE_COMMAND_NO_RESULT');
   return result;
