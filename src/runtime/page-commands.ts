@@ -17,7 +17,7 @@ const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
 const PAGE_COMMAND_TIMEOUT_MS = 10_000;
 // A read-only analyze now self-settles heavy pages (bounded DOMContentLoaded +
 // mutation waits) and has no double-submit risk, so it gets generous headroom.
-// Mutating commands (submit.prepare / submit.click / verify / form.reveal) keep
+// Mutating commands (submit.prepare / submit.click / verify) keep
 // the tight 10s bound.
 const ANALYZE_COMMAND_TIMEOUT_MS = 30_000;
 const activeSubmissionTabs = new Set<number>();
@@ -108,13 +108,6 @@ function readAnalysis(result: PageCommandResult): PageAnalysis {
   );
 }
 
-function readFormReveal(result: PageCommandResult): boolean {
-  if (result.type === 'form.reveal') return result.clicked;
-  throw new Error(
-    result.type === 'error' ? result.message : 'PAGE_FORM_REVEAL_FAILED'
-  );
-}
-
 function readSubmission(result: PageCommandResult): PageSubmissionResult {
   if (result.type === 'submission') return result.result;
   throw new Error(
@@ -158,20 +151,6 @@ export async function analyzeCurrentPage(): Promise<PageAnalysis> {
 
 export async function analyzeTab(tabId: number): Promise<PageAnalysis> {
   return readAnalysis(await executePageCommand(tabId, { type: 'analyze' }));
-}
-
-export async function revealCommentFormTab(
-  tabId: number,
-  snapshotId: string,
-  candidateId: string
-): Promise<boolean> {
-  return readFormReveal(
-    await sendPageCommand(tabId, {
-      type: 'form.reveal',
-      snapshotId,
-      candidateId,
-    })
-  );
 }
 
 export async function prepareTabSubmission(

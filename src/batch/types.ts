@@ -1,4 +1,3 @@
-import { formPlanSchema } from '@/api/form-planner';
 import type { PageAnalysis, PreparedPageSubmission } from '@/page/types';
 import type { ExtensionSettings } from '@/types';
 import type { WebsiteProfile } from '@/website/profile';
@@ -52,8 +51,6 @@ export interface BatchItem {
   commentFingerprint: string | null;
   prepared: PreparedPageSubmission | null;
   events: BatchItemEvent[];
-  formPlanRefreshes?: number;
-  formRevealAttempted?: boolean;
   partialPageAllowed?: boolean;
   message: string;
   createdAt: number;
@@ -143,7 +140,6 @@ const pageAnalysisSchema: z.ZodType<PageAnalysis> = z
   .object({
     page: targetPageContextSchema,
     form: commentFormSummarySchema,
-    formPlan: formPlanSchema.optional(),
   })
   .strict();
 
@@ -164,7 +160,6 @@ const preparedPageSubmissionSchema: z.ZodType<PreparedPageSubmission> = z
         editorLabel: z.string().max(500),
         submitLabel: z.string().max(500),
         hasWebsiteField: z.boolean(),
-        formPlan: formPlanSchema.optional(),
       })
       .strict(),
   })
@@ -188,8 +183,6 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
     commentFingerprint: z.string().max(64).nullable(),
     prepared: preparedPageSubmissionSchema.nullable(),
     events: z.array(batchItemEventSchema).min(1).max(32),
-    formPlanRefreshes: z.number().int().nonnegative().max(1).optional(),
-    formRevealAttempted: z.boolean().optional(),
     partialPageAllowed: z.boolean().optional(),
     message: z.string().max(500),
     createdAt: z.number().int().nonnegative(),

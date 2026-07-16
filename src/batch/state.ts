@@ -55,8 +55,6 @@ export interface BatchItemProgressUpdate {
   comment?: BatchItem['comment'];
   commentFingerprint?: BatchItem['commentFingerprint'];
   prepared?: BatchItem['prepared'];
-  formPlanRefreshes?: BatchItem['formPlanRefreshes'];
-  formRevealAttempted?: BatchItem['formRevealAttempted'];
   partialPageAllowed?: BatchItem['partialPageAllowed'];
   message?: string;
 }

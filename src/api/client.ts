@@ -4,12 +4,6 @@ import type { WebsiteProfile } from '@/website/profile';
 import { LinkifyIt } from 'linkify-it';
 import tlds from 'tlds';
 import { z } from 'zod';
-import {
-  type FormPlan,
-  type FormPlanningObservation,
-  buildFormPlanningPrompt,
-  parseFormPlan,
-} from './form-planner';
 
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 const KIE_ENDPOINT =
@@ -92,11 +86,6 @@ export interface GenerateCommentInput {
   linkMode: LinkMode;
 }
 
-export interface PlanCommentFormInput {
-  provider: CommentProvider;
-  observation: FormPlanningObservation;
-}
-
 interface ProviderRequest {
   endpoint: string;
   apiKey: string;
@@ -114,24 +103,6 @@ export async function generateComment(
   const request = providerRequest(keys, input.provider, prompt);
   const content = await requestProvider(request);
   return parseComment(content, input.linkMode, input.websiteProfile.url);
-}
-
-export async function planCommentForm(
-  keys: ProviderApiKeys,
-  input: PlanCommentFormInput
-): Promise<FormPlan> {
-  const request = providerRequest(
-    keys,
-    input.provider,
-    {
-      system:
-        'Return only the constrained comment-form plan JSON requested by the user message.',
-      user: buildFormPlanningPrompt(input.observation),
-    },
-    0
-  );
-  const content = await requestProvider(request);
-  return parseFormPlan(stripJsonFence(content), input.observation);
 }
 
 function providerRequest(
