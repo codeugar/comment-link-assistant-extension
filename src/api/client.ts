@@ -1,7 +1,4 @@
-import type {
-  SubmissionVerificationObservation,
-  TargetPageContext,
-} from '@/page/types';
+import type { TargetPageContext } from '@/page/types';
 import type { CommentProvider, LinkMode, ProviderApiKeys } from '@/types';
 import type { WebsiteProfile } from '@/website/profile';
 import { LinkifyIt } from 'linkify-it';
@@ -13,11 +10,6 @@ import {
   buildFormPlanningPrompt,
   parseFormPlan,
 } from './form-planner';
-import {
-  type SubmissionOutcomeClassification,
-  buildSubmissionOutcomePrompt,
-  parseSubmissionOutcome,
-} from './submission-outcome';
 
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 const KIE_ENDPOINT =
@@ -105,11 +97,6 @@ export interface PlanCommentFormInput {
   observation: FormPlanningObservation;
 }
 
-export interface ClassifySubmissionOutcomeInput {
-  provider: CommentProvider;
-  observation: SubmissionVerificationObservation;
-}
-
 interface ProviderRequest {
   endpoint: string;
   apiKey: string;
@@ -145,24 +132,6 @@ export async function planCommentForm(
   );
   const content = await requestProvider(request);
   return parseFormPlan(stripJsonFence(content), input.observation);
-}
-
-export async function classifySubmissionOutcome(
-  keys: ProviderApiKeys,
-  input: ClassifySubmissionOutcomeInput
-): Promise<SubmissionOutcomeClassification> {
-  const request = providerRequest(
-    keys,
-    input.provider,
-    {
-      system:
-        'Return only the constrained submission-outcome classification JSON requested by the user message.',
-      user: buildSubmissionOutcomePrompt(input.observation),
-    },
-    0
-  );
-  const content = await requestProvider(request);
-  return parseSubmissionOutcome(stripJsonFence(content), input.observation);
 }
 
 function providerRequest(

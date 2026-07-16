@@ -134,10 +134,6 @@ function dependencies(
       })
     ),
     revealCommentForm: vi.fn(async () => true),
-    classifySubmissionOutcome: vi.fn(async () => ({
-      status: 'unknown' as const,
-      reason: 'COMMENT_SUBMISSION_UNCONFIRMED',
-    })),
     generateComment: vi.fn(async () => 'A useful comment'),
     prepareTabSubmission: vi.fn(async () => ({
       ok: true as const,
@@ -148,7 +144,6 @@ function dependencies(
       return published;
     }),
     verifyTabSubmission: vi.fn(async () => published),
-    isCommentPubliclyVisible: vi.fn(async () => true),
     now: () => now++,
     ...overrides,
   };
@@ -186,7 +181,7 @@ describe('batch runner', () => {
     expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledOnce();
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'published' }],
+      items: [{ status: 'submitted' }],
     });
   });
 
@@ -491,7 +486,7 @@ describe('batch runner', () => {
       },
       3
     );
-    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 4);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 4);
     batch = updateBatchProgress(
       batch,
       {
@@ -515,7 +510,7 @@ describe('batch runner', () => {
     expect(context.read()).toMatchObject({
       status: 'completed',
       items: [
-        { status: 'published' },
+        { status: 'submitted' },
         {
           status: 'failed',
           message: 'DUPLICATE_CANONICAL_TARGET',
@@ -653,7 +648,7 @@ describe('batch runner', () => {
     expect(context.read()).toMatchObject({
       status: 'completed',
       currentIndex: 1,
-      items: [{ status: 'published' }],
+      items: [{ status: 'submitted' }],
     });
     expect(context.deps.generateComment).toHaveBeenCalledTimes(1);
     expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledTimes(1);
@@ -667,8 +662,7 @@ describe('batch runner', () => {
       'prepared',
       'click_dispatched',
       'verifying',
-      'checking_public',
-      'published',
+      'submitted',
     ]);
   });
 
@@ -1058,7 +1052,7 @@ describe('batch runner', () => {
       },
       3
     );
-    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 4);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 4);
     const secondAnalysis = analysis();
     secondAnalysis.page.url = 'https://forum.example/second';
     batch = updateBatchProgress(
@@ -1082,7 +1076,7 @@ describe('batch runner', () => {
       status: 'completed',
       items: [
         {
-          status: 'published',
+          status: 'submitted',
           commentFingerprint: expect.any(String),
         },
         {
@@ -1203,7 +1197,6 @@ describe('batch runner', () => {
     };
     const context = dependencies(batch, {
       verifyTabSubmission: vi.fn(async () => submittedNotVisible),
-      isCommentPubliclyVisible: vi.fn(async () => false),
     });
 
     await advanceBatchStep(context.deps);
@@ -1213,7 +1206,7 @@ describe('batch runner', () => {
     expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted_not_visible' }],
+      items: [{ status: 'submitted', message: 'COMMENT_SUBMITTED' }],
     });
   });
 
@@ -1240,7 +1233,7 @@ describe('batch runner', () => {
 
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.deps.verifyTabSubmission).toHaveBeenCalledOnce();
-    expect(context.read()?.items[0]).toMatchObject({ status: 'published' });
+    expect(context.read()?.items[0]).toMatchObject({ status: 'submitted' });
   });
 
   it('records an unconfirmed click error once and continues without retrying', async () => {
@@ -1270,52 +1263,17 @@ describe('batch runner', () => {
       status: 'completed',
       items: [
         {
-          status: 'unknown',
+          status: 'failed',
           message: 'COMMENT_SUBMISSION_UNCONFIRMED',
         },
       ],
     });
   });
 
-  it('rejects a comment that is visible only in the submitting session', async () => {
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: { status: 'verifying', prepared },
-      },
-      3
-    );
-    const context = dependencies(batch, {
-      isCommentPubliclyVisible: vi.fn(async () => false),
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(context.deps.isCommentPubliclyVisible).toHaveBeenCalledWith(
-      prepared.expected.url,
-      prepared.fingerprint
-    );
-    expect(context.deps.setBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: [expect.objectContaining({ status: 'checking_public' })],
-      })
-    );
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [
-        {
-          status: 'submitted_not_visible',
-          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
-        },
-      ],
-    });
-  });
-
-  it('keeps an accepted comment when the ordinary public page contains it', async () => {
-    const accepted: PageSubmissionResult = {
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+  it('treats a clicked but unconfirmed result as submitted without any re-fetch', async () => {
+    const unconfirmed: PageSubmissionResult = {
+      status: 'unknown',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
@@ -1328,20 +1286,26 @@ describe('batch runner', () => {
       3
     );
     const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => accepted),
-      isCommentPubliclyVisible: vi.fn(async () => true),
+      verifyTabSubmission: vi.fn(async () => unconfirmed),
     });
 
     await advanceBatchStep(context.deps);
 
+    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'published', message: 'COMMENT_PUBLISHED' }],
+      items: [{ status: 'submitted', message: 'COMMENT_SUBMITTED' }],
     });
   });
 
-  it('recovers an interrupted anonymous public visibility check', async () => {
-    let batch = updateBatchProgress(
+  it('records an explicit validation error as a kept terminal result', async () => {
+    const rejected: PageSubmissionResult = {
+      status: 'validation_error',
+      message: 'COMMENT_REJECTED',
+      fingerprint: prepared.fingerprint,
+      clickOccurred: true,
+    };
+    const batch = updateBatchProgress(
       initialBatch(),
       {
         workerTabId: 7,
@@ -1349,340 +1313,39 @@ describe('batch runner', () => {
       },
       3
     );
-    batch = updateBatchProgress(
-      batch,
-      {
-        item: {
-          status: 'checking_public',
-          message: 'PUBLIC_CHECK_ACCEPTED',
-        },
-      },
-      4
-    );
     const context = dependencies(batch, {
-      isCommentPubliclyVisible: vi.fn(async () => false),
+      verifyTabSubmission: vi.fn(async () => rejected),
     });
 
     await advanceBatchStep(context.deps);
 
-    expect(context.deps.isCommentPubliclyVisible).toHaveBeenCalledWith(
-      prepared.expected.url,
-      prepared.fingerprint
-    );
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted_not_visible' }],
+      items: [{ status: 'validation_error', message: 'COMMENT_REJECTED' }],
     });
   });
 
-  it('skips later targets from a site rejected by an earlier result', async () => {
+  it('processes a later same-host target after an earlier validation error', async () => {
     let batch = initialBatch(
       'https://blog.example/first\nhttps://www.blog.example/second'
     );
     batch = completeCurrentItem(
       batch,
-      'submitted_not_visible',
-      'COMMENT_SUBMITTED_NOT_VISIBLE',
+      'validation_error',
+      'COMMENT_REJECTED',
       3
     );
     const context = dependencies(batch);
 
     await advanceBatchStep(context.deps);
 
-    expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [
-        { status: 'submitted_not_visible' },
-        { status: 'failed', message: 'SITE_REJECTED_BY_PRIOR_RESULT' },
-      ],
-    });
-  });
-
-  it('publishes an otherwise unknown result when the ordinary public page contains it', async () => {
-    const unknownResult = {
-      status: 'unknown' as const,
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: true,
-      verificationObservation: {
-        url: 'https://blog.example/post',
-        language: 'en',
-        feedbackMessages: [],
-        editorCleared: false,
-        renderedCommentAdded: false,
-      },
-    } satisfies PageSubmissionResult;
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: { status: 'verifying', prepared },
-      },
-      3
+    expect(context.deps.createWorkerTab).toHaveBeenCalledWith(
+      'https://www.blog.example/second',
+      'batch-1'
     );
-    const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => unknownResult),
-      isCommentPubliclyVisible: vi.fn(async () => true),
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(context.deps.classifySubmissionOutcome).not.toHaveBeenCalled();
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [{ status: 'published', message: 'COMMENT_PUBLISHED' }],
-    });
+    expect(context.read()?.items[1]).toMatchObject({ status: 'opening' });
+    expect(context.read()?.items[1]?.status).not.toBe('failed');
   });
-
-  it.each([
-    ['submitted_not_visible', 'submitted_not_visible'],
-    ['validation_error', 'validation_error'],
-  ] as const)(
-    'classifies an observed unknown submission as %s without clicking again',
-    async (classifiedStatus, expectedStatus) => {
-      const observation = {
-        url: 'https://blog.example/post',
-        language: 'sr',
-        feedbackMessages: ['Vaš komentar čeka odobrenje.'],
-        editorCleared: true,
-        renderedCommentAdded: false,
-      };
-      const unknownResult = {
-        status: 'unknown' as const,
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-        fingerprint: prepared.fingerprint,
-        clickOccurred: true,
-        verificationObservation: observation,
-      } satisfies PageSubmissionResult;
-      const batch = updateBatchProgress(
-        initialBatch(),
-        {
-          workerTabId: 7,
-          item: { status: 'verifying', prepared },
-        },
-        3
-      );
-      const classifySubmissionOutcome = vi.fn(async () => ({
-        status: classifiedStatus,
-        reason: `AI_${classifiedStatus.toUpperCase()}`,
-      }));
-      const context = dependencies(batch, {
-        verifyTabSubmission: vi.fn(async () => unknownResult),
-        classifySubmissionOutcome,
-        isCommentPubliclyVisible: vi.fn(async () => false),
-      });
-
-      await advanceBatchStep(context.deps);
-
-      expect(classifySubmissionOutcome).toHaveBeenCalledTimes(1);
-      expect(classifySubmissionOutcome).toHaveBeenCalledWith(
-        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
-        { provider: 'deepseek', observation }
-      );
-      expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-      expect(context.read()).toMatchObject({
-        status: 'completed',
-        items: [
-          {
-            status: expectedStatus,
-            message:
-              classifiedStatus === 'submitted_not_visible'
-                ? 'COMMENT_SUBMITTED_NOT_VISIBLE'
-                : `AI_${classifiedStatus.toUpperCase()}`,
-          },
-        ],
-      });
-    }
-  );
-
-  it('completes an AI-classified unknown submission without clicking again', async () => {
-    const observation = {
-      url: 'https://blog.example/post',
-      language: 'sr',
-      feedbackMessages: ['Nepoznat odgovor.'],
-      editorCleared: true,
-      renderedCommentAdded: false,
-    };
-    const unknownResult = {
-      status: 'unknown' as const,
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: true,
-      verificationObservation: observation,
-    } satisfies PageSubmissionResult;
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: { status: 'verifying', prepared },
-      },
-      3
-    );
-    const classifySubmissionOutcome = vi.fn(async () => ({
-      status: 'unknown' as const,
-      reason: 'AI_STILL_UNCERTAIN',
-    }));
-    const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => unknownResult),
-      classifySubmissionOutcome,
-      isCommentPubliclyVisible: vi.fn(async () => false),
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(classifySubmissionOutcome).toHaveBeenCalledTimes(1);
-    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [
-        {
-          status: 'unknown',
-          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-        },
-      ],
-    });
-  });
-
-  it('does not retry when an AI validation reason matches an internal recovery code', async () => {
-    const unknownResult = {
-      status: 'unknown' as const,
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: true,
-      verificationObservation: {
-        url: 'https://blog.example/post',
-        language: 'sr',
-        feedbackMessages: ['Unos nije prihvaćen.'],
-        editorCleared: false,
-        renderedCommentAdded: false,
-      },
-    } satisfies PageSubmissionResult;
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: { status: 'verifying', prepared },
-      },
-      3
-    );
-    const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => unknownResult),
-      classifySubmissionOutcome: vi.fn(async () => ({
-        status: 'validation_error' as const,
-        reason: 'LINK_PLACEMENT_CHANGED',
-      })),
-      isCommentPubliclyVisible: vi.fn(async () => false),
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [
-        {
-          status: 'validation_error',
-          message: 'LINK_PLACEMENT_CHANGED',
-        },
-      ],
-    });
-  });
-
-  it('completes an unknown submission when AI classification fails', async () => {
-    const unknownResult = {
-      status: 'unknown' as const,
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: true,
-      verificationObservation: {
-        url: 'https://blog.example/post',
-        language: 'sr',
-        feedbackMessages: ['Nepoznat odgovor.'],
-        editorCleared: true,
-        renderedCommentAdded: false,
-      },
-    } satisfies PageSubmissionResult;
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: { status: 'verifying', prepared },
-      },
-      3
-    );
-    const classifySubmissionOutcome = vi.fn(async () => {
-      throw new Error('CLASSIFIER_UNAVAILABLE');
-    });
-    const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => unknownResult),
-      classifySubmissionOutcome,
-      isCommentPubliclyVisible: vi.fn(async () => false),
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(classifySubmissionOutcome).toHaveBeenCalledTimes(1);
-    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-    expect(context.read()).toMatchObject({
-      status: 'completed',
-      items: [
-        {
-          status: 'unknown',
-          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-        },
-      ],
-    });
-  });
-
-  it.each([
-    ['not clicked', false, true],
-    ['missing observation', true, false],
-  ] as const)(
-    'does not classify an unknown submission when it was %s',
-    async (_case, clickOccurred, includeObservation) => {
-      const unknownResult = {
-        status: 'unknown' as const,
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-        fingerprint: prepared.fingerprint,
-        clickOccurred,
-        ...(includeObservation
-          ? {
-              verificationObservation: {
-                url: 'https://blog.example/post',
-                language: 'sr',
-                feedbackMessages: ['Nepoznat odgovor.'],
-                editorCleared: true,
-                renderedCommentAdded: false,
-              },
-            }
-          : {}),
-      } satisfies PageSubmissionResult;
-      const batch = updateBatchProgress(
-        initialBatch(),
-        {
-          workerTabId: 7,
-          item: { status: 'verifying', prepared },
-        },
-        3
-      );
-      const classifySubmissionOutcome = vi.fn();
-      const context = dependencies(batch, {
-        verifyTabSubmission: vi.fn(async () => unknownResult),
-        classifySubmissionOutcome,
-        isCommentPubliclyVisible: vi.fn(async () => false),
-      });
-
-      await advanceBatchStep(context.deps);
-
-      expect(classifySubmissionOutcome).not.toHaveBeenCalled();
-      expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-      expect(context.read()).toMatchObject({
-        status: 'completed',
-        items: [{ status: 'unknown' }],
-      });
-    }
-  );
 
   it('pauses on a post-submit login redirect and resumes by verifying the same item', async () => {
     const batch = updateBatchProgress(
@@ -2028,7 +1691,7 @@ describe('batch runner', () => {
       now: 1,
     });
     batch = updateBatchProgress(batch, { workerTabId: 7 }, 2);
-    batch = completeCurrentItem(batch, 'published', '', 3);
+    batch = completeCurrentItem(batch, 'submitted', '', 3);
     const context = dependencies(batch);
 
     await advanceBatchStep(context.deps);
@@ -2041,7 +1704,7 @@ describe('batch runner', () => {
     );
     expect(context.read()).toMatchObject({
       currentIndex: 1,
-      items: [{ status: 'published' }, { status: 'opening' }],
+      items: [{ status: 'submitted' }, { status: 'opening' }],
     });
   });
 });

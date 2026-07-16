@@ -20,10 +20,7 @@ const requiredBatchKeys = [
   'startNewBatch',
   'batchStatusQueued',
   'batchStatusGenerating',
-  'batchStatusPublished',
-  'batchStatusSubmittedNotVisible',
-  'batchStatusUnknown',
-  'siteRejectedByPriorResult',
+  'batchStatusSubmitted',
 ] as const;
 
 describe('batch translations', () => {

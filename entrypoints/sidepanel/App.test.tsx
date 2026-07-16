@@ -238,7 +238,7 @@ describe('side panel navigation', () => {
     expect(container.textContent).toContain('unsafeSubmitBlocked');
   });
 
-  it('shows submitted but not visible as a rejected terminal result', async () => {
+  it('shows a submitted comment as a successful terminal result', async () => {
     const completed = completeCurrentItem(
       createBatch({
         targetText: 'https://blog.example/post',
@@ -250,8 +250,8 @@ describe('side panel navigation', () => {
           linkMode: 'prefer-website-field',
         },
       }),
-      'submitted_not_visible',
-      'COMMENT_SUBMITTED_NOT_VISIBLE'
+      'submitted',
+      'COMMENT_SUBMITTED'
     );
     await chrome.storage.local.set({
       [SETTINGS_STORAGE_KEY]: completed.settings,
@@ -260,10 +260,8 @@ describe('side panel navigation', () => {
 
     await renderSidePanel();
 
-    expect(container.textContent).toContain('batchStatusSubmittedNotVisible');
-    expect(
-      container.querySelector('.status-submitted_not_visible')
-    ).not.toBeNull();
+    expect(container.textContent).toContain('batchStatusSubmitted');
+    expect(container.querySelector('.status-submitted')).not.toBeNull();
   });
 
   it('shows the current website as an expanded persistent node timeline', async () => {
@@ -320,8 +318,8 @@ describe('side panel navigation', () => {
 
     const advanced = completeCurrentItem(
       running,
-      'published',
-      'COMMENT_PUBLISHED',
+      'submitted',
+      'COMMENT_SUBMITTED',
       1_400
     );
     await act(async () => {

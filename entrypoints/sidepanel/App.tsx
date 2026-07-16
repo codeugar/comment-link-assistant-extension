@@ -72,12 +72,8 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusSubmitting');
     case 'verifying':
       return translate('batchStatusVerifying');
-    case 'checking_public':
-      return translate('batchStatusCheckingPublic');
-    case 'published':
-      return translate('batchStatusPublished');
-    case 'submitted_not_visible':
-      return translate('batchStatusSubmittedNotVisible');
+    case 'submitted':
+      return translate('batchStatusSubmitted');
     case 'login_required':
       return translate('batchStatusLoginRequired');
     case 'captcha_required':
@@ -86,8 +82,6 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusNoForm');
     case 'validation_error':
       return translate('batchStatusValidationError');
-    case 'unknown':
-      return translate('batchStatusUnknown');
     case 'failed':
       return translate('batchStatusFailed');
     case 'stopped':
@@ -116,9 +110,6 @@ function batchItemMessageCopy(message: string): string | null {
   }
   if (message === 'FORM_PLAN_UNSAFE_SUBMIT') {
     return translate('unsafeSubmitBlocked');
-  }
-  if (message === 'SITE_REJECTED_BY_PRIOR_RESULT') {
-    return translate('siteRejectedByPriorResult');
   }
   if (message === 'COMMENT_FORM_REVEALED') {
     return translate('commentFormRevealed');
@@ -154,16 +145,12 @@ function displayTarget(url: string): string {
   }
 }
 
-function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
-  let published = 0;
-  let submittedNotVisible = 0;
+function batchSummary(batch: BatchSnapshot): [string, string] {
+  let submitted = 0;
   let failed = 0;
-  let unknown = 0;
 
   for (const item of batch.items) {
-    if (item.status === 'published') published += 1;
-    else if (item.status === 'submitted_not_visible') submittedNotVisible += 1;
-    else if (item.status === 'unknown') unknown += 1;
+    if (item.status === 'submitted') submitted += 1;
     else if (
       item.status === 'no_form' ||
       item.status === 'validation_error' ||
@@ -173,12 +160,7 @@ function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
     }
   }
 
-  return [
-    String(published),
-    String(submittedNotVisible),
-    String(failed),
-    String(unknown),
-  ];
+  return [String(submitted), String(failed)];
 }
 
 function formatEventTime(timestamp: number): string {
@@ -221,11 +203,6 @@ function activityCopy(status: BatchItemStatus): string[] {
         translate('activityVerifyingPage'),
         translate('activityReadingFeedback'),
       ];
-    case 'checking_public':
-      return [
-        translate('activityCheckingAnonymousPage'),
-        translate('activityLookingForFingerprint'),
-      ];
     default:
       return [batchItemStatusCopy(status)];
   }
@@ -233,11 +210,9 @@ function activityCopy(status: BatchItemStatus): string[] {
 
 function isTerminalItem(item: BatchItem): boolean {
   return [
-    'published',
-    'submitted_not_visible',
+    'submitted',
     'no_form',
     'validation_error',
-    'unknown',
     'failed',
     'stopped',
   ].includes(item.status);
@@ -320,14 +295,9 @@ export default function App() {
   const completedBeforeCurrent = batch
     ? batch.status === 'completed' || batch.status === 'stopped'
       ? batch.items.filter((item) =>
-          [
-            'published',
-            'submitted_not_visible',
-            'no_form',
-            'validation_error',
-            'unknown',
-            'failed',
-          ].includes(item.status)
+          ['submitted', 'no_form', 'validation_error', 'failed'].includes(
+            item.status
+          )
         ).length
       : batch.currentIndex
     : 0;
