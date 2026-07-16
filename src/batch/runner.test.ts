@@ -1,4 +1,3 @@
-import type { FormPlan } from '@/api/form-planner';
 import type {
   PageAnalysis,
   PageSubmissionResult,
@@ -121,19 +120,6 @@ function dependencies(
       status: 'loading',
     })),
     analyzeTab: vi.fn(async () => analysis()),
-    planCommentForm: vi.fn(
-      async (_keys, input): Promise<FormPlan> => ({
-        schemaVersion: 1,
-        snapshotId: input.observation.snapshotId,
-        decision: 'commentable',
-        formCandidateId: 'form-1',
-        bindings: { comment: 'control-1' },
-        submitCandidateId: 'control-2',
-        requiredRoles: ['comment'],
-        uncertainties: [],
-      })
-    ),
-    revealCommentForm: vi.fn(async () => true),
     generateComment: vi.fn(async () => 'A useful comment'),
     prepareTabSubmission: vi.fn(async () => ({
       ok: true as const,
@@ -705,48 +691,6 @@ describe('batch runner', () => {
 
   it('uses a confidently detected standard comment form without AI planning', async () => {
     const ready = analysis('ready');
-    ready.probe = {
-      snapshotId: 'snapshot-standard',
-      url: ready.page.url,
-      formCandidates: [
-        {
-          formId: 'form-1',
-          tag: 'form',
-          attributes: { id: 'commentform' },
-          controlCandidateIds: ['control-1', 'control-2'],
-        },
-      ],
-      controlCandidates: [
-        {
-          candidateId: 'control-1',
-          formId: 'form-1',
-          tag: 'textarea',
-          type: 'textarea',
-          attributes: { name: 'comment' },
-          labels: ['Comment'],
-          nearbyText: [],
-          ancestorTokens: ['form#commentform'],
-          requiredSignals: [],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-        {
-          candidateId: 'control-2',
-          formId: 'form-1',
-          tag: 'button',
-          type: 'submit',
-          attributes: { type: 'submit' },
-          labels: ['Submit Comment'],
-          nearbyText: [],
-          ancestorTokens: ['form#commentform'],
-          requiredSignals: [],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-      ],
-    };
     const batch = updateBatchProgress(
       initialBatch(),
       { workerTabId: 7, item: { status: 'analyzing' } },
@@ -758,7 +702,6 @@ describe('batch runner', () => {
 
     await advanceBatchStep(context.deps);
 
-    expect(context.deps.planCommentForm).not.toHaveBeenCalled();
     expect(context.read()?.items[0]).toMatchObject({
       status: 'generating',
       analysis: {
@@ -767,242 +710,25 @@ describe('batch runner', () => {
     });
   });
 
-  it('uses AI semantics to turn a localized candidate form into a ready plan', async () => {
-    const localized = analysis('not_found');
-    localized.form.message = 'COMMENT_FORM_NOT_FOUND';
-    localized.probe = {
-      snapshotId: 'snapshot-localized',
-      url: localized.page.url,
-      formCandidates: [
-        {
-          formId: 'form-1',
-          tag: 'form',
-          attributes: { class: 'vcard' },
-          controlCandidateIds: ['control-1', 'control-2'],
-        },
-      ],
-      controlCandidates: [
-        {
-          candidateId: 'control-1',
-          formId: 'form-1',
-          tag: 'textarea',
-          type: 'textarea',
-          attributes: { name: 'vText' },
-          labels: ['Komentar'],
-          nearbyText: [],
-          ancestorTokens: ['form.vcard'],
-          requiredSignals: ['ancestor-class:required'],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-        {
-          candidateId: 'control-2',
-          formId: 'form-1',
-          tag: 'button',
-          type: 'button',
-          attributes: { type: 'button' },
-          labels: [],
-          nearbyText: ['Potvrdi'],
-          ancestorTokens: ['form.vcard'],
-          requiredSignals: [],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-      ],
-    };
+  it('completes as no_form when the analyzer finds no comment form', async () => {
     const batch = updateBatchProgress(
       initialBatch(),
       { workerTabId: 7, item: { status: 'analyzing' } },
       3
     );
     const context = dependencies(batch, {
-      analyzeTab: vi.fn(async () => localized),
+      analyzeTab: vi.fn(async () => analysis('not_found')),
     });
 
     await advanceBatchStep(context.deps);
 
-    expect(context.deps.planCommentForm).toHaveBeenCalledTimes(1);
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'generating',
-      analysis: {
-        form: {
-          readiness: 'ready',
-          editorLabel: 'Komentar',
-          submitLabel: 'Potvrdi',
-        },
-        formPlan: {
-          snapshotId: 'snapshot-localized',
-          bindings: { comment: 'control-1' },
-          submitCandidateId: 'control-2',
-        },
-      },
-    });
-    expect(context.read()?.items[0]?.analysis?.probe).toBeUndefined();
-  });
-
-  it('uses AI semantics once to reveal a localized hidden comment form', async () => {
-    const hidden = analysis('not_found');
-    hidden.form.message = 'COMMENT_FORM_NOT_FOUND';
-    hidden.probe = {
-      snapshotId: 'snapshot-hidden',
-      url: hidden.page.url,
-      formCandidates: [],
-      controlCandidates: [
-        {
-          candidateId: 'control-1',
-          formId: null,
-          tag: 'div',
-          type: 'button',
-          attributes: { id: 'show-comment', class: 'btn write-comment-btn' },
-          labels: [],
-          nearbyText: ['Skriv kommentar'],
-          ancestorTokens: ['section.responses'],
-          requiredSignals: [],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-      ],
-    };
-    const batch = updateBatchProgress(
-      initialBatch(),
-      { workerTabId: 7, item: { status: 'analyzing' } },
-      3
-    );
-    let now = 1_000;
-    const revealCommentForm = vi.fn(async () => {
-      expect(context.read()?.items[0]).toMatchObject({
-        status: 'opening',
-        formRevealAttempted: true,
-        message: 'COMMENT_FORM_REVEAL_DISPATCHED',
-      });
-      return true;
-    });
-    const context = dependencies(batch, {
-      analyzeTab: vi.fn(async () => hidden),
-      planCommentForm: vi.fn(
-        async (): Promise<FormPlan> => ({
-          schemaVersion: 1,
-          snapshotId: 'snapshot-hidden',
-          decision: 'reveal_form',
-          formCandidateId: null,
-          bindings: {},
-          submitCandidateId: null,
-          revealCandidateId: 'control-1',
-          requiredRoles: [],
-          uncertainties: [],
-        })
-      ),
-      revealCommentForm,
-      now: () => now,
-    });
-
-    await advanceBatchStep(context.deps);
-
-    expect(revealCommentForm).toHaveBeenCalledWith(
-      7,
-      'snapshot-hidden',
-      'control-1',
-      'batch-1'
-    );
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'opening',
-      formRevealAttempted: true,
-      message: 'COMMENT_FORM_REVEALED',
-    });
-
-    await advanceBatchStep(context.deps);
-    expect(context.deps.analyzeTab).toHaveBeenCalledTimes(1);
-    expect(context.read()?.items[0]).toMatchObject({ status: 'opening' });
-
-    now += 601;
-    await advanceBatchStep(context.deps);
-    await advanceBatchStep(context.deps);
-
-    expect(revealCommentForm).toHaveBeenCalledTimes(1);
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'no_form',
-      formRevealAttempted: true,
-    });
-  });
-
-  it('does not retry when a persisted form-reveal click has an unknown result', async () => {
-    const hidden = analysis('not_found');
-    hidden.probe = {
-      snapshotId: 'snapshot-hidden',
-      url: hidden.page.url,
-      formCandidates: [],
-      controlCandidates: [
-        {
-          candidateId: 'control-1',
-          formId: null,
-          tag: 'button',
-          type: 'button',
-          attributes: { id: 'show-comment' },
-          labels: ['Escribe una respuesta'],
-          nearbyText: [],
-          ancestorTokens: [],
-          requiredSignals: [],
-          visible: true,
-          enabled: true,
-          hasValue: false,
-        },
-      ],
-    };
-    const batch = updateBatchProgress(
-      initialBatch(),
-      { workerTabId: 7, item: { status: 'analyzing' } },
-      3
-    );
-    const revealCommentForm = vi.fn(async () => {
-      throw new Error('PAGE_FORM_REVEAL_RESULT_UNKNOWN');
-    });
-    const context = dependencies(batch, {
-      analyzeTab: vi.fn(async () => hidden),
-      planCommentForm: vi.fn(
-        async (): Promise<FormPlan> => ({
-          schemaVersion: 1,
-          snapshotId: 'snapshot-hidden',
-          decision: 'reveal_form',
-          formCandidateId: null,
-          bindings: {},
-          submitCandidateId: null,
-          revealCandidateId: 'control-1',
-          requiredRoles: [],
-          uncertainties: [],
-        })
-      ),
-      revealCommentForm,
-    });
-
-    await advanceBatchStep(context.deps);
-    await advanceBatchStep(context.deps);
-
-    expect(revealCommentForm).toHaveBeenCalledTimes(1);
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'failed',
-      formRevealAttempted: true,
-      message: 'PAGE_FORM_REVEAL_RESULT_UNKNOWN',
-    });
+    expect(context.read()?.items[0]).toMatchObject({ status: 'no_form' });
   });
 
   it('uses a required website field even when inline placement was preferred', async () => {
     const planned = analysis();
-    planned.formPlan = {
-      schemaVersion: 1,
-      snapshotId: 'snapshot-1',
-      decision: 'commentable',
-      formCandidateId: 'form-1',
-      bindings: {
-        comment: 'control-1',
-        website: 'control-2',
-      },
-      submitCandidateId: 'control-3',
-      requiredRoles: ['comment', 'website'],
-      uncertainties: [],
-    };
+    planned.form.hasWebsiteField = true;
+    planned.form.requiresWebsiteField = true;
     let batch = initialBatch();
     batch = {
       ...batch,
@@ -1032,7 +758,7 @@ describe('batch runner', () => {
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
       expect.objectContaining({ websiteUrl: 'https://product.example' }),
-      expect.objectContaining({ formPlan: planned.formPlan }),
+      expect.objectContaining({ hasWebsiteField: true }),
       'batch-1'
     );
   });
@@ -1623,55 +1349,6 @@ describe('batch runner', () => {
       expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     }
   );
-
-  it('reanalyzes once when an AI-planned DOM snapshot is no longer live', async () => {
-    const plannedAnalysis = analysis();
-    plannedAnalysis.formPlan = {
-      schemaVersion: 1,
-      snapshotId: 'snapshot-old',
-      decision: 'commentable',
-      formCandidateId: 'form-1',
-      bindings: { comment: 'control-1' },
-      submitCandidateId: 'control-2',
-      requiredRoles: ['comment'],
-      uncertainties: [],
-    };
-    const batch = updateBatchProgress(
-      initialBatch(),
-      {
-        workerTabId: 7,
-        item: {
-          status: 'generating',
-          analysis: plannedAnalysis,
-          comment: 'A generated comment',
-        },
-      },
-      3
-    );
-    const context = dependencies(batch, {
-      prepareTabSubmission: vi.fn(async () => ({
-        ok: false as const,
-        result: {
-          status: 'validation_error' as const,
-          message: 'PAGE_CHANGED_SINCE_GENERATION',
-          fingerprint: 'A generated comment',
-          clickOccurred: false,
-        },
-      })),
-    });
-
-    await expect(advanceBatchStep(context.deps)).resolves.toBe('continue');
-
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'analyzing',
-      analysis: null,
-      comment: null,
-      prepared: null,
-      formPlanRefreshes: 1,
-      message: 'PAGE_CHANGED_SINCE_GENERATION',
-    });
-    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-  });
 
   it('does not click when a stop request arrives at the persisted click boundary', async () => {
     const batch = updateBatchProgress(

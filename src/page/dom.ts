@@ -1,4 +1,3 @@
-import { probePageDocument, resolveProbeCandidate } from './probe';
 import type {
   CommentFormSummary,
   PageAnalysis,
@@ -295,17 +294,6 @@ function isPositiveSubmitControl(element: Element): boolean {
   );
 }
 
-function isUnsafePlannedSubmit(element: Element): boolean {
-  const descriptor = controlActionDescriptor(element);
-  return (
-    AUTH_CONTROL.test(descriptor) ||
-    NEGATIVE_SUBMIT.test(descriptor) ||
-    DESTRUCTIVE_SUBMIT.test(descriptor) ||
-    NON_SUBMISSION_ACTION.test(descriptor) ||
-    NON_COMMENT_FORM_CONTEXT.test(descriptor)
-  );
-}
-
 function structuralDescriptor(
   element: Element | null,
   ignoreCheckoutThemeIdentity = false
@@ -545,16 +533,6 @@ function isConfidentCommentForm(
 
 type InputKind = 'name' | 'email' | 'website';
 
-interface PlannedFormControls {
-  container: HTMLElement;
-  nativeForm: HTMLFormElement | null;
-  editor: HTMLElement;
-  submit: HTMLElement;
-  nameInput: HTMLInputElement | null;
-  emailInput: HTMLInputElement | null;
-  websiteInput: HTMLInputElement | null;
-}
-
 function scoreInput(input: HTMLInputElement, kind: InputKind): number {
   if (!isVisible(input) || input.disabled) return Number.NEGATIVE_INFINITY;
   const descriptor = elementDescriptor(input);
@@ -651,208 +629,6 @@ function associatedControlForm(element: HTMLElement): HTMLFormElement | null {
     return element.form;
   }
   return element.closest('form');
-}
-
-function plannedFormElements(controls: PlannedFormControls): Element[] {
-  if (controls.nativeForm) return Array.from(controls.nativeForm.elements);
-  return Array.from(
-    controls.container.querySelectorAll(
-      'input, textarea, select, button, [role="button"]'
-    )
-  );
-}
-
-function hasUnsafePlannedFormContext(controls: PlannedFormControls): boolean {
-  const formElements = plannedFormElements(controls).slice(0, 80);
-  const { structuralContext, headingCopy } = readFormSemanticContext(
-    controls.editor,
-    controls.container,
-    formElements
-  );
-  const explicitCommentControls = hasExplicitCommentControls(
-    controls.editor,
-    controls.submit
-  );
-  const checkoutThemeAllowed =
-    explicitCommentControls && hasWordPressCommentEndpoint(controls);
-  const safetyContext = checkoutThemeAllowed
-    ? [
-        structuralDescriptor(controls.editor, true),
-        structuralDescriptor(controls.container, true),
-        structuralDescriptor(controls.container.parentElement, true),
-        structuralDescriptor(
-          controls.container.parentElement?.parentElement ?? null,
-          true
-        ),
-        ...formElements.map((element) => structuralDescriptor(element, true)),
-        headingCopy,
-      ].join(' ')
-    : `${structuralContext} ${headingCopy}`;
-  return (
-    isUnsafePlannedSubmit(controls.submit) ||
-    hasUnsafeSubmissionEndpoint(controls) ||
-    NEGATIVE_EDITOR.test(structuralContext) ||
-    NON_COMMENT_FORM_CONTEXT.test(safetyContext) ||
-    NON_SUBMISSION_ACTION.test(safetyContext)
-  );
-}
-
-function hasWordPressCommentEndpoint(controls: PlannedFormControls): boolean {
-  const action =
-    controls.submit.getAttribute('formaction') ??
-    controls.nativeForm?.getAttribute('action');
-  if (!action?.trim()) return false;
-  try {
-    const endpoint = new URL(action, controls.editor.ownerDocument.baseURI);
-    return /\/wp-comments-post\.php\/?$/i.test(endpoint.pathname);
-  } catch {
-    return false;
-  }
-}
-
-function hasExplicitCommentControls(
-  editor: HTMLElement,
-  submit: HTMLElement
-): boolean {
-  return (
-    POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
-    STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit))
-  );
-}
-
-function hasUnsafeSubmissionEndpoint(controls: PlannedFormControls): boolean {
-  const action =
-    controls.submit.getAttribute('formaction') ??
-    controls.nativeForm?.getAttribute('action');
-  if (!action?.trim()) return false;
-  try {
-    const endpoint = new URL(action, controls.editor.ownerDocument.baseURI);
-    return (
-      (endpoint.protocol !== 'http:' && endpoint.protocol !== 'https:') ||
-      endpoint.origin !== controls.editor.ownerDocument.location.origin
-    );
-  } catch {
-    return true;
-  }
-}
-
-function hasUnmappedRequiredControl(controls: PlannedFormControls): boolean {
-  const mappedControls = new Set<Element>(
-    [
-      controls.editor,
-      controls.nameInput,
-      controls.emailInput,
-      controls.websiteInput,
-    ].filter((element): element is HTMLElement => element !== null)
-  );
-
-  return plannedFormElements(controls).some(
-    (element) =>
-      (isInputElement(element) ||
-        isTextAreaElement(element) ||
-        isSelectElement(element)) &&
-      isVisible(element) &&
-      isRequiredControl(element) &&
-      !mappedControls.has(element)
-  );
-}
-
-function resolvePlannedFormControls(
-  document: Document,
-  plan: NonNullable<PageSubmissionExpectation['formPlan']>
-): PlannedFormControls | null {
-  if (
-    plan.decision !== 'commentable' ||
-    !plan.bindings.comment ||
-    !plan.submitCandidateId
-  ) {
-    return null;
-  }
-
-  const resolve = (candidateId: string | undefined) =>
-    candidateId
-      ? resolveProbeCandidate(document, plan.snapshotId, candidateId)
-      : null;
-  const editor = resolve(plan.bindings.comment);
-  const submit = resolve(plan.submitCandidateId);
-  const nameInput = resolve(plan.bindings.name);
-  const emailInput = resolve(plan.bindings.email);
-  const websiteInput = resolve(plan.bindings.website);
-  const formCandidate = resolve(plan.formCandidateId ?? undefined);
-  if (plan.formCandidateId && !formCandidate) return null;
-  if (
-    !editor ||
-    !submit ||
-    !editor.matches(EDITOR_SELECTOR) ||
-    !submit.matches(
-      'button, input[type="submit"], input[type="button"], [role="button"]'
-    ) ||
-    (nameInput !== null && !isInputElement(nameInput)) ||
-    (emailInput !== null && !isInputElement(emailInput)) ||
-    (websiteInput !== null && !isInputElement(websiteInput))
-  ) {
-    return null;
-  }
-
-  const selected = [editor, submit, nameInput, emailInput, websiteInput].filter(
-    (element): element is HTMLElement => element !== null
-  );
-  if (
-    new Set(selected).size !== selected.length ||
-    selected.some((element) => !isVisible(element)) ||
-    [editor, nameInput, emailInput, websiteInput].some(
-      (element) => element !== null && isDisabled(element)
-    )
-  ) {
-    return null;
-  }
-
-  if (formCandidate && formCandidate.ownerDocument !== editor.ownerDocument) {
-    return null;
-  }
-  const plannedRegion =
-    formCandidate && !isFormElement(formCandidate) ? formCandidate : null;
-  const nativeForm =
-    formCandidate && isFormElement(formCandidate)
-      ? formCandidate
-      : associatedControlForm(editor);
-  if (plannedRegion && nativeForm) return null;
-  const container = plannedRegion ?? nativeForm ?? findContainer(editor);
-  if (
-    !nativeForm &&
-    (container === editor.ownerDocument.body ||
-      container === editor.ownerDocument.documentElement)
-  ) {
-    return null;
-  }
-  if (
-    selected.some((element) => {
-      if (nativeForm) {
-        return (
-          element.ownerDocument !== editor.ownerDocument ||
-          (associatedControlForm(element) !== nativeForm &&
-            !nativeForm.contains(element))
-        );
-      }
-      return (
-        element.ownerDocument !== editor.ownerDocument ||
-        associatedControlForm(element) !== null ||
-        !container.contains(element)
-      );
-    })
-  ) {
-    return null;
-  }
-
-  return {
-    container,
-    nativeForm,
-    editor,
-    submit,
-    nameInput,
-    emailInput,
-    websiteInput,
-  };
 }
 
 function readMeta(document: Document, names: string[]): string {
@@ -1119,7 +895,6 @@ function buildPageAnalysis(document: Document): PageAnalysis {
   return {
     page: buildPageContext(document),
     form: buildFormSummary(document),
-    probe: probePageDocument(document),
   };
 }
 
@@ -1211,77 +986,6 @@ export async function analyzePageDocument(
   await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
   scrollCommentRegionIntoView(document);
   return buildPageAnalysis(document);
-}
-
-export function revealPlannedCommentFormDocument(
-  document: Document,
-  snapshotId: string,
-  candidateId: string
-): boolean {
-  const candidate = resolveProbeCandidate(document, snapshotId, candidateId);
-  if (
-    !candidate ||
-    !isVisible(candidate) ||
-    candidate.getAttribute('aria-disabled') === 'true' ||
-    candidate.closest('form') ||
-    candidate.hasAttribute('form') ||
-    candidate.hasAttribute('formaction') ||
-    candidate.hasAttribute('formmethod')
-  ) {
-    return false;
-  }
-
-  const evidence = normalizeWhitespace(
-    [
-      visibleTextContent(candidate),
-      candidate.getAttribute('aria-label'),
-      candidate.getAttribute('title'),
-      candidate.getAttribute('id'),
-      candidate.getAttribute('name'),
-      candidate.getAttribute('class'),
-      isInputElement(candidate) ? candidate.value : '',
-    ]
-      .filter(Boolean)
-      .join(' ')
-  );
-  if (
-    AUTH_CONTROL.test(evidence) ||
-    DESTRUCTIVE_SUBMIT.test(evidence) ||
-    NON_COMMENT_FORM_CONTEXT.test(evidence)
-  ) {
-    return false;
-  }
-
-  if (candidate.tagName === 'A') {
-    const href = candidate.getAttribute('href');
-    if (!href || candidate.getAttribute('target')) return false;
-    try {
-      const current = new URL(document.location.href);
-      const target = new URL(href, document.baseURI);
-      if (
-        target.origin !== current.origin ||
-        target.pathname !== current.pathname ||
-        target.search !== current.search
-      ) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-  } else if (isButtonElement(candidate)) {
-    if (candidate.type !== 'button' || candidate.form) return false;
-  } else if (isInputElement(candidate)) {
-    if (candidate.type !== 'button' || candidate.form) return false;
-  } else if (
-    candidate.getAttribute('role') !== 'button' &&
-    !candidate.matches('[class~="btn"], [class~="button"]')
-  ) {
-    return false;
-  }
-
-  if ('disabled' in candidate && candidate.disabled) return false;
-  candidate.click();
-  return true;
 }
 
 function setNativeValue(
@@ -1528,7 +1232,6 @@ export function verifySubmissionDocument(
     ? normalizeWhitespace(readEditorValue(currentEditor))
     : null;
   const draftStillInEditor = Boolean(currentEditorValue?.includes(fingerprint));
-  const editorCleared = currentEditorValue === '';
   const renderedCommentAdded =
     renderedComment &&
     !(baseline?.renderedComment ?? false) &&
@@ -1608,17 +1311,6 @@ export function verifySubmissionDocument(
     message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     fingerprint,
     clickOccurred: true,
-    verificationObservation: {
-      url: document.location?.href ?? '',
-      language: (
-        document.documentElement.getAttribute('lang')?.trim() ||
-        document.defaultView?.navigator.language ||
-        'en'
-      ).slice(0, 100),
-      feedbackMessages,
-      editorCleared,
-      renderedCommentAdded,
-    },
   };
 }
 
@@ -1673,12 +1365,7 @@ export async function prepareSubmissionDocument(
     page: buildPageContext(document),
     form: buildFormSummary(document),
   };
-  const formPlan = expected?.formPlan;
-  if (
-    expected &&
-    !formPlan &&
-    analysis.form.hasWebsiteField !== expected.hasWebsiteField
-  ) {
+  if (expected && analysis.form.hasWebsiteField !== expected.hasWebsiteField) {
     return preparationError(
       'validation_error',
       'LINK_PLACEMENT_CHANGED',
@@ -1705,7 +1392,7 @@ export async function prepareSubmissionDocument(
       fingerprint
     );
   }
-  if (!formPlan && analysis.form.readiness !== 'ready') {
+  if (analysis.form.readiness !== 'ready') {
     return preparationError(
       'validation_error',
       analysis.form.message,
@@ -1713,24 +1400,7 @@ export async function prepareSubmissionDocument(
     );
   }
 
-  const plannedControls = formPlan
-    ? resolvePlannedFormControls(document, formPlan)
-    : null;
-  if (formPlan && !plannedControls) {
-    return preparationError(
-      'validation_error',
-      'PAGE_CHANGED_SINCE_GENERATION',
-      fingerprint
-    );
-  }
-  if (plannedControls && hasUnsafePlannedFormContext(plannedControls)) {
-    return preparationError(
-      'validation_error',
-      'FORM_PLAN_UNSAFE_SUBMIT',
-      fingerprint
-    );
-  }
-  const editor = plannedControls?.editor ?? findEditor(document);
+  const editor = findEditor(document);
   if (!editor) {
     return preparationError(
       'validation_error',
@@ -1738,8 +1408,8 @@ export async function prepareSubmissionDocument(
       fingerprint
     );
   }
-  const container = plannedControls?.container ?? findContainer(editor);
-  const submit = plannedControls?.submit ?? findSubmit(container);
+  const container = findContainer(editor);
+  const submit = findSubmit(container);
   if (!submit) {
     return preparationError(
       'validation_error',
@@ -1750,69 +1420,23 @@ export async function prepareSubmissionDocument(
   const displayName = input.displayName?.trim() ?? '';
   const email = input.email?.trim() ?? '';
   const websiteUrl = input.websiteUrl.trim();
-  const nameInput = formPlan
-    ? (plannedControls?.nameInput ?? null)
-    : findInput(container, 'name');
-  const emailInput = formPlan
-    ? (plannedControls?.emailInput ?? null)
-    : findInput(container, 'email');
-  const websiteInput = formPlan
-    ? (plannedControls?.websiteInput ?? null)
-    : findInput(container, 'website');
-  const requiredRoles = new Set(formPlan?.requiredRoles ?? []);
-  if ((requiredRoles.has('name') || isRequiredInput(nameInput)) && !nameInput) {
-    return preparationError(
-      'validation_error',
-      'FORM_PLAN_REQUIRED_FIELD_MISSING',
-      fingerprint
-    );
-  }
-  if (
-    (requiredRoles.has('email') || isRequiredInput(emailInput)) &&
-    !emailInput
-  ) {
-    return preparationError(
-      'validation_error',
-      'FORM_PLAN_REQUIRED_FIELD_MISSING',
-      fingerprint
-    );
-  }
-  if (formPlan && requiredRoles.has('website') && !websiteInput) {
-    return preparationError(
-      'validation_error',
-      'FORM_PLAN_REQUIRED_FIELD_MISSING',
-      fingerprint
-    );
-  }
-  if (
-    (requiredRoles.has('name') || isRequiredInput(nameInput)) &&
-    !displayName
-  ) {
+  const nameInput = findInput(container, 'name');
+  const emailInput = findInput(container, 'email');
+  const websiteInput = findInput(container, 'website');
+  if (isRequiredInput(nameInput) && !displayName) {
     return preparationError(
       'validation_error',
       'DISPLAY_NAME_REQUIRED',
       fingerprint
     );
   }
-  if ((requiredRoles.has('email') || isRequiredInput(emailInput)) && !email) {
+  if (isRequiredInput(emailInput) && !email) {
     return preparationError('validation_error', 'EMAIL_REQUIRED', fingerprint);
   }
-  if (
-    websiteInput &&
-    (requiredRoles.has('website') || isRequiredInput(websiteInput)) &&
-    !websiteUrl
-  ) {
+  if (websiteInput && isRequiredInput(websiteInput) && !websiteUrl) {
     return preparationError(
       'validation_error',
       'WEBSITE_REQUIRED',
-      fingerprint
-    );
-  }
-
-  if (plannedControls && hasUnmappedRequiredControl(plannedControls)) {
-    return preparationError(
-      'validation_error',
-      'FORM_PLAN_REQUIRED_FIELD_MISSING',
       fingerprint
     );
   }
@@ -1845,52 +1469,32 @@ export async function prepareSubmissionDocument(
       setNativeValue(websiteInput, websiteUrl);
     }
 
-    if (formPlan) await waitForEnabledElement(document, submit);
-    else await waitForEnabledSubmit(document, analysis.form.submitLabel);
+    await waitForEnabledSubmit(document, analysis.form.submitLabel);
 
-    const markedPlanControls = formPlan
-      ? resolvePlannedFormControls(document, formPlan)
+    const markedEditor = findEditor(document);
+    const markedSubmit = markedEditor
+      ? findSubmit(findContainer(markedEditor))
       : null;
-    const markedEditor = formPlan
-      ? (markedPlanControls?.editor ?? null)
-      : findEditor(document);
-    const markedSubmit = formPlan
-      ? (markedPlanControls?.submit ?? null)
-      : markedEditor
-        ? findSubmit(findContainer(markedEditor))
-        : null;
-    const markedContainer = formPlan
-      ? (markedPlanControls?.container ?? null)
-      : markedEditor
-        ? findContainer(markedEditor)
-        : null;
-    const markedNameInput = formPlan
-      ? (markedPlanControls?.nameInput ?? null)
-      : markedContainer
-        ? findInput(markedContainer, 'name')
-        : null;
-    const markedEmailInput = formPlan
-      ? (markedPlanControls?.emailInput ?? null)
-      : markedContainer
-        ? findInput(markedContainer, 'email')
-        : null;
-    const markedWebsiteInput = formPlan
-      ? (markedPlanControls?.websiteInput ?? null)
-      : markedContainer
-        ? findInput(markedContainer, 'website')
-        : null;
+    const markedContainer = markedEditor ? findContainer(markedEditor) : null;
+    const markedNameInput = markedContainer
+      ? findInput(markedContainer, 'name')
+      : null;
+    const markedEmailInput = markedContainer
+      ? findInput(markedContainer, 'email')
+      : null;
+    const markedWebsiteInput = markedContainer
+      ? findInput(markedContainer, 'website')
+      : null;
     if (
       !markedEditor ||
       !markedSubmit ||
       !markedContainer ||
       isDisabled(markedSubmit) ||
-      (formPlan && isUnsafePlannedSubmit(markedSubmit)) ||
-      (!formPlan &&
-        (structuralDescriptor(markedEditor) !== analysis.form.editorLabel ||
-          elementDescriptor(markedSubmit) !== analysis.form.submitLabel ||
-          Boolean(markedNameInput) !== analysis.form.hasNameField ||
-          Boolean(markedEmailInput) !== analysis.form.hasEmailField ||
-          Boolean(markedWebsiteInput) !== analysis.form.hasWebsiteField)) ||
+      structuralDescriptor(markedEditor) !== analysis.form.editorLabel ||
+      elementDescriptor(markedSubmit) !== analysis.form.submitLabel ||
+      Boolean(markedNameInput) !== analysis.form.hasNameField ||
+      Boolean(markedEmailInput) !== analysis.form.hasEmailField ||
+      Boolean(markedWebsiteInput) !== analysis.form.hasWebsiteField ||
       (markedNameInput !== null && markedNameInput.value !== displayName) ||
       (markedEmailInput !== null && markedEmailInput.value !== email) ||
       (markedWebsiteInput !== null &&
@@ -1955,11 +1559,7 @@ export async function clickPreparedSubmissionDocument(
     page: buildPageContext(document),
     form: buildFormSummary(document),
   };
-  const formPlan = prepared.expected.formPlan;
-  if (
-    !formPlan &&
-    analysis.form.hasWebsiteField !== prepared.expected.hasWebsiteField
-  ) {
+  if (analysis.form.hasWebsiteField !== prepared.expected.hasWebsiteField) {
     releaseDomSubmission(document, prepared.domToken);
     return {
       status: 'validation_error',
@@ -1980,11 +1580,7 @@ export async function clickPreparedSubmissionDocument(
       clickOccurred: false,
     };
   }
-  if (
-    analysis.form.readiness === 'login_required' ||
-    analysis.form.readiness === 'captcha_required' ||
-    (!formPlan && analysis.form.readiness !== 'ready')
-  ) {
+  if (analysis.form.readiness !== 'ready') {
     releaseDomSubmission(document, prepared.domToken);
     return {
       status:
@@ -1998,55 +1594,18 @@ export async function clickPreparedSubmissionDocument(
     };
   }
 
-  const plannedControls = formPlan
-    ? resolvePlannedFormControls(document, formPlan)
+  const editor = findEditor(document);
+  const currentContainer = editor ? findContainer(editor) : null;
+  const submit = currentContainer ? findSubmit(currentContainer) : null;
+  const nameInput = currentContainer
+    ? findInput(currentContainer, 'name')
     : null;
-  if (plannedControls && hasUnsafePlannedFormContext(plannedControls)) {
-    releaseDomSubmission(document, prepared.domToken);
-    return {
-      status: 'validation_error',
-      message: 'FORM_PLAN_UNSAFE_SUBMIT',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: false,
-    };
-  }
-  if (plannedControls && hasUnmappedRequiredControl(plannedControls)) {
-    releaseDomSubmission(document, prepared.domToken);
-    return {
-      status: 'validation_error',
-      message: 'FORM_PLAN_REQUIRED_FIELD_MISSING',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: false,
-    };
-  }
-  const editor = formPlan
-    ? (plannedControls?.editor ?? null)
-    : findEditor(document);
-  const currentContainer = formPlan
-    ? (plannedControls?.container ?? null)
-    : editor
-      ? findContainer(editor)
-      : null;
-  const submit = formPlan
-    ? (plannedControls?.submit ?? null)
-    : currentContainer
-      ? findSubmit(currentContainer)
-      : null;
-  const nameInput = formPlan
-    ? (plannedControls?.nameInput ?? null)
-    : currentContainer
-      ? findInput(currentContainer, 'name')
-      : null;
-  const emailInput = formPlan
-    ? (plannedControls?.emailInput ?? null)
-    : currentContainer
-      ? findInput(currentContainer, 'email')
-      : null;
-  const websiteInput = formPlan
-    ? (plannedControls?.websiteInput ?? null)
-    : currentContainer
-      ? findInput(currentContainer, 'website')
-      : null;
+  const emailInput = currentContainer
+    ? findInput(currentContainer, 'email')
+    : null;
+  const websiteInput = currentContainer
+    ? findInput(currentContainer, 'website')
+    : null;
   const activeSubmission = activeDomSubmissions.get(document);
   const domReference = preparedDomReferences.get(prepared.domToken);
   if (
@@ -2141,19 +1700,6 @@ async function waitForEnabledSubmit(
       elementDescriptor(submit) === expectedLabel &&
       !isDisabled(submit)
     ) {
-      return;
-    }
-  } while (Date.now() < deadline);
-}
-
-async function waitForEnabledElement(
-  document: Document,
-  element: HTMLElement
-): Promise<void> {
-  const deadline = Date.now() + SUBMIT_ENABLE_TIMEOUT_MS;
-  do {
-    await waitForDomSettle(document);
-    if (element.isConnected && isVisible(element) && !isDisabled(element)) {
       return;
     }
   } while (Date.now() < deadline);

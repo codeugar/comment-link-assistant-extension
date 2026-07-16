@@ -1,14 +1,4 @@
-import {
-  type GenerateCommentInput,
-  type PlanCommentFormInput,
-  generateComment,
-  planCommentForm,
-} from '@/api/client';
-import {
-  applyFormPlan,
-  buildFormPlanningObservation,
-  hasPlausibleCommentControls,
-} from '@/page/semantics';
+import { type GenerateCommentInput, generateComment } from '@/api/client';
 import type {
   PageAnalysis,
   PageSubmissionExpectation,
@@ -27,7 +17,6 @@ import {
   analyzeTab,
   clickPreparedTabSubmission,
   prepareTabSubmission,
-  revealCommentFormTab,
   verifyTabSubmission,
 } from '@/runtime/page-commands';
 import { getBatch, setBatch } from '@/storage/batch';
@@ -48,7 +37,6 @@ const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const TARGET_LOAD_GRACE_MS = 30_000;
-const FORM_REVEAL_SETTLE_MS = 600;
 // Heavy / slow pages keep their tab in `loading` far longer than it takes their
 // server-rendered comment form to appear. Because analyze is now load-tolerant,
 // we hand off to analysis on an on-target tab after this short settle instead of
@@ -74,20 +62,10 @@ export interface BatchRunnerDependencies {
     batchId: string
   ): Promise<WorkerTab | null>;
   analyzeTab(tabId: number, batchId: string): Promise<PageAnalysis>;
-  revealCommentForm(
-    tabId: number,
-    snapshotId: string,
-    candidateId: string,
-    batchId: string
-  ): Promise<boolean>;
   generateComment(
     keys: ProviderApiKeys,
     input: GenerateCommentInput
   ): Promise<string>;
-  planCommentForm(
-    keys: ProviderApiKeys,
-    input: PlanCommentFormInput
-  ): ReturnType<typeof planCommentForm>;
   prepareTabSubmission(
     tabId: number,
     input: PageSubmissionInput,
@@ -147,12 +125,7 @@ const defaultDependencies: BatchRunnerDependencies = {
     await assertWorkerTabOwnership(batchId, tabId);
     return analyzeTab(tabId);
   },
-  async revealCommentForm(tabId, snapshotId, candidateId, batchId) {
-    await assertWorkerTabOwnership(batchId, tabId);
-    return revealCommentFormTab(tabId, snapshotId, candidateId);
-  },
   generateComment,
-  planCommentForm,
   async prepareTabSubmission(tabId, input, target, batchId) {
     await assertWorkerTabOwnership(batchId, tabId);
     return prepareTabSubmission(tabId, input, target);
@@ -441,30 +414,6 @@ async function saveSubmissionResult(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (
-    result.status === 'validation_error' &&
-    result.message === 'PAGE_CHANGED_SINCE_GENERATION' &&
-    !result.clickOccurred &&
-    item.analysis?.formPlan &&
-    (item.formPlanRefreshes ?? 0) < 1
-  ) {
-    const next = updateBatchProgress(
-      batch,
-      {
-        item: {
-          status: 'analyzing',
-          analysis: null,
-          comment: null,
-          prepared: null,
-          formPlanRefreshes: (item.formPlanRefreshes ?? 0) + 1,
-          message: result.message,
-        },
-      },
-      dependencies.now()
-    );
-    await dependencies.setBatch(next);
-    return 'continue';
-  }
   if (result.status === 'login_required') {
     const resumable = result.clickOccurred
       ? batch
@@ -623,12 +572,6 @@ async function advanceOpening(
       return 'wait';
     }
     return saveFailure(batch, 'TARGET_PAGE_LOAD_UNCONFIRMED', dependencies);
-  }
-  if (
-    item.message === 'COMMENT_FORM_REVEALED' &&
-    dependencies.now() - item.updatedAt < FORM_REVEAL_SETTLE_MS
-  ) {
-    return 'wait';
   }
 
   const location = tabLocation(tab);
@@ -807,95 +750,6 @@ async function advanceAnalysis(
     return saveFailure(batch, 'TARGET_PAGE_CONTEXT_MISSING', dependencies);
   }
 
-  const canPlanFormReveal =
-    analysis.form.readiness === 'not_found' &&
-    !item.formRevealAttempted &&
-    analysis.probe?.controlCandidates.some(
-      (candidate) =>
-        candidate.visible &&
-        candidate.enabled &&
-        (candidate.type === 'button' ||
-          candidate.tag === 'a' ||
-          candidate.attributes.role === 'button' ||
-          (candidate.tag === 'input' && candidate.type === 'button'))
-    );
-  const needsSemanticFormPlan =
-    analysis.form.readiness === 'not_found' &&
-    Boolean(analysis.probe && hasPlausibleCommentControls(analysis.probe));
-  if (analysis.probe && (needsSemanticFormPlan || canPlanFormReveal)) {
-    try {
-      const keys = await dependencies.getProviderApiKeys();
-      const plan = await dependencies.planCommentForm(keys, {
-        provider: batch.settings.provider,
-        observation: buildFormPlanningObservation(
-          analysis.probe,
-          analysis.page
-        ),
-      });
-      if (
-        plan.decision === 'reveal_form' &&
-        plan.revealCandidateId &&
-        canPlanFormReveal
-      ) {
-        const dispatched = updateBatchProgress(
-          batch,
-          {
-            item: {
-              status: 'opening',
-              formRevealAttempted: true,
-              message: 'COMMENT_FORM_REVEAL_DISPATCHED',
-            },
-          },
-          dependencies.now()
-        );
-        await dependencies.setBatch(dispatched);
-        let clicked: boolean;
-        try {
-          clicked = await dependencies.revealCommentForm(
-            tab.id,
-            analysis.probe.snapshotId,
-            plan.revealCandidateId,
-            batch.id
-          );
-        } catch (error) {
-          return saveFailure(dispatched, errorMessage(error), dependencies);
-        }
-        if (clicked) {
-          const next = updateBatchProgress(
-            dispatched,
-            {
-              item: {
-                status: 'opening',
-                message: 'COMMENT_FORM_REVEALED',
-              },
-            },
-            dependencies.now()
-          );
-          await dependencies.setBatch(next);
-          return 'continue';
-        }
-        const blocked = completeCurrentItem(
-          dispatched,
-          'no_form',
-          'COMMENT_FORM_REVEAL_BLOCKED',
-          dependencies.now()
-        );
-        await dependencies.setBatch(blocked);
-        return afterTerminal(blocked);
-      }
-      const planned = applyFormPlan(analysis, analysis.probe, plan);
-      analysis = {
-        page: planned.page,
-        form: planned.form,
-        formPlan: planned.formPlan,
-      };
-    } catch (error) {
-      return saveFailure(batch, errorMessage(error), dependencies);
-    }
-  } else {
-    analysis = { page: analysis.page, form: analysis.form };
-  }
-
   if (analysis.form.readiness === 'not_found') {
     const next = completeCurrentItem(
       batch,
@@ -1001,8 +855,7 @@ async function prepareGeneratedComment(
     websiteUrl:
       item.analysis.form.hasWebsiteField &&
       (batch.settings.linkMode === 'prefer-website-field' ||
-        item.analysis.form.requiresWebsiteField ||
-        item.analysis.formPlan?.requiredRoles.includes('website'))
+        item.analysis.form.requiresWebsiteField)
         ? batch.settings.websiteUrl
         : '',
   };
@@ -1011,7 +864,6 @@ async function prepareGeneratedComment(
     editorLabel: item.analysis.form.editorLabel,
     submitLabel: item.analysis.form.submitLabel,
     hasWebsiteField: item.analysis.form.hasWebsiteField,
-    formPlan: item.analysis.formPlan,
   };
 
   try {
@@ -1078,10 +930,7 @@ async function advanceGeneration(
     dependencies.now()
   );
   await dependencies.setBatch(requested);
-  const websiteFieldRequired = Boolean(
-    item.analysis.form.requiresWebsiteField ||
-      item.analysis.formPlan?.requiredRoles.includes('website')
-  );
+  const websiteFieldRequired = Boolean(item.analysis.form.requiresWebsiteField);
   const effectiveLinkMode = websiteFieldRequired
     ? 'prefer-website-field'
     : requested.settings.linkMode === 'prefer-website-field' &&

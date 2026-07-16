@@ -1,6 +1,3 @@
-import type { FormPlan } from '@/api/form-planner';
-import type { PageProbeSnapshot } from './probe';
-
 export type PageReadiness =
   | 'ready'
   | 'login_required'
@@ -30,8 +27,6 @@ export interface CommentFormSummary {
 export interface PageAnalysis {
   page: TargetPageContext;
   form: CommentFormSummary;
-  probe?: PageProbeSnapshot;
-  formPlan?: FormPlan;
 }
 
 export interface PageSubmissionInput {
@@ -46,7 +41,6 @@ export interface PageSubmissionExpectation {
   editorLabel: string;
   submitLabel: string;
   hasWebsiteField: boolean;
-  formPlan?: FormPlan;
 }
 
 export interface PageSubmissionTarget extends PageSubmissionExpectation {
@@ -79,18 +73,9 @@ export type SubmissionStatus =
   | 'validation_error'
   | 'unknown';
 
-export interface SubmissionVerificationObservation {
-  url: string;
-  language: string;
-  feedbackMessages: string[];
-  editorCleared: boolean;
-  renderedCommentAdded: boolean;
-}
-
 export interface PageSubmissionResult {
   status: SubmissionStatus;
   message: string;
   fingerprint: string;
   clickOccurred: boolean;
-  verificationObservation?: SubmissionVerificationObservation;
 }
