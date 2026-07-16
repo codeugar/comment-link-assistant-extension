@@ -220,8 +220,8 @@ describe('page command runtime', () => {
       },
     };
     const result = {
-      status: 'published' as const,
-      message: 'COMMENT_PUBLISHED',
+      status: 'submitted' as const,
+      message: 'COMMENT_SUBMITTED',
       fingerprint: prepared.fingerprint,
     };
     const sendMessage = vi.fn().mockResolvedValue({
@@ -285,8 +285,8 @@ describe('page command runtime', () => {
       },
     };
     const result = {
-      status: 'submitted_not_visible' as const,
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      status: 'submitted' as const,
+      message: 'COMMENT_SUBMITTED',
       fingerprint: prepared.fingerprint,
     };
     const sendMessage = vi
@@ -348,8 +348,8 @@ describe('page command runtime', () => {
         sendMessage: vi.fn().mockResolvedValue({
           type: 'submission',
           result: {
-            status: 'published',
-            message: 'COMMENT_PUBLISHED',
+            status: 'submitted',
+            message: 'COMMENT_SUBMITTED',
             fingerprint: prepared.fingerprint,
           },
         }),
@@ -386,8 +386,8 @@ describe('page command runtime', () => {
       .mockResolvedValueOnce({
         type: 'submission',
         result: {
-          status: 'published',
-          message: 'COMMENT_PUBLISHED',
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
           fingerprint: prepared.fingerprint,
         },
       });
@@ -431,7 +431,7 @@ describe('page command runtime', () => {
           fillWebsiteField: true,
         }
       )
-    ).resolves.toMatchObject({ status: 'published' });
+    ).resolves.toMatchObject({ status: 'submitted' });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({
@@ -504,8 +504,8 @@ describe('page command runtime', () => {
         }
       )
     ).resolves.toMatchObject({
-      status: 'unknown',
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
@@ -533,8 +533,8 @@ describe('page command runtime', () => {
       .mockResolvedValueOnce({
         type: 'submission',
         result: {
-          status: 'submitted_not_visible',
-          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
           fingerprint: prepared.fingerprint,
         },
       });
@@ -578,7 +578,7 @@ describe('page command runtime', () => {
           fillWebsiteField: true,
         }
       )
-    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
+    ).resolves.toMatchObject({ status: 'submitted' });
     expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({
       command: {
@@ -664,8 +664,8 @@ describe('page command runtime', () => {
       .mockResolvedValueOnce({
         type: 'submission',
         result: {
-          status: 'unknown',
-          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
           fingerprint: prepared.fingerprint,
         },
       });
@@ -715,7 +715,7 @@ describe('page command runtime', () => {
       type: 'preparation',
       preparation: { ok: true, prepared },
     });
-    await expect(first).resolves.toMatchObject({ status: 'unknown' });
+    await expect(first).resolves.toMatchObject({ status: 'submitted' });
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 });

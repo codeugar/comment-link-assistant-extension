@@ -1265,8 +1265,8 @@ export function verifySubmissionDocument(
     (pendingFeedback || successFeedback || renderedCommentAdded)
   ) {
     return {
-      status: 'unknown',
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
     };
@@ -1279,16 +1279,16 @@ export function verifySubmissionDocument(
       (successFeedback && !renderedCommentAdded))
   ) {
     return {
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
     };
   }
   if (!errorFeedback && renderedCommentAdded) {
     return {
-      status: 'published',
-      message: 'COMMENT_PUBLISHED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
     };
@@ -1307,8 +1307,8 @@ export function verifySubmissionDocument(
     };
   }
   return {
-    status: 'unknown',
-    message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+    status: 'submitted',
+    message: 'COMMENT_SUBMITTED',
     fingerprint,
     clickOccurred: true,
   };

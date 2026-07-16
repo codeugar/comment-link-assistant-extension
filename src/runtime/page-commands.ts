@@ -319,8 +319,8 @@ function isAllowedSubmissionReturnUrl(
 
 function unconfirmedSubmission(fingerprint: string): PageSubmissionResult {
   return {
-    status: 'unknown',
-    message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+    status: 'submitted',
+    message: 'COMMENT_SUBMITTED',
     fingerprint,
     clickOccurred: true,
   };

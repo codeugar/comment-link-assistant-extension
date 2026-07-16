@@ -66,12 +66,10 @@ export type PageSubmissionPreparation =
   | { ok: false; result: PageSubmissionResult };
 
 export type SubmissionStatus =
-  | 'published'
-  | 'submitted_not_visible'
+  | 'submitted'
   | 'login_required'
   | 'captcha_required'
-  | 'validation_error'
-  | 'unknown';
+  | 'validation_error';
 
 export interface PageSubmissionResult {
   status: SubmissionStatus;

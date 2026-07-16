@@ -193,7 +193,7 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
+    ).resolves.toMatchObject({ status: 'submitted' });
   });
 
   it('does not select a comment form inside a hidden iframe', async () => {
@@ -478,7 +478,7 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'submitted_not_visible' });
+    ).resolves.toMatchObject({ status: 'submitted' });
   });
 
   it('marks an accepted comment as not visible when the page only shows a success message', async () => {
@@ -512,8 +512,8 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
     });
     expect(
       (document.querySelector('textarea') as HTMLTextAreaElement).value
@@ -552,8 +552,8 @@ describe('comment page DOM helpers', () => {
     await expect(
       fillAndSubmitDocument(document, { comment, websiteUrl: '' }, 0)
     ).resolves.toMatchObject({
-      status: 'published',
-      message: 'COMMENT_PUBLISHED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
     });
   });
 
@@ -586,7 +586,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted_not_visible');
+    expect(result.status).toBe('submitted');
     expect(destructiveClicks).toBe(0);
     expect(postClicks).toBe(1);
   });
@@ -622,7 +622,7 @@ describe('comment page DOM helpers', () => {
         0
       );
 
-      expect(result.status).toBe('submitted_not_visible');
+      expect(result.status).toBe('submitted');
       expect(socialClicks).toBe(0);
       expect(postClicks).toBe(1);
     }
@@ -711,7 +711,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted_not_visible');
+    expect(result.status).toBe('submitted');
     expect(
       (document.querySelector('input[name="author"]') as HTMLInputElement).value
     ).toBe('');
@@ -867,7 +867,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted_not_visible');
+    expect(result.status).toBe('submitted');
     expect(
       (document.querySelector('input[name="website"]') as HTMLInputElement)
         .value
@@ -1090,7 +1090,7 @@ describe('comment page DOM helpers', () => {
       }
     );
 
-    expect(result).toMatchObject({ status: 'unknown', clickOccurred: true });
+    expect(result).toMatchObject({ status: 'submitted', clickOccurred: true });
     expect(submitted).toBe(true);
   });
 
@@ -1127,7 +1127,7 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted_not_visible',
+      status: 'submitted',
       clickOccurred: true,
     });
   });
@@ -1154,7 +1154,7 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted_not_visible',
+      status: 'submitted',
       clickOccurred: true,
     });
     expect(result).not.toHaveProperty('verificationObservation');
@@ -1181,7 +1181,7 @@ describe('comment page DOM helpers', () => {
         0
       )
     ).resolves.toMatchObject({
-      status: 'submitted_not_visible',
+      status: 'submitted',
       clickOccurred: true,
     });
   });
@@ -1207,7 +1207,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not treat hidden success feedback as publication evidence', async () => {
@@ -1238,7 +1238,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not treat a hidden rendered comment as publication evidence', async () => {
@@ -1272,7 +1272,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('rejects a same-looking form that replaces the prepared DOM nodes', async () => {
@@ -1476,7 +1476,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not confuse an input-generated comment preview with publication', async () => {
@@ -1507,7 +1507,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not treat a delayed nested preview as a published comment', async () => {
@@ -1539,7 +1539,7 @@ describe('comment page DOM helpers', () => {
       },
       150
     );
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not treat draft markup inside the comment form as publication', async () => {
@@ -1568,7 +1568,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('submitted');
   });
 
   it('waits past unrelated mutations when an old success message exists', async () => {
@@ -1602,7 +1602,7 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('submitted_not_visible');
+    expect(result.status).toBe('submitted');
   });
 
   it('detects success text appended to an existing live region', async () => {
@@ -1629,22 +1629,19 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('submitted_not_visible');
+    expect(result.status).toBe('submitted');
   });
 
   it('distinguishes moderation from an unconfirmed result', () => {
     document.body.innerHTML =
       '<p class="comment-awaiting-moderation">Your comment is awaiting moderation.</p>';
-    const submittedNotVisible = verifySubmissionDocument(
-      document,
-      'A useful point'
-    );
-    expect(submittedNotVisible.status).toBe('submitted_not_visible');
-    expect(submittedNotVisible).not.toHaveProperty('verificationObservation');
+    const submitted = verifySubmissionDocument(document, 'A useful point');
+    expect(submitted.status).toBe('submitted');
+    expect(submitted).not.toHaveProperty('verificationObservation');
 
     document.body.innerHTML = '<p>No status message here.</p>';
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
-      'unknown'
+      'submitted'
     );
 
     document.body.innerHTML = `
@@ -1654,7 +1651,7 @@ describe('comment page DOM helpers', () => {
       </section>
     `;
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
-      'unknown'
+      'submitted'
     );
   });
 
@@ -1664,8 +1661,8 @@ describe('comment page DOM helpers', () => {
 
     const result = verifySubmissionDocument(document, 'A useful point');
     expect(result).toMatchObject({
-      status: 'unknown',
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
     });
     expect(result).not.toHaveProperty('verificationObservation');
   });
@@ -1774,8 +1771,8 @@ describe('comment page DOM helpers', () => {
     });
 
     expect(result).toMatchObject({
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
     });
   });
 
@@ -1806,7 +1803,7 @@ describe('comment page DOM helpers', () => {
       renderedComment: false,
     });
 
-    expect(result.status).toBe('published');
+    expect(result.status).toBe('submitted');
   });
 
   it('does not verify a submission on a different page URL', async () => {
@@ -1822,8 +1819,8 @@ describe('comment page DOM helpers', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'unknown',
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
       },
     });
   });
@@ -1847,7 +1844,7 @@ describe('comment page DOM helpers', () => {
 
     expect(result).toMatchObject({
       type: 'submission',
-      result: { status: 'submitted_not_visible' },
+      result: { status: 'submitted' },
     });
     document.defaultView?.history.replaceState({}, '', '/');
   });

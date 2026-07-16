@@ -129,8 +129,8 @@ export async function runPageCommand(
       return {
         type: 'submission',
         result: {
-          status: 'unknown',
-          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
           fingerprint: command.fingerprint,
           clickOccurred: true,
         },
@@ -142,14 +142,14 @@ export async function runPageCommand(
       command.baseline
     );
     if (
-      result.status === 'unknown' &&
+      result.status === 'submitted' &&
       hasNewWordPressCommentAnchor(document.location.href, command.expectedUrl)
     ) {
       return {
         type: 'submission',
         result: {
-          status: 'submitted_not_visible',
-          message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
           fingerprint: command.fingerprint,
           clickOccurred: true,
         },

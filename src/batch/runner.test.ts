@@ -88,9 +88,9 @@ function dependencies(
 ) {
   let stored: BatchSnapshot | null = initial;
   let now = 10;
-  const published: PageSubmissionResult = {
-    status: 'published',
-    message: 'COMMENT_PUBLISHED',
+  const submitted: PageSubmissionResult = {
+    status: 'submitted',
+    message: 'COMMENT_SUBMITTED',
     fingerprint: prepared.fingerprint,
     clickOccurred: true,
   };
@@ -127,9 +127,9 @@ function dependencies(
     })),
     clickPreparedTabSubmission: vi.fn(async () => {
       expect(stored?.items[0]?.status).toBe('click_dispatched');
-      return published;
+      return submitted;
     }),
-    verifyTabSubmission: vi.fn(async () => published),
+    verifyTabSubmission: vi.fn(async () => submitted),
     now: () => now++,
     ...overrides,
   };
@@ -952,14 +952,14 @@ describe('batch runner', () => {
       },
       3
     );
-    const submittedNotVisible: PageSubmissionResult = {
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+    const submitted: PageSubmissionResult = {
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
     const context = dependencies(batch, {
-      verifyTabSubmission: vi.fn(async () => submittedNotVisible),
+      verifyTabSubmission: vi.fn(async () => submitted),
     });
 
     await advanceBatchStep(context.deps);
@@ -1035,8 +1035,8 @@ describe('batch runner', () => {
 
   it('treats a clicked but unconfirmed result as submitted without any re-fetch', async () => {
     const unconfirmed: PageSubmissionResult = {
-      status: 'unknown',
-      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };

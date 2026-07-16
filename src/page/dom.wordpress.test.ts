@@ -202,8 +202,8 @@ describe('WordPress submit-receipt confirmation', () => {
     });
 
     expect(result).toMatchObject({
-      status: 'submitted_not_visible',
-      message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       clickOccurred: true,
     });
   });
@@ -244,8 +244,8 @@ describe('WordPress submit-receipt confirmation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'submitted_not_visible',
-        message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
       },
     });
   });
