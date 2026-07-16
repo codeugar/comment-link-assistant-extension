@@ -102,10 +102,7 @@
     "message": "Comment ready"
   },
   "commentSubmitted": {
-    "message": "Comment immediately published"
-  },
-  "commentSubmittedNotVisible": {
-    "message": "Comment submitted but not visible"
+    "message": "Comment submitted"
   },
   "commentFailed": {
     "message": "The comment could not be submitted"
@@ -261,7 +258,7 @@
     "message": "Batch stopped"
   },
   "batchSummary": {
-    "message": "$1 immediately published · $2 submitted but not visible · $3 failed · $4 unconfirmed"
+    "message": "$1 submitted · $2 failed"
   },
   "startNewBatch": {
     "message": "Start a new batch"
@@ -287,14 +284,8 @@
   "batchStatusVerifying": {
     "message": "Verifying result"
   },
-  "batchStatusCheckingPublic": {
-    "message": "Checking public visibility"
-  },
-  "batchStatusPublished": {
-    "message": "Immediately published"
-  },
-  "batchStatusSubmittedNotVisible": {
-    "message": "Submitted but not visible"
+  "batchStatusSubmitted": {
+    "message": "Submitted"
   },
   "batchStatusLoginRequired": {
     "message": "Login required"
@@ -307,9 +298,6 @@
   },
   "batchStatusValidationError": {
     "message": "Submission failed"
-  },
-  "batchStatusUnknown": {
-    "message": "Submission unconfirmed"
   },
   "batchStatusFailed": {
     "message": "Failed"
@@ -337,9 +325,6 @@
   },
   "unsafeSubmitBlocked": {
     "message": "The selected action was blocked because it was not a safe comment submission. Nothing was submitted."
-  },
-  "siteRejectedByPriorResult": {
-    "message": "Skipped because an earlier result rejected this website."
   },
   "commentFormRevealed": {
     "message": "AI identified and opened the control that reveals the comment form."
@@ -409,11 +394,5 @@
   },
   "activityReadingFeedback": {
     "message": "Interpreting the submission feedback"
-  },
-  "activityCheckingAnonymousPage": {
-    "message": "Opening a credential-free public copy"
-  },
-  "activityLookingForFingerprint": {
-    "message": "Looking for the published comment"
   }
 }

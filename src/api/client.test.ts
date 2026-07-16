@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  classifySubmissionOutcome,
-  generateComment,
-  planCommentForm,
-} from './client';
+import { generateComment, planCommentForm } from './client';
 
 const input = {
   provider: 'deepseek' as const,
@@ -68,14 +64,6 @@ const formPlan = {
   submitCandidateId: 'button-submit',
   requiredRoles: ['comment'],
   uncertainties: [],
-};
-
-const submissionOutcomeObservation = {
-  url: 'https://blog.example/post',
-  language: 'sr',
-  feedbackMessages: ['Komentar čeka odobrenje.'],
-  editorCleared: true,
-  renderedCommentAdded: false,
 };
 
 afterEach(() => {
@@ -511,137 +499,5 @@ describe('comment form planning', () => {
         { provider: 'deepseek', observation: formPlanningObservation }
       )
     ).rejects.toThrow('FORM_PLAN_UNKNOWN_CANDIDATE');
-  });
-});
-
-describe('submission outcome classification', () => {
-  it('classifies an outcome with the selected DeepSeek provider', async () => {
-    const classification = {
-      status: 'submitted_not_visible',
-      reason: 'The feedback says the comment awaits approval.',
-    };
-    const fetchMock = vi.fn(
-      async (_url: string, _request?: RequestInit) =>
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { content: JSON.stringify(classification) } }],
-          }),
-          { status: 200 }
-        )
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      classifySubmissionOutcome(
-        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
-        {
-          provider: 'deepseek',
-          observation: submissionOutcomeObservation,
-        }
-      )
-    ).resolves.toEqual(classification);
-
-    const [url, request] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('https://api.deepseek.com/chat/completions');
-    const body = JSON.parse(String(request?.body));
-    expect(body).toMatchObject({
-      model: 'deepseek-v4-flash',
-      response_format: { type: 'json_object' },
-      temperature: 0,
-    });
-    expect(body.messages[1].content).toContain('Komentar čeka odobrenje.');
-    expect(body.messages[1].content).toContain('untrusted webpage data');
-  });
-
-  it('downgrades a claimed outcome when no explicit evidence was observed', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              choices: [
-                {
-                  message: {
-                    content: JSON.stringify({
-                      status: 'published',
-                      reason: 'The cleared editor means it was published.',
-                    }),
-                  },
-                },
-              ],
-            }),
-            { status: 200 }
-          )
-      )
-    );
-
-    await expect(
-      classifySubmissionOutcome(
-        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
-        {
-          provider: 'deepseek',
-          observation: {
-            ...submissionOutcomeObservation,
-            feedbackMessages: [],
-            editorCleared: true,
-            renderedCommentAdded: false,
-          },
-        }
-      )
-    ).resolves.toEqual({
-      status: 'unknown',
-      reason: 'No explicit submission evidence was observed.',
-    });
-  });
-
-  it('classifies an outcome through the existing KIE streaming transport', async () => {
-    const serialized = JSON.stringify({
-      status: 'unknown',
-      reason: 'The evidence is ambiguous.',
-    });
-    const splitAt = Math.floor(serialized.length / 2);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(
-            [
-              `data: ${JSON.stringify({
-                candidates: [
-                  {
-                    content: {
-                      parts: [{ text: serialized.slice(0, splitAt) }],
-                    },
-                  },
-                ],
-              })}`,
-              `data: ${JSON.stringify({
-                candidates: [
-                  {
-                    content: {
-                      parts: [{ text: serialized.slice(splitAt) }],
-                    },
-                  },
-                ],
-              })}`,
-            ].join('\n\n'),
-            { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
-          )
-      )
-    );
-
-    await expect(
-      classifySubmissionOutcome(
-        { deepseekApiKey: '', kieApiKey: 'kie-key' },
-        {
-          provider: 'kie-gemini',
-          observation: submissionOutcomeObservation,
-        }
-      )
-    ).resolves.toEqual({
-      status: 'unknown',
-      reason: 'The evidence is ambiguous.',
-    });
   });
 });

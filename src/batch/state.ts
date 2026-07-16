@@ -15,7 +15,6 @@ const progressStatuses = new Set<BatchItemStatus>([
   'prepared',
   'click_dispatched',
   'verifying',
-  'checking_public',
 ]);
 
 const pauseStatuses = [
@@ -24,11 +23,9 @@ const pauseStatuses = [
 ] as const satisfies readonly BatchItemStatus[];
 
 const completionStatuses = [
-  'published',
-  'submitted_not_visible',
+  'submitted',
   'no_form',
   'validation_error',
-  'unknown',
   'failed',
 ] as const satisfies readonly BatchItemStatus[];
 
@@ -53,7 +50,6 @@ export interface BatchItemProgressUpdate {
     | 'prepared'
     | 'click_dispatched'
     | 'verifying'
-    | 'checking_public'
   >;
   analysis?: BatchItem['analysis'];
   comment?: BatchItem['comment'];
@@ -280,11 +276,9 @@ export function resumeBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
 const preservedStopStatuses = new Set<BatchItemStatus>([
   'click_dispatched',
   'verifying',
-  'published',
-  'submitted_not_visible',
+  'submitted',
   'no_form',
   'validation_error',
-  'unknown',
   'failed',
   'stopped',
 ]);

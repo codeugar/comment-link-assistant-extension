@@ -12,14 +12,11 @@ export const BATCH_ITEM_STATUSES = [
   'prepared',
   'click_dispatched',
   'verifying',
-  'checking_public',
-  'published',
-  'submitted_not_visible',
+  'submitted',
   'login_required',
   'captcha_required',
   'no_form',
   'validation_error',
-  'unknown',
   'failed',
   'stopped',
 ] as const;
@@ -206,11 +203,9 @@ const pausedItemStatuses = new Set<BatchItemStatus>([
 ]);
 
 const completedItemStatuses = new Set<BatchItemStatus>([
-  'published',
-  'submitted_not_visible',
+  'submitted',
   'no_form',
   'validation_error',
-  'unknown',
   'failed',
   'stopped',
 ]);

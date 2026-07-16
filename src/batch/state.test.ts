@@ -128,11 +128,11 @@ describe('batch state', () => {
   it('advances after terminal success or failure and completes at the end', () => {
     let batch = createTwoItemBatch();
 
-    batch = completeCurrentItem(batch, 'published', 'Published', 2_000);
+    batch = completeCurrentItem(batch, 'submitted', 'Submitted', 2_000);
     expect(batch).toMatchObject({ status: 'running', currentIndex: 1 });
     expect(batch.items[0]).toMatchObject({
-      status: 'published',
-      message: 'Published',
+      status: 'submitted',
+      message: 'Submitted',
       updatedAt: 2_000,
     });
 
@@ -180,10 +180,10 @@ describe('batch state', () => {
       1_500
     );
 
-    batch = completeCurrentItem(batch, 'published', 'Published', 2_000);
+    batch = completeCurrentItem(batch, 'submitted', 'Submitted', 2_000);
 
     expect(batch.items[0]).toMatchObject({
-      status: 'published',
+      status: 'submitted',
       analysis: null,
       comment: 'A generated comment',
       prepared: null,
@@ -203,7 +203,7 @@ describe('batch state', () => {
       { item: { status: 'generating', comment: 'Generated comment' } },
       1_300
     );
-    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 1_400);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 1_400);
 
     expect(batch.items[0]?.events).toEqual([
       { status: 'queued', message: '', at: 1_000 },
@@ -211,8 +211,8 @@ describe('batch state', () => {
       { status: 'analyzing', message: '', at: 1_200 },
       { status: 'generating', message: '', at: 1_300 },
       {
-        status: 'published',
-        message: 'COMMENT_PUBLISHED',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
         at: 1_400,
       },
     ]);
@@ -244,43 +244,43 @@ describe('batch state', () => {
     }
   );
 
-  it('records an unknown result once and immediately advances', () => {
+  it('records a submitted result once and immediately advances', () => {
     const completed = completeCurrentItem(
       createTwoItemBatch(),
-      'unknown',
-      'Submission could not be confirmed',
+      'submitted',
+      'COMMENT_SUBMITTED',
       2_000
     );
 
     expect(completed).toMatchObject({ status: 'running', currentIndex: 1 });
     expect(completed.items[0]).toMatchObject({
-      status: 'unknown',
-      message: 'Submission could not be confirmed',
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
       updatedAt: 2_000,
     });
     expect(completed.items[1]?.status).toBe('queued');
   });
 
-  it('completes when the final result is unknown', () => {
+  it('completes when the final result is a terminal failure', () => {
     let batch = createTwoItemBatch();
-    batch = completeCurrentItem(batch, 'published', '', 2_000);
-    batch = completeCurrentItem(batch, 'unknown', '', 3_000);
+    batch = completeCurrentItem(batch, 'submitted', '', 2_000);
+    batch = completeCurrentItem(batch, 'failed', '', 3_000);
 
     expect(batch).toMatchObject({
       status: 'completed',
       currentIndex: 2,
     });
-    expect(batch.items[1]?.status).toBe('unknown');
+    expect(batch.items[1]?.status).toBe('failed');
   });
 
   it('stops only unprocessed items and preserves attempted outcomes', () => {
     let batch = createTwoItemBatch();
-    batch = completeCurrentItem(batch, 'unknown', 'Unconfirmed click', 2_000);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 2_000);
 
     const stopped = stopBatch(batch, 3_000);
     expect(stopped).toMatchObject({ status: 'stopped', updatedAt: 3_000 });
     expect(stopped.items[0]).toMatchObject({
-      status: 'unknown',
+      status: 'submitted',
       updatedAt: 2_000,
     });
     expect(stopped.items[1]).toMatchObject({

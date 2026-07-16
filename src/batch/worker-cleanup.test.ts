@@ -17,7 +17,7 @@ describe('terminal batch worker cleanup', () => {
       now: 1,
     });
     batch = updateBatchProgress(batch, { workerTabId: 7 }, 2);
-    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 3);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 3);
     const closeWorkerTab = vi.fn(async () => true);
     const setBatch = vi.fn(async (value) => value);
 
@@ -47,7 +47,7 @@ describe('terminal batch worker cleanup', () => {
       now: 1,
     });
     batch = updateBatchProgress(batch, { workerTabId: 7 }, 2);
-    batch = completeCurrentItem(batch, 'published', 'COMMENT_PUBLISHED', 3);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 3);
     const setBatch = vi.fn(async (value) => value);
 
     const unchanged = await closeTerminalBatchWorker(batch, {

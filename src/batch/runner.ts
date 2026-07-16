@@ -1,11 +1,9 @@
 import {
   type GenerateCommentInput,
   type PlanCommentFormInput,
-  classifySubmissionOutcome,
   generateComment,
   planCommentForm,
 } from '@/api/client';
-import { fetchPublicPageContainsFingerprint } from '@/page/public-visibility';
 import {
   applyFormPlan,
   buildFormPlanningObservation,
@@ -49,8 +47,6 @@ const RESUME_TARGET_REQUIRED = 'BATCH_RESUME_TARGET_REQUIRED';
 const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
-const PUBLIC_CHECK_ACCEPTED = 'PUBLIC_CHECK_ACCEPTED';
-const PUBLIC_CHECK_UNKNOWN = 'PUBLIC_CHECK_UNKNOWN';
 const TARGET_LOAD_GRACE_MS = 30_000;
 const FORM_REVEAL_SETTLE_MS = 600;
 
@@ -87,7 +83,6 @@ export interface BatchRunnerDependencies {
     keys: ProviderApiKeys,
     input: PlanCommentFormInput
   ): ReturnType<typeof planCommentForm>;
-  classifySubmissionOutcome: typeof classifySubmissionOutcome;
   prepareTabSubmission(
     tabId: number,
     input: PageSubmissionInput,
@@ -105,7 +100,6 @@ export interface BatchRunnerDependencies {
     expectedUrl: string,
     batchId: string
   ): Promise<PageSubmissionResult>;
-  isCommentPubliclyVisible(url: string, fingerprint: string): Promise<boolean>;
   now(): number;
 }
 
@@ -154,7 +148,6 @@ const defaultDependencies: BatchRunnerDependencies = {
   },
   generateComment,
   planCommentForm,
-  classifySubmissionOutcome,
   async prepareTabSubmission(tabId, input, target, batchId) {
     await assertWorkerTabOwnership(batchId, tabId);
     return prepareTabSubmission(tabId, input, target);
@@ -167,7 +160,6 @@ const defaultDependencies: BatchRunnerDependencies = {
     await assertWorkerTabOwnership(batchId, tabId);
     return verifyTabSubmission(tabId, prepared, expectedUrl);
   },
-  isCommentPubliclyVisible: fetchPublicPageContainsFingerprint,
   now: Date.now,
 };
 
@@ -315,37 +307,12 @@ function hasAttemptedCanonicalTarget(
   batch: BatchSnapshot,
   resolvedUrl: string
 ): boolean {
-  const attemptedStatuses = new Set([
-    'published',
-    'submitted_not_visible',
-    'unknown',
-  ]);
   const key = canonicalTargetKey(resolvedUrl);
   return batch.items
     .slice(0, batch.currentIndex)
     .some(
       (item) =>
-        attemptedStatuses.has(item.status) &&
-        canonicalTargetKey(item.url) === key
-    );
-}
-
-function targetSiteKey(value: string): string {
-  return new URL(value).hostname.replace(/^www\./i, '').toLowerCase();
-}
-
-function hasRejectedSite(batch: BatchSnapshot, value: string): boolean {
-  const rejectedStatuses = new Set([
-    'submitted_not_visible',
-    'validation_error',
-    'unknown',
-  ]);
-  const site = targetSiteKey(value);
-  return batch.items
-    .slice(0, batch.currentIndex)
-    .some(
-      (item) =>
-        rejectedStatuses.has(item.status) && targetSiteKey(item.url) === site
+        item.status === 'submitted' && canonicalTargetKey(item.url) === key
     );
 }
 
@@ -428,14 +395,7 @@ async function saveUnconfirmedSubmission(
   dependencies: BatchRunnerDependencies,
   message = 'COMMENT_SUBMISSION_UNCONFIRMED'
 ): Promise<BatchStepResult> {
-  const next = completeCurrentItem(
-    batch,
-    'unknown',
-    message,
-    dependencies.now()
-  );
-  await dependencies.setBatch(next);
-  return afterTerminal(next);
+  return saveFailure(batch, message, dependencies);
 }
 
 async function savePause(
@@ -447,28 +407,6 @@ async function savePause(
   const next = pauseCurrentItem(batch, status, message, dependencies.now());
   await dependencies.setBatch(next);
   return 'wait';
-}
-
-async function checkPublicVisibility(
-  batch: BatchSnapshot,
-  fingerprint: string,
-  message: typeof PUBLIC_CHECK_ACCEPTED | typeof PUBLIC_CHECK_UNKNOWN,
-  dependencies: BatchRunnerDependencies
-): Promise<{ batch: BatchSnapshot; visible: boolean }> {
-  const checking = updateBatchProgress(
-    batch,
-    { item: { status: 'checking_public', message } },
-    dependencies.now()
-  );
-  await dependencies.setBatch(checking);
-  const item = currentItem(checking);
-  const visible = await dependencies
-    .isCommentPubliclyVisible(
-      item.prepared?.expected.url ?? item.url,
-      fingerprint
-    )
-    .catch(() => false);
-  return { batch: checking, visible };
 }
 
 async function saveSubmissionResult(
@@ -522,27 +460,6 @@ async function saveSubmissionResult(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (
-    result.status === 'published' ||
-    result.status === 'submitted_not_visible'
-  ) {
-    const publicCheck = await checkPublicVisibility(
-      batch,
-      result.fingerprint,
-      PUBLIC_CHECK_ACCEPTED,
-      dependencies
-    );
-    const next = completeCurrentItem(
-      publicCheck.batch,
-      publicCheck.visible ? 'published' : 'submitted_not_visible',
-      publicCheck.visible
-        ? 'COMMENT_PUBLISHED'
-        : 'COMMENT_SUBMITTED_NOT_VISIBLE',
-      dependencies.now()
-    );
-    await dependencies.setBatch(next);
-    return afterTerminal(next);
-  }
   if (result.status === 'login_required') {
     const resumable = result.clickOccurred
       ? batch
@@ -568,110 +485,34 @@ async function saveSubmissionResult(
       dependencies
     );
   }
-  if (result.status === 'unknown') {
-    let current = batch;
-    if (result.clickOccurred) {
-      const publicCheck = await checkPublicVisibility(
-        batch,
-        result.fingerprint,
-        PUBLIC_CHECK_UNKNOWN,
-        dependencies
-      );
-      current = publicCheck.batch;
-      if (publicCheck.visible) {
-        const next = completeCurrentItem(
-          current,
-          'published',
-          'COMMENT_PUBLISHED',
-          dependencies.now()
-        );
-        await dependencies.setBatch(next);
-        return afterTerminal(next);
-      }
-    }
-    if (result.clickOccurred && result.verificationObservation) {
-      try {
-        const keys = await dependencies.getProviderApiKeys();
-        const classification = await dependencies.classifySubmissionOutcome(
-          keys,
-          {
-            provider: batch.settings.provider,
-            observation: result.verificationObservation,
-          }
-        );
-        if (classification.status !== 'unknown') {
-          if (
-            classification.status === 'published' ||
-            classification.status === 'submitted_not_visible'
-          ) {
-            const next = completeCurrentItem(
-              current,
-              'submitted_not_visible',
-              'COMMENT_SUBMITTED_NOT_VISIBLE',
-              dependencies.now()
-            );
-            await dependencies.setBatch(next);
-            return afterTerminal(next);
-          }
-          return saveSubmissionResult(
-            current,
-            {
-              ...result,
-              status: classification.status,
-              message: classification.reason,
-            },
-            dependencies
-          );
-        }
-      } catch {
-        // A post-click classifier failure must not turn an unknown result into a
-        // retryable failure or cause another submission attempt.
-      }
-    }
-    return saveUnconfirmedSubmission(current, dependencies, result.message);
+  // An explicit in-page validation/submission error is a kept terminal state.
+  // It no longer blacklists the domain: later same-host targets run normally.
+  if (result.status === 'validation_error') {
+    const next = completeCurrentItem(
+      batch,
+      'validation_error',
+      result.message,
+      dependencies.now()
+    );
+    await dependencies.setBatch(next);
+    return afterTerminal(next);
   }
-
-  const next = completeCurrentItem(
-    batch,
-    'validation_error',
-    result.message,
-    dependencies.now()
-  );
-  await dependencies.setBatch(next);
-  return afterTerminal(next);
-}
-
-async function resumePublicVisibilityCheck(
-  batch: BatchSnapshot,
-  dependencies: BatchRunnerDependencies
-): Promise<BatchStepResult> {
-  const item = currentItem(batch);
-  if (!item.prepared) {
-    return saveUnconfirmedSubmission(batch, dependencies);
+  // The submit click was dispatched and the page showed no explicit error:
+  // an accepted / reset / "awaiting moderation" / otherwise-ambiguous outcome
+  // all count as `submitted`. No proof-of-publish re-fetch, no AI classifier.
+  if (result.clickOccurred) {
+    const next = completeCurrentItem(
+      batch,
+      'submitted',
+      'COMMENT_SUBMITTED',
+      dependencies.now()
+    );
+    await dependencies.setBatch(next);
+    return afterTerminal(next);
   }
-  const visible = await dependencies
-    .isCommentPubliclyVisible(
-      item.prepared.expected.url,
-      item.prepared.fingerprint
-    )
-    .catch(() => false);
-  const acceptedBeforeCheck = item.message === PUBLIC_CHECK_ACCEPTED;
-  const next = completeCurrentItem(
-    batch,
-    visible
-      ? 'published'
-      : acceptedBeforeCheck
-        ? 'submitted_not_visible'
-        : 'unknown',
-    visible
-      ? 'COMMENT_PUBLISHED'
-      : acceptedBeforeCheck
-        ? 'COMMENT_SUBMITTED_NOT_VISIBLE'
-        : 'COMMENT_SUBMISSION_UNCONFIRMED',
-    dependencies.now()
-  );
-  await dependencies.setBatch(next);
-  return afterTerminal(next);
+  // The click could never be dispatched and there is no page evidence at all:
+  // treat it as an infrastructure failure.
+  return saveFailure(batch, result.message, dependencies);
 }
 
 async function openWorkerTab(
@@ -679,16 +520,6 @@ async function openWorkerTab(
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
-  if (hasRejectedSite(batch, item.url)) {
-    const skipped = completeCurrentItem(
-      batch,
-      'failed',
-      'SITE_REJECTED_BY_PRIOR_RESULT',
-      dependencies.now()
-    );
-    await dependencies.setBatch(skipped);
-    return afterTerminal(skipped);
-  }
   let current = batch;
   try {
     if (batch.workerTabId !== undefined) {
@@ -1448,8 +1279,6 @@ export async function advanceBatchStep(
       return advanceDispatchedClick(batch, dependencies);
     case 'verifying':
       return verifyDispatchedComment(batch, dependencies);
-    case 'checking_public':
-      return resumePublicVisibilityCheck(batch, dependencies);
     default:
       return saveFailure(batch, 'BATCH_ITEM_STATE_INVALID', dependencies);
   }

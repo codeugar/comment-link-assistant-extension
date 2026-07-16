@@ -336,8 +336,6 @@ textarea:focus {
 
 .page-card.readiness-failed,
 .page-card.readiness-validation_error,
-.page-card.readiness-submitted_not_visible,
-.page-card.readiness-unknown,
 .page-card.readiness-no_form {
   border-left-color: var(--red);
   background: rgba(167, 56, 42, 0.08);
@@ -541,7 +539,7 @@ textarea:focus {
   background: rgba(211, 75, 44, 0.045);
 }
 
-.site-flow-card.status-published {
+.site-flow-card.status-submitted {
   border-left-color: var(--green);
 }
 
@@ -550,9 +548,7 @@ textarea:focus {
   border-left-color: var(--yellow);
 }
 
-.site-flow-card.status-submitted_not_visible,
 .site-flow-card.status-validation_error,
-.site-flow-card.status-unknown,
 .site-flow-card.status-failed,
 .site-flow-card.status-no_form {
   border-left-color: var(--red);
@@ -789,7 +785,7 @@ textarea:focus {
   line-height: 1.35;
 }
 
-.status-published .queue-index {
+.status-submitted .queue-index {
   background: var(--green);
 }
 
@@ -800,8 +796,6 @@ textarea:focus {
 
 .status-no_form .queue-index,
 .status-validation_error .queue-index,
-.status-submitted_not_visible .queue-index,
-.status-unknown .queue-index,
 .status-failed .queue-index {
   background: var(--red);
 }
@@ -811,8 +805,7 @@ textarea:focus {
 .status-generating .queue-index,
 .status-prepared .queue-index,
 .status-click_dispatched .queue-index,
-.status-verifying .queue-index,
-.status-checking_public .queue-index {
+.status-verifying .queue-index {
   background: var(--accent);
 }
 
@@ -828,17 +821,15 @@ textarea:focus {
 }
 
 .success-toast,
-.result-published {
+.result-submitted {
   border-left: 3px solid var(--green);
 }
 
 .error-toast,
-.result-validation_error,
-.result-submitted_not_visible {
+.result-validation_error {
   border-left: 3px solid var(--red);
 }
 
-.result-unknown,
 .result-login_required,
 .result-captcha_required {
   border-left: 3px solid var(--yellow);

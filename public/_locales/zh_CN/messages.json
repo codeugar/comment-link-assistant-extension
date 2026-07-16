@@ -102,10 +102,7 @@
     "message": "评论已生成"
   },
   "commentSubmitted": {
-    "message": "评论立即公开"
-  },
-  "commentSubmittedNotVisible": {
-    "message": "已提交但不可见"
+    "message": "评论已提交"
   },
   "commentFailed": {
     "message": "评论提交失败"
@@ -261,7 +258,7 @@
     "message": "批次已停止"
   },
   "batchSummary": {
-    "message": "立即公开 $1 · 已提交但不可见 $2 · 提交失败 $3 · 无法确认提交 $4"
+    "message": "已提交 $1 · 失败 $2"
   },
   "startNewBatch": {
     "message": "开始新批次"
@@ -287,14 +284,8 @@
   "batchStatusVerifying": {
     "message": "正在检查结果"
   },
-  "batchStatusCheckingPublic": {
-    "message": "正在匿名验证公开状态"
-  },
-  "batchStatusPublished": {
-    "message": "立即公开"
-  },
-  "batchStatusSubmittedNotVisible": {
-    "message": "已提交但不可见"
+  "batchStatusSubmitted": {
+    "message": "已提交"
   },
   "batchStatusLoginRequired": {
     "message": "需要登录"
@@ -307,9 +298,6 @@
   },
   "batchStatusValidationError": {
     "message": "提交失败"
-  },
-  "batchStatusUnknown": {
-    "message": "无法确认提交"
   },
   "batchStatusFailed": {
     "message": "失败"
@@ -337,9 +325,6 @@
   },
   "unsafeSubmitBlocked": {
     "message": "所选操作不是安全的评论提交动作，插件已拦截且未提交。"
-  },
-  "siteRejectedByPriorResult": {
-    "message": "该网站之前已被淘汰，已跳过。"
   },
   "commentFormRevealed": {
     "message": "AI 已识别并点击用于展开评论表单的入口。"
@@ -409,11 +394,5 @@
   },
   "activityReadingFeedback": {
     "message": "正在解释网站返回信息"
-  },
-  "activityCheckingAnonymousPage": {
-    "message": "正在打开无登录信息的公开页面"
-  },
-  "activityLookingForFingerprint": {
-    "message": "正在查找公开评论指纹"
   }
 }
