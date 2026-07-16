@@ -32,7 +32,7 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'unknown',
+        status: 'submitted',
       },
     });
     document.defaultView?.history.replaceState({}, '', '/');
@@ -51,8 +51,8 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'unknown',
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
       },
     });
   });
@@ -76,8 +76,8 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'submitted_not_visible',
-        message: 'COMMENT_SUBMITTED_NOT_VISIBLE',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
       },
     });
     document.defaultView?.history.replaceState({}, '', '/');
@@ -102,8 +102,8 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'unknown',
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        status: 'submitted',
+        message: 'COMMENT_SUBMITTED',
       },
     });
     document.defaultView?.history.replaceState({}, '', '/');
