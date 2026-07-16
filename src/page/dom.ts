@@ -59,6 +59,25 @@ const SUCCESS_COPY =
   /comment (?:(?:was|has been) )?(?:submitted|posted|published|saved)|reply (?:was )?(?:submitted|posted)|thank you for (?:your )?comment|评论(?:已)?(?:提交|发布|发表)成功|留言成功|回覆成功|回复成功/i;
 const ERROR_COPY =
   /required field|please enter|invalid email|comment cannot be empty|failed to (?:submit|post)|error submitting|必填|请输入|請輸入|邮箱格式|郵箱格式|提交失败|提交失敗|发布失败|發佈失敗/i;
+// WordPress emits `wp_die('Duplicate comment detected; ...')` for a re-posted
+// comment. The phrase is exact and language-specific, so match it narrowly to
+// avoid tripping on ordinary article prose that mentions duplicate comments.
+const DUPLICATE_COMMENT_COPY =
+  /duplicate comment detected|检测到重复评论|偵測到重複留言|重复评论|重複留言/i;
+// WordPress posts a comment to `wp-comments-post.php` and, when the comment is
+// held for moderation, redirects to `?unapproved=<ID>&moderation-hash=<hash>` —
+// a deterministic, language-independent submit receipt.
+const WORDPRESS_COMMENT_POST_ACTION = /\/wp-comments-post\.php\/?$/i;
+const WORDPRESS_COMMENT_CONTAINER_SELECTOR = [
+  '#commentform',
+  'form[action*="wp-comments-post.php"]',
+  '#respond',
+  '.comment-respond',
+].join(',');
+const WORDPRESS_CANONICAL_EDITOR_SELECTOR =
+  'textarea#comment, textarea[name="comment"]';
+const WORDPRESS_CANONICAL_SUBMIT_SELECTOR =
+  '#submit, input[type="submit"][name="submit"], .comment-submit';
 const SUBMISSION_MARKER = 'data-comment-link-assistant-token';
 const RENDERED_COMMENT_EXCLUDE =
   /preview|draft|(?:^|[\s_-])(?:editor|form|composer|input)(?:$|[\s_-])/i;
@@ -201,8 +220,65 @@ function controlLabels(element: Element): string[] {
     .filter(Boolean);
 }
 
+function isWordPressCommentPostAction(
+  action: string | null,
+  baseURI: string
+): boolean {
+  if (!action?.trim()) return false;
+  try {
+    return WORDPRESS_COMMENT_POST_ACTION.test(
+      new URL(action, baseURI).pathname
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Native WordPress `comment_form()` output, matched structurally so it is
+// recognized regardless of UI language: a `<form id="commentform">` (or one
+// posting to `wp-comments-post.php`), or a `#respond` / `.comment-respond`
+// wrapper holding the canonical `textarea#comment`.
+function isWordPressCommentContainer(element: Element): boolean {
+  if (isFormElement(element)) {
+    if (element.matches('#commentform')) return true;
+    if (
+      isWordPressCommentPostAction(
+        element.getAttribute('action'),
+        element.ownerDocument.baseURI
+      )
+    ) {
+      return true;
+    }
+  }
+  return Boolean(
+    element.matches('#respond, .comment-respond') &&
+      element.querySelector(WORDPRESS_CANONICAL_EDITOR_SELECTOR)
+  );
+}
+
+function isInsideWordPressCommentForm(element: Element): boolean {
+  const form = element.closest('form');
+  if (form && isWordPressCommentContainer(form)) return true;
+  const respond = element.closest('#respond, .comment-respond');
+  return Boolean(respond && isWordPressCommentContainer(respond));
+}
+
+// WordPress stamps its submit with `id="submit"` / `name="submit"` (or the
+// `.comment-submit` class) in every locale, so accept it by identity when it
+// lives inside a WordPress comment form — bypassing the language-fragile label
+// whitelist. Gated on the WordPress context so generic pages are unaffected.
+function isCanonicalWordPressSubmit(element: Element): boolean {
+  const canonical =
+    element.matches('#submit') ||
+    (isInputElement(element) &&
+      element.type === 'submit' &&
+      element.name === 'submit');
+  return canonical && isInsideWordPressCommentForm(element);
+}
+
 function isPositiveSubmitControl(element: Element): boolean {
   if (element.matches('.comment-submit')) return true;
+  if (isCanonicalWordPressSubmit(element)) return true;
   const labels = controlLabels(element);
   if (labels.length > 0) {
     return labels.some(
@@ -871,7 +947,100 @@ function buildPageContext(document: Document): TargetPageContext {
   };
 }
 
+interface WordPressCommentForm {
+  editor: HTMLElement;
+  submit: HTMLElement;
+}
+
+// The visible canonical editor. Anti-spam themes plant a hidden decoy
+// `textarea[name="comment"]` honeypot next to the real `textarea#comment`, so
+// filter to visible controls and prefer the `#comment` identity.
+function resolveVisibleWordPressEditor(container: Element): HTMLElement | null {
+  const candidates = Array.from(
+    container.querySelectorAll(WORDPRESS_CANONICAL_EDITOR_SELECTOR)
+  )
+    .filter(isHtmlElement)
+    .filter((element) => isVisible(element) && !isDisabled(element));
+  return (
+    candidates.find((element) => element.matches('#comment')) ??
+    candidates[0] ??
+    null
+  );
+}
+
+function resolveVisibleWordPressSubmit(
+  container: Element,
+  editor: HTMLElement
+): HTMLElement | null {
+  const scope = editor.closest('form') ?? container;
+  return (
+    Array.from(scope.querySelectorAll(WORDPRESS_CANONICAL_SUBMIT_SELECTOR))
+      .filter(isHtmlElement)
+      .find(isVisible) ?? null
+  );
+}
+
+function resolveWordPressCommentForm(
+  document: Document
+): WordPressCommentForm | null {
+  for (const container of queryAllDeep(
+    document,
+    WORDPRESS_COMMENT_CONTAINER_SELECTOR
+  )) {
+    if (!isHtmlElement(container) || !isWordPressCommentContainer(container)) {
+      continue;
+    }
+    const editor = resolveVisibleWordPressEditor(container);
+    if (!editor) continue;
+    const submit = resolveVisibleWordPressSubmit(container, editor);
+    if (submit) return { editor, submit };
+  }
+  return null;
+}
+
+// Authoritative fast path for native WordPress comment forms: bind by canonical
+// ids and report `ready` without the score>=8 editor gate, the submit label
+// whitelist, or `isConfidentCommentForm`. Still defers to the existing
+// login / captcha gates so a genuinely gated form reports the right readiness.
+function buildWordPressFormSummary(
+  document: Document,
+  wpForm: WordPressCommentForm
+): CommentFormSummary {
+  const container = findContainer(wpForm.editor);
+  const websiteInput = findInput(container, 'website');
+  const summary: CommentFormSummary = {
+    readiness: 'ready',
+    editorLabel: structuralDescriptor(wpForm.editor),
+    submitLabel: elementDescriptor(wpForm.submit),
+    hasNameField: Boolean(findInput(container, 'name')),
+    hasEmailField: Boolean(findInput(container, 'email')),
+    hasWebsiteField: Boolean(websiteInput),
+    requiresWebsiteField: isRequiredInput(websiteInput),
+    message: 'COMMENT_FORM_READY',
+  };
+  if (hasCaptcha(document)) {
+    return {
+      ...summary,
+      readiness: 'captcha_required',
+      message: 'CAPTCHA_REQUIRED',
+    };
+  }
+  const bodyCopy = document.body
+    ? normalizeWhitespace(renderedPageText(document.body))
+    : '';
+  if (LOGIN_COPY.test(bodyCopy) || hasLoginForm(document)) {
+    return {
+      ...summary,
+      readiness: 'login_required',
+      message: 'LOGIN_REQUIRED',
+    };
+  }
+  return summary;
+}
+
 function buildFormSummary(document: Document): CommentFormSummary {
+  const wpForm = resolveWordPressCommentForm(document);
+  if (wpForm) return buildWordPressFormSummary(document, wpForm);
   const editor = findEditor(document);
   const bodyCopy = document.body
     ? normalizeWhitespace(renderedPageText(document.body))
@@ -1314,6 +1483,25 @@ function readNewPageFeedbackMessages(
   return newMessages;
 }
 
+// WordPress redirects a comment held for moderation to
+// `?unapproved=<ID>&moderation-hash=<hash>`, a deterministic, language-proof
+// "accepted into moderation" receipt. (The approved-comment `#comment-<ID>`
+// anchor receipt is handled in command.ts, which can compare it against the
+// pre-submit URL to reject a pre-existing anchor.)
+function hasWordPressModerationReceipt(document: Document): boolean {
+  const href = document.location?.href;
+  if (!href) return false;
+  try {
+    const url = new URL(href);
+    return (
+      url.searchParams.has('unapproved') &&
+      url.searchParams.has('moderation-hash')
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function verifySubmissionDocument(
   document: Document,
   fingerprint: string,
@@ -1348,6 +1536,27 @@ export function verifySubmissionDocument(
   const pendingFeedback = feedbackChanged && PENDING_COPY.test(feedback);
   const successFeedback = feedbackChanged && SUCCESS_COPY.test(feedback);
   const errorFeedback = feedbackChanged && ERROR_COPY.test(feedback);
+  const bodyCopy = document.body
+    ? normalizeWhitespace(renderedPageText(document.body))
+    : '';
+  const duplicateComment =
+    DUPLICATE_COMMENT_COPY.test(feedback) ||
+    DUPLICATE_COMMENT_COPY.test(bodyCopy);
+  const moderationReceipt = hasWordPressModerationReceipt(document);
+  // WordPress duplicate-comment rejection: an explicit terminal error.
+  if (
+    duplicateComment &&
+    !pendingFeedback &&
+    !successFeedback &&
+    !renderedCommentAdded
+  ) {
+    return {
+      status: 'validation_error',
+      message: 'COMMENT_DUPLICATE',
+      fingerprint,
+      clickOccurred: true,
+    };
+  }
   if (
     errorFeedback &&
     (pendingFeedback || successFeedback || renderedCommentAdded)
@@ -1359,9 +1568,12 @@ export function verifySubmissionDocument(
       clickOccurred: true,
     };
   }
+  // WordPress moderation receipt is authoritative for "held for moderation".
   if (
     !errorFeedback &&
-    (pendingFeedback || (successFeedback && !renderedCommentAdded))
+    (moderationReceipt ||
+      pendingFeedback ||
+      (successFeedback && !renderedCommentAdded))
   ) {
     return {
       status: 'submitted_not_visible',
