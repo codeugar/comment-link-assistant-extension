@@ -1,5 +1,5 @@
 import type { FormPlan } from '@/api/form-planner';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runPageCommand } from './command';
 import {
   analyzePageDocument,
@@ -20,7 +20,7 @@ describe('comment page DOM helpers', () => {
     document.body.innerHTML = '';
   });
 
-  it('finds a WordPress-style comment form and its optional backlink fields', () => {
+  it('finds a WordPress-style comment form and its optional backlink fields', async () => {
     document.body.innerHTML = `
       <article><h1>Useful testing guide</h1><p>Long-form article copy.</p></article>
       <form id="commentform">
@@ -32,7 +32,7 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    const analysis = analyzePageDocument(document);
+    const analysis = await analyzePageDocument(document);
 
     expect(analysis.form).toMatchObject({
       readiness: 'ready',
@@ -48,7 +48,7 @@ describe('comment page DOM helpers', () => {
     });
   });
 
-  it('skips an empty theme entry-content before the article body', () => {
+  it('skips an empty theme entry-content before the article body', async () => {
     document.body.innerHTML = `
       <header><div class="entry-content"></div></header>
       <article>
@@ -59,12 +59,12 @@ describe('comment page DOM helpers', () => {
       </article>
     `;
 
-    expect(analyzePageDocument(document).page.excerpt).toContain(
+    expect((await analyzePageDocument(document)).page.excerpt).toContain(
       'This article explains nonlinear dynamics'
     );
   });
 
-  it('skips a short decorative entry-content before the article body', () => {
+  it('skips a short decorative entry-content before the article body', async () => {
     const body = 'Nonlinear dynamics and chaos theory '.repeat(10);
     document.body.innerHTML = `
       <article>
@@ -73,12 +73,12 @@ describe('comment page DOM helpers', () => {
       </article>
     `;
 
-    const excerpt = analyzePageDocument(document).page.excerpt;
+    const excerpt = (await analyzePageDocument(document)).page.excerpt;
     expect(excerpt).toContain('Nonlinear dynamics and chaos theory');
     expect(excerpt).not.toBe('Share');
   });
 
-  it('clicks an AI-selected localized control to reveal the comment form', () => {
+  it('clicks an AI-selected localized control to reveal the comment form', async () => {
     document.body.innerHTML = `
       <article><p>Long-form article copy.</p></article>
       <button id="reveal" type="button">Escribe una respuesta</button>
@@ -108,7 +108,7 @@ describe('comment page DOM helpers', () => {
         reveal?.candidateId ?? ''
       )
     ).toBe(true);
-    expect(analyzePageDocument(document).form.readiness).toBe('ready');
+    expect((await analyzePageDocument(document)).form.readiness).toBe('ready');
   });
 
   it('clicks an AI-selected button-like div to reveal a localized form', () => {
@@ -206,7 +206,7 @@ describe('comment page DOM helpers', () => {
     ).toBe(false);
   });
 
-  it('recognizes a localized comment form with a structural submit control', () => {
+  it('recognizes a localized comment form with a structural submit control', async () => {
     document.body.innerHTML = `
       <form>
         <input name="name">
@@ -217,7 +217,7 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'ready',
       hasNameField: true,
       hasEmailField: true,
@@ -225,7 +225,7 @@ describe('comment page DOM helpers', () => {
     });
   });
 
-  it('trusts explicit comment controls even when the theme uses checkout classes', () => {
+  it('trusts explicit comment controls even when the theme uses checkout classes', async () => {
     document.body.innerHTML = `
       <form class="checkout-form">
         <input name="author">
@@ -235,7 +235,7 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'ready',
       message: 'COMMENT_FORM_READY',
       hasNameField: true,
@@ -243,7 +243,7 @@ describe('comment page DOM helpers', () => {
     });
   });
 
-  it('rejects explicit comment controls inside a real checkout form', () => {
+  it('rejects explicit comment controls inside a real checkout form', async () => {
     document.body.innerHTML = `
       <form action="/checkout/payment">
         <h2>Checkout payment</h2>
@@ -252,7 +252,7 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'not_found',
       message: 'COMMENT_FORM_NOT_FOUND',
     });
@@ -276,7 +276,9 @@ describe('comment page DOM helpers', () => {
         submitted = true;
       });
 
-      expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+      expect((await analyzePageDocument(document)).form.readiness).toBe(
+        'not_found'
+      );
       await expect(
         fillAndSubmitDocument(
           document,
@@ -312,7 +314,7 @@ describe('comment page DOM helpers', () => {
       frameDocument.body.append(notice);
     });
 
-    expect(analyzePageDocument(document).form.readiness).toBe('ready');
+    expect((await analyzePageDocument(document)).form.readiness).toBe('ready');
     await expect(
       fillAndSubmitDocument(
         document,
@@ -325,7 +327,7 @@ describe('comment page DOM helpers', () => {
     ).resolves.toMatchObject({ status: 'submitted_not_visible' });
   });
 
-  it('does not select a comment form inside a hidden iframe', () => {
+  it('does not select a comment form inside a hidden iframe', async () => {
     document.body.innerHTML = '<iframe style="display: none"></iframe>';
     const frameDocument = document.querySelector('iframe')?.contentDocument;
     expect(frameDocument).toBeTruthy();
@@ -337,10 +339,12 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'not_found'
+    );
   });
 
-  it('reports a known cross-origin comment widget explicitly', () => {
+  it('reports a known cross-origin comment widget explicitly', async () => {
     document.body.innerHTML = `
       <article><p>An article with an embedded discussion.</p></article>
       <iframe title="Comments" src="about:blank"></iframe>
@@ -357,7 +361,7 @@ describe('comment page DOM helpers', () => {
           : originalGetAttribute(name)
       );
     try {
-      expect(analyzePageDocument(document).form).toMatchObject({
+      expect((await analyzePageDocument(document)).form).toMatchObject({
         readiness: 'not_found',
         message: 'CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED',
       });
@@ -366,7 +370,7 @@ describe('comment page DOM helpers', () => {
     }
   });
 
-  it('does not mistake a search box for a comment editor', () => {
+  it('does not mistake a search box for a comment editor', async () => {
     document.body.innerHTML = `
       <form class="site-search">
         <textarea name="search-query" placeholder="Search"></textarea>
@@ -374,10 +378,12 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'not_found'
+    );
   });
 
-  it('does not mistake a generic contact message form for a comment form', () => {
+  it('does not mistake a generic contact message form for a comment form', async () => {
     document.body.innerHTML = `
       <form class="contact-form">
         <textarea name="message"></textarea>
@@ -385,7 +391,9 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'not_found'
+    );
   });
 
   it.each([
@@ -416,7 +424,9 @@ describe('comment page DOM helpers', () => {
       submitted = true;
     });
 
-    expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'not_found'
+    );
     const result = await fillAndSubmitDocument(
       document,
       { comment: 'This must not be submitted here.', websiteUrl: '' },
@@ -444,7 +454,9 @@ describe('comment page DOM helpers', () => {
       submitted = true;
     });
 
-    expect(analyzePageDocument(document).form.readiness).toBe('not_found');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'not_found'
+    );
     const result = await fillAndSubmitDocument(
       document,
       {
@@ -457,20 +469,20 @@ describe('comment page DOM helpers', () => {
     expect(submitted).toBe(false);
   });
 
-  it('does not report a comment editor as ready without a submit control', () => {
+  it('does not report a comment editor as ready without a submit control', async () => {
     document.body.innerHTML = `
       <section class="comment-editor">
         <textarea name="comment" placeholder="Leave a comment"></textarea>
       </section>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'not_found',
       message: 'SUBMIT_BUTTON_NOT_FOUND',
     });
   });
 
-  it('finds a rendered comment form below the initial viewport', () => {
+  it('finds a rendered comment form below the initial viewport', async () => {
     document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment" placeholder="Leave a comment"></textarea>
@@ -495,12 +507,14 @@ describe('comment page DOM helpers', () => {
       if (element) element.getBoundingClientRect = () => belowFold;
     }
 
-    expect(analyzePageDocument(document).form.readiness).toBe('ready');
+    expect((await analyzePageDocument(document)).form.readiness).toBe('ready');
   });
 
-  it('reports login and CAPTCHA gates without attempting submission', () => {
+  it('reports login and CAPTCHA gates without attempting submission', async () => {
     document.body.innerHTML = '<p>You must be logged in to comment.</p>';
-    expect(analyzePageDocument(document).form.readiness).toBe('login_required');
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
+      'login_required'
+    );
 
     document.body.innerHTML = `
       <form class="comment-form">
@@ -509,22 +523,22 @@ describe('comment page DOM helpers', () => {
         <button type="submit">Submit comment</button>
       </form>
     `;
-    expect(analyzePageDocument(document).form.readiness).toBe(
+    expect((await analyzePageDocument(document)).form.readiness).toBe(
       'captcha_required'
     );
   });
 
   it.each(['Sign up to comment', 'Create an account to reply', '注册后评论'])(
     'recognizes the text-only auth gate "%s"',
-    (copy) => {
+    async (copy) => {
       document.body.textContent = copy;
-      expect(analyzePageDocument(document).form.readiness).toBe(
+      expect((await analyzePageDocument(document)).form.readiness).toBe(
         'login_required'
       );
     }
   );
 
-  it('recognizes a generic sign-in form as a login gate', () => {
+  it('recognizes a generic sign-in form as a login gate', async () => {
     document.body.innerHTML = `
       <form action="/account/session">
         <input type="email" name="email">
@@ -533,13 +547,13 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'login_required',
       message: 'LOGIN_REQUIRED',
     });
   });
 
-  it('recognizes a Traditional Chinese join action as a login gate', () => {
+  it('recognizes a Traditional Chinese join action as a login gate', async () => {
     document.body.innerHTML = `
       <form>
         <input type="email" name="email">
@@ -548,18 +562,18 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'login_required',
     });
   });
 
-  it('reports a visible CAPTCHA challenge even before an editor is rendered', () => {
+  it('reports a visible CAPTCHA challenge even before an editor is rendered', async () => {
     document.body.innerHTML = `
       <article><p>The article remains visible.</p></article>
       <div class="cf-turnstile"></div>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
+    expect((await analyzePageDocument(document)).form).toMatchObject({
       readiness: 'captcha_required',
       message: 'CAPTCHA_REQUIRED',
     });
@@ -585,7 +599,7 @@ describe('comment page DOM helpers', () => {
       document.body.append(notice);
     });
 
-    expect(analyzePageDocument(document).form.readiness).toBe('ready');
+    expect((await analyzePageDocument(document)).form.readiness).toBe('ready');
     await expect(
       fillAndSubmitDocument(
         document,
@@ -788,7 +802,7 @@ describe('comment page DOM helpers', () => {
         loginClicks += 1;
       });
 
-      expect(analyzePageDocument(document).form.readiness).toBe(
+      expect((await analyzePageDocument(document)).form.readiness).toBe(
         'login_required'
       );
       await expect(
@@ -1745,8 +1759,10 @@ describe('comment page DOM helpers', () => {
     'opacity: 0',
     'position: absolute; left: -9999px',
     'width: 0; height: 0',
-  ])('ignores an invisible website-field honeypot styled with %s', (style) => {
-    document.body.innerHTML = `
+  ])(
+    'ignores an invisible website-field honeypot styled with %s',
+    async (style) => {
+      document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment"></textarea>
         <input type="url" name="website" style="${style}" value="untouched">
@@ -1754,11 +1770,12 @@ describe('comment page DOM helpers', () => {
       </form>
     `;
 
-    expect(analyzePageDocument(document).form).toMatchObject({
-      readiness: 'ready',
-      hasWebsiteField: false,
-    });
-  });
+      expect((await analyzePageDocument(document)).form).toMatchObject({
+        readiness: 'ready',
+        hasWebsiteField: false,
+      });
+    }
+  );
 
   it('rejects a website value changed after preparation', async () => {
     document.body.innerHTML = `
@@ -1808,7 +1825,7 @@ describe('comment page DOM helpers', () => {
         </form>
       `;
 
-      const current = analyzePageDocument(document);
+      const current = await analyzePageDocument(document);
       const preparation = await prepareSubmissionDocument(
         document,
         { comment: 'A useful comment.', websiteUrl: '' },
@@ -1872,7 +1889,7 @@ describe('comment page DOM helpers', () => {
       event.preventDefault();
       submitted = true;
     });
-    const analysis = analyzePageDocument(document);
+    const analysis = await analyzePageDocument(document);
 
     const result = await fillAndSubmitDocument(
       document,
@@ -1900,7 +1917,7 @@ describe('comment page DOM helpers', () => {
         <button type="submit">Post</button>
       </form>
     `;
-    const analysis = analyzePageDocument(document);
+    const analysis = await analyzePageDocument(document);
     const editor = document.querySelector('textarea');
     const submit = document.querySelector('button');
     editor?.setAttribute('placeholder', '您的評論…');
@@ -2697,5 +2714,108 @@ describe('comment page DOM helpers', () => {
       result: { status: 'submitted_not_visible' },
     });
     document.defaultView?.history.replaceState({}, '', '/');
+  });
+});
+
+describe('load-tolerant analyze', () => {
+  function setReadyState(value: DocumentReadyState): void {
+    Object.defineProperty(document, 'readyState', {
+      value,
+      configurable: true,
+    });
+  }
+
+  beforeEach(() => {
+    document.documentElement.lang = 'en';
+    document.head.innerHTML =
+      '<meta name="description" content="A practical article about testing web forms.">';
+    document.title = 'Useful testing guide';
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setReadyState('complete');
+  });
+
+  it('waits for DOMContentLoaded before analyzing a server-rendered form', async () => {
+    vi.useFakeTimers();
+    setReadyState('loading');
+    document.body.innerHTML = `
+      <article><h1>Useful testing guide</h1><p>Long-form article copy about testing web forms in detail.</p></article>
+      <form id="commentform">
+        <textarea id="comment" name="comment" placeholder="Leave a comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+
+    const pending = analyzePageDocument(document);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    await vi.advanceTimersByTimeAsync(0);
+    // Still `loading` and DOMContentLoaded has not fired: analyze must not settle.
+    expect(settled).not.toHaveBeenCalled();
+
+    setReadyState('complete');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+
+    const analysis = await pending;
+    expect(analysis.form.readiness).toBe('ready');
+  });
+
+  it('picks up a comment editor mounted within the settle window', async () => {
+    vi.useFakeTimers();
+    setReadyState('loading');
+    document.body.innerHTML = `
+      <article><h1>Heavy listicle</h1><p>Long-form article copy with enough context to analyze.</p></article>
+      <section id="comments"></section>
+    `;
+
+    const pending = analyzePageDocument(document);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    // The document becomes ready, but the comment form has not mounted yet.
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).not.toHaveBeenCalled();
+
+    // A lazy comment form appears within the bounded settle window.
+    const comments = document.querySelector('#comments');
+    if (comments) {
+      comments.innerHTML = `
+        <form id="commentform">
+          <textarea id="comment" name="comment" placeholder="Leave a comment"></textarea>
+          <button type="submit">Post comment</button>
+        </form>
+      `;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+
+    const analysis = await pending;
+    expect(analysis.form.readiness).toBe('ready');
+  });
+
+  it('returns a bounded partial analysis when no comment form appears', async () => {
+    vi.useFakeTimers();
+    setReadyState('loading');
+    document.body.innerHTML = `
+      <article><h1>Heavy listicle</h1><p>Long-form article copy with enough context to analyze.</p></article>
+    `;
+
+    const pending = analyzePageDocument(document);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await vi.advanceTimersByTimeAsync(0);
+    // Nothing has appeared: analyze is waiting out the bounded settle window.
+    expect(settled).not.toHaveBeenCalled();
+
+    // Once the settle window elapses, analyze resolves without hanging.
+    await vi.advanceTimersByTimeAsync(4_000);
+    const analysis = await pending;
+    expect(analysis.form.readiness).toBe('not_found');
   });
 });

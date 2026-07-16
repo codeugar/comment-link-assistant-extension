@@ -49,6 +49,11 @@ const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const TARGET_LOAD_GRACE_MS = 30_000;
 const FORM_REVEAL_SETTLE_MS = 600;
+// Heavy / slow pages keep their tab in `loading` far longer than it takes their
+// server-rendered comment form to appear. Because analyze is now load-tolerant,
+// we hand off to analysis on an on-target tab after this short settle instead of
+// dead-waiting the full TARGET_LOAD_GRACE_MS (which remains the hard cap).
+const ANALYZE_LOADING_SETTLE_MS = 750;
 
 export interface WorkerTab {
   id: number;
@@ -628,11 +633,18 @@ async function advanceOpening(
 
   const location = tabLocation(tab);
   if (tab.status !== 'complete') {
+    if (!tab.pendingUrl && tab.url && isSamePage(tab.url, item.url)) {
+      // On-target but still loading: after a short settle, analyze the partial
+      // page instead of blocking for the full grace window.
+      if (dependencies.now() - item.updatedAt < ANALYZE_LOADING_SETTLE_MS) {
+        return 'wait';
+      }
+      return advanceResolvedPage(batch, tab.url, dependencies, true);
+    }
+    // Not on the target yet (pending navigation / redirect in flight): keep the
+    // hard grace cap before giving up.
     if (dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS) {
       return 'wait';
-    }
-    if (!tab.pendingUrl && tab.url && isSamePage(tab.url, item.url)) {
-      return advanceResolvedPage(batch, tab.url, dependencies, true);
     }
     return saveFailure(
       batch,
@@ -750,7 +762,15 @@ async function advanceAnalysis(
     await dependencies.setBatch(next);
     return 'continue';
   }
-  if (tab.status !== 'complete' && !canUsePartialPage(item, tab)) {
+  // Load-tolerant analyze: an on-target tab (no pending navigation, same page —
+  // already asserted above) that is still `loading` can be analyzed after a
+  // short settle. analyze() self-settles heavy pages and has its own generous
+  // 30s timeout, so we no longer dead-wait for `complete`.
+  if (
+    tab.status !== 'complete' &&
+    !canUsePartialPage(item, tab) &&
+    dependencies.now() - item.updatedAt < ANALYZE_LOADING_SETTLE_MS
+  ) {
     return 'wait';
   }
   let analysis: PageAnalysis;

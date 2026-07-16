@@ -132,7 +132,7 @@ export async function runPageCommand(
   command: PageCommand
 ): Promise<PageCommandResult> {
   if (command.type === 'analyze') {
-    return { type: 'analysis', analysis: analyzePageDocument(document) };
+    return { type: 'analysis', analysis: await analyzePageDocument(document) };
   }
   if (command.type === 'form.reveal') {
     return {

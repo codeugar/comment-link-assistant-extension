@@ -67,6 +67,18 @@ const SUBMIT_ENABLE_TIMEOUT_MS = 750;
 const MAX_FEEDBACK_MESSAGES = 20;
 const MAX_FEEDBACK_MESSAGE_LENGTH = 500;
 const PREPARATION_TTL_MS = 30_000;
+// Read-only analyze is load-tolerant: heavy / slow pages rarely reach a fully
+// loaded state within a batch's grace window, but their server-rendered comment
+// form is present early. These bounds keep the settle deterministic and short.
+const ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS = 5_000;
+const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
+const COMMENT_REGION_SELECTOR = [
+  '#respond',
+  '#commentform',
+  '#comments',
+  '[id*="comment"]',
+  '[class*="comment"]',
+].join(',');
 
 interface ActiveDomSubmission {
   token: string;
@@ -934,12 +946,102 @@ function buildFormSummary(document: Document): CommentFormSummary {
   };
 }
 
-export function analyzePageDocument(document: Document): PageAnalysis {
+function buildPageAnalysis(document: Document): PageAnalysis {
   return {
     page: buildPageContext(document),
     form: buildFormSummary(document),
     probe: probePageDocument(document),
   };
+}
+
+function looksUnsettled(document: Document): boolean {
+  return document.readyState !== 'complete';
+}
+
+function scrollCommentRegionIntoView(document: Document): void {
+  const target: Element | null =
+    findEditor(document) ?? document.querySelector(COMMENT_REGION_SELECTOR);
+  if (!target) return;
+  // Guard: scrollIntoView can be absent under partial / headless DOM impls.
+  const scrollIntoView = (target as Partial<HTMLElement>).scrollIntoView;
+  if (typeof scrollIntoView !== 'function') return;
+  try {
+    scrollIntoView.call(target, { block: 'center' });
+  } catch {
+    // Best-effort nudge to trigger lazy comment mounts; never fatal.
+  }
+}
+
+function waitForDomContentLoaded(
+  document: Document,
+  timeoutMs: number
+): Promise<void> {
+  if (document.readyState !== 'loading') return Promise.resolve();
+  return new Promise((resolve) => {
+    const view = document.defaultView;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('DOMContentLoaded', finish);
+      resolve();
+    };
+    document.addEventListener('DOMContentLoaded', finish);
+    (view?.setTimeout ?? setTimeout)(finish, timeoutMs);
+  });
+}
+
+function waitForCommentEditor(
+  document: Document,
+  timeoutMs: number
+): Promise<void> {
+  if (timeoutMs <= 0 || findEditor(document)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const view = document.defaultView;
+    const Observer = view?.MutationObserver;
+    const pending: { timer?: ReturnType<typeof setTimeout> } = {};
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      observer?.disconnect();
+      if (pending.timer !== undefined) {
+        (view?.clearTimeout ?? clearTimeout)(pending.timer);
+      }
+      resolve();
+    };
+    const observer = Observer
+      ? new Observer(() => {
+          if (findEditor(document)) finish();
+        })
+      : null;
+    if (observer && document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+    pending.timer = (view?.setTimeout ?? setTimeout)(finish, timeoutMs);
+    if (!observer) finish();
+  });
+}
+
+export async function analyzePageDocument(
+  document: Document
+): Promise<PageAnalysis> {
+  if (document.readyState === 'loading') {
+    await waitForDomContentLoaded(
+      document,
+      ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS
+    );
+  }
+  scrollCommentRegionIntoView(document);
+  const analysis = buildPageAnalysis(document);
+  // Only pay the bounded settle when nothing was found and the page still looks
+  // like it is mounting content; a fully loaded page with no editor is final.
+  if (findEditor(document) || !looksUnsettled(document)) {
+    return analysis;
+  }
+  await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+  scrollCommentRegionIntoView(document);
+  return buildPageAnalysis(document);
 }
 
 export function revealPlannedCommentFormDocument(
