@@ -13,6 +13,14 @@ export interface TargetPageContext {
   hasWebsiteField: boolean;
 }
 
+// A comment form that lives inside a cross-origin iframe the extension can
+// still script (given host permission). Carried on the summary so the command
+// layer knows to run submit/click inside the frame instead of the top document.
+export interface CommentFrameReference {
+  kind: 'jetpack';
+  url: string;
+}
+
 export interface CommentFormSummary {
   readiness: PageReadiness;
   editorLabel: string;
@@ -22,6 +30,7 @@ export interface CommentFormSummary {
   hasWebsiteField: boolean;
   requiresWebsiteField?: boolean;
   message: string;
+  frame?: CommentFrameReference;
 }
 
 export interface PageAnalysis {

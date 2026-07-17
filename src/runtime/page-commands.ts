@@ -8,6 +8,7 @@ import {
   matchesWordPressCommentPathname,
 } from '@/page/receipts';
 import type {
+  CommentFrameReference,
   PageAnalysis,
   PageSubmissionExpectation,
   PageSubmissionInput,
@@ -19,6 +20,12 @@ import type {
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
 const PAGE_COMMAND_TIMEOUT_MS = 10_000;
+const JETPACK_COMMENT_FRAME_HOST = 'jetpack.wordpress.com';
+const JETPACK_COMMENT_FRAME_PATH = '/jetpack-comment';
+// A promoted Jetpack frame commits asynchronously after analyze sets its src, so
+// poll webNavigation for it rather than assuming it is already listed.
+const JETPACK_FRAME_RESOLVE_TIMEOUT_MS = 8_000;
+const JETPACK_FRAME_POLL_INTERVAL_MS = 250;
 // A read-only analyze now self-settles heavy pages (bounded DOMContentLoaded +
 // mutation waits) and has no double-submit risk, so it gets generous headroom.
 // Mutating commands (submit.prepare / submit.click / verify) keep
@@ -108,6 +115,104 @@ async function sendPageCommand(
   return result;
 }
 
+interface ResolvedFrame {
+  frameId: number;
+  url: string;
+}
+
+function jetpackFrameKey(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (
+      url.host !== JETPACK_COMMENT_FRAME_HOST ||
+      !url.pathname.startsWith(JETPACK_COMMENT_FRAME_PATH)
+    ) {
+      return null;
+    }
+    return `${url.searchParams.get('blogid') ?? ''}|${
+      url.searchParams.get('postid') ?? ''
+    }`;
+  } catch {
+    return null;
+  }
+}
+
+// The committed frame carries extra params (sig, comment_registration, …) the
+// top page's data-lazy-src hint lacks, so match on the stable blogid|postid key
+// and fall back to any jetpack-comment frame when the hint omits them.
+function isSameJetpackFrame(
+  candidate: string | undefined,
+  hint: string
+): boolean {
+  const candidateKey = jetpackFrameKey(candidate);
+  if (candidateKey === null) return false;
+  const hintKey = jetpackFrameKey(hint);
+  return hintKey === null || hintKey === '|' || candidateKey === hintKey;
+}
+
+function frameDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveJetpackFrame(
+  tabId: number,
+  hint: string
+): Promise<ResolvedFrame | null> {
+  const deadline = Date.now() + JETPACK_FRAME_RESOLVE_TIMEOUT_MS;
+  for (;;) {
+    const frames = await chrome.webNavigation
+      .getAllFrames({ tabId })
+      .catch(() => null);
+    const match = frames?.find((frame) => isSameJetpackFrame(frame.url, hint));
+    if (match) return { frameId: match.frameId, url: match.url };
+    if (Date.now() >= deadline) return null;
+    await frameDelay(JETPACK_FRAME_POLL_INTERVAL_MS);
+  }
+}
+
+async function sendFramePageCommand(
+  tabId: number,
+  frameId: number,
+  command: PageCommand
+): Promise<PageCommandResult> {
+  const result = (await withPageCommandTimeout(
+    chrome.tabs.sendMessage(
+      tabId,
+      { type: PAGE_COMMAND_MESSAGE_TYPE, command },
+      { frameId }
+    ),
+    commandTimeout(command)
+  )) as PageCommandResult | undefined;
+  if (!result) throw new Error('PAGE_COMMAND_NO_RESULT');
+  return result;
+}
+
+async function executeFramePageCommand(
+  tabId: number,
+  frameId: number,
+  command: PageCommand
+): Promise<PageCommandResult> {
+  try {
+    return await sendFramePageCommand(tabId, frameId, command);
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes('Receiving end does not exist')
+    ) {
+      throw error;
+    }
+  }
+  await withPageCommandTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      files: [PAGE_COMMAND_SCRIPT],
+    }),
+    commandTimeout(command)
+  );
+  return sendFramePageCommand(tabId, frameId, command);
+}
+
 function readAnalysis(result: PageCommandResult): PageAnalysis {
   if (result.type === 'analysis') return result.analysis;
   throw new Error(
@@ -157,14 +262,72 @@ export async function analyzeCurrentPage(): Promise<PageAnalysis> {
 }
 
 export async function analyzeTab(tabId: number): Promise<PageAnalysis> {
-  return readAnalysis(await executePageCommand(tabId, { type: 'analyze' }));
+  const analysis = readAnalysis(
+    await executePageCommand(tabId, { type: 'analyze' })
+  );
+  if (analysis.form.frame?.kind !== 'jetpack') return analysis;
+  return mergeJetpackFrameAnalysis(tabId, analysis, analysis.form.frame.url);
+}
+
+// The top document only detects the Jetpack frame; its real form shape lives in
+// the cross-origin frame. Re-analyze inside the frame and keep the blog page's
+// context (title/excerpt/url) for comment generation.
+async function mergeJetpackFrameAnalysis(
+  tabId: number,
+  topAnalysis: PageAnalysis,
+  hint: string
+): Promise<PageAnalysis> {
+  const resolved = await resolveJetpackFrame(tabId, hint);
+  const frameAnalysis = resolved
+    ? await executeFramePageCommand(tabId, resolved.frameId, {
+        type: 'analyze',
+      })
+        .then(readAnalysis)
+        .catch(() => null)
+    : null;
+  if (!resolved || !frameAnalysis) {
+    return {
+      page: topAnalysis.page,
+      form: {
+        readiness: 'not_found',
+        editorLabel: '',
+        submitLabel: '',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED',
+      },
+    };
+  }
+  return {
+    page: topAnalysis.page,
+    form: {
+      ...frameAnalysis.form,
+      frame: { kind: 'jetpack', url: resolved.url },
+    },
+  };
 }
 
 export async function prepareTabSubmission(
   tabId: number,
   input: PageSubmissionInput,
-  target: PageSubmissionExpectation
+  target: PageSubmissionExpectation,
+  frame?: CommentFrameReference
 ): Promise<PageSubmissionPreparation> {
+  if (frame?.kind === 'jetpack') {
+    const resolved = await resolveJetpackFrame(tabId, frame.url);
+    if (!resolved) throw new Error('JETPACK_COMMENT_FRAME_UNAVAILABLE');
+    const preparation = readPreparation(
+      await executeFramePageCommand(tabId, resolved.frameId, {
+        type: 'submit.prepare',
+        input,
+        expected: { ...target, url: resolved.url },
+      })
+    );
+    // Restore the blog (tab) URL on the returned expectation so the runner's
+    // tab-level guards keep comparing against the article, not the frame.
+    return restoreExpectedUrl(preparation, target.url);
+  }
   return readPreparation(
     await sendPageCommand(tabId, {
       type: 'submit.prepare',
@@ -174,15 +337,61 @@ export async function prepareTabSubmission(
   );
 }
 
+function restoreExpectedUrl(
+  preparation: PageSubmissionPreparation,
+  url: string
+): PageSubmissionPreparation {
+  if (!preparation.ok) return preparation;
+  return {
+    ok: true,
+    prepared: {
+      ...preparation.prepared,
+      expected: { ...preparation.prepared.expected, url },
+    },
+  };
+}
+
 export async function clickPreparedTabSubmission(
   tabId: number,
-  prepared: PreparedPageSubmission
+  prepared: PreparedPageSubmission,
+  frame?: CommentFrameReference
 ): Promise<PageSubmissionResult> {
+  if (frame?.kind === 'jetpack') {
+    return clickPreparedJetpackSubmission(tabId, prepared, frame);
+  }
   let result: PageCommandResult;
   try {
     result = await sendPageCommand(tabId, {
       type: 'submit.click',
       prepared,
+    });
+  } catch {
+    throw new Error('PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS');
+  }
+  return readSubmission(result);
+}
+
+async function clickPreparedJetpackSubmission(
+  tabId: number,
+  prepared: PreparedPageSubmission,
+  frame: CommentFrameReference
+): Promise<PageSubmissionResult> {
+  let resolved: ResolvedFrame | null;
+  try {
+    resolved = await resolveJetpackFrame(tabId, frame.url);
+  } catch {
+    // The frame already navigated away on submit: treat as an in-flight submit.
+    throw new Error('PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS');
+  }
+  if (!resolved) throw new Error('PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS');
+  let result: PageCommandResult;
+  try {
+    result = await sendFramePageCommand(tabId, resolved.frameId, {
+      type: 'submit.click',
+      prepared: {
+        ...prepared,
+        expected: { ...prepared.expected, url: resolved.url },
+      },
     });
   } catch {
     throw new Error('PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS');

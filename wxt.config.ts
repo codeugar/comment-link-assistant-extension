@@ -19,6 +19,7 @@ export default defineConfig({
       'alarms',
       'sidePanel',
       'tabGroups',
+      'webNavigation',
     ],
     side_panel: {
       default_path: 'sidepanel.html',

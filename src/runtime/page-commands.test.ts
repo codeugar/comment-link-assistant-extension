@@ -838,3 +838,273 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('jetpack remote-comment frame routing', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const frameHint = {
+    kind: 'jetpack' as const,
+    url: 'https://jetpack.wordpress.com/jetpack-comment/?blogid=1&postid=2',
+  };
+  // The frame's committed URL carries more params (sig, etc.) than the top page's
+  // data-lazy-src hint; routing must target the committed URL, not the hint.
+  const committedFrameUrl =
+    'https://jetpack.wordpress.com/jetpack-comment/?blogid=1&postid=2&sig=abc';
+
+  it('merges an in-frame analysis for a Jetpack remote-comment frame', async () => {
+    const topAnalysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: 'Description',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: '',
+        submitLabel: '',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'JETPACK_COMMENT_FRAME',
+        frame: frameHint,
+      },
+    };
+    const frameAnalysis = {
+      page: {
+        url: committedFrameUrl,
+        title: '',
+        description: '',
+        excerpt: '',
+        language: 'en',
+        hasWebsiteField: true,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment comment',
+        submitLabel: 'Post Comment',
+        hasNameField: true,
+        hasEmailField: true,
+        hasWebsiteField: true,
+        requiresWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    const sendMessage = vi.fn((_tabId, _message, options) =>
+      Promise.resolve({
+        type: 'analysis',
+        analysis: options?.frameId === 7 ? frameAnalysis : topAnalysis,
+      })
+    );
+    const getAllFrames = vi.fn().mockResolvedValue([
+      { frameId: 0, url: 'https://blog.example/article' },
+      { frameId: 7, url: committedFrameUrl },
+    ]);
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+      webNavigation: { getAllFrames },
+    });
+
+    const result = await analyzeTab(42);
+
+    expect(result.page).toEqual(topAnalysis.page);
+    expect(result.form).toMatchObject({
+      readiness: 'ready',
+      hasWebsiteField: true,
+      submitLabel: 'Post Comment',
+      frame: { kind: 'jetpack', url: committedFrameUrl },
+    });
+    expect(getAllFrames).toHaveBeenCalledWith({ tabId: 42 });
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ command: { type: 'analyze' } }),
+      { frameId: 7 }
+    );
+  });
+
+  it('reports the frame unsupported when it cannot be resolved', async () => {
+    const topAnalysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: 'Description',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: '',
+        submitLabel: '',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'JETPACK_COMMENT_FRAME',
+        frame: frameHint,
+      },
+    };
+    vi.stubGlobal('chrome', {
+      tabs: {
+        sendMessage: vi
+          .fn()
+          .mockResolvedValue({ type: 'analysis', analysis: topAnalysis }),
+      },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+      // Only the blog frame is present — the jetpack frame never committed.
+      webNavigation: {
+        getAllFrames: vi
+          .fn()
+          .mockResolvedValue([
+            { frameId: 0, url: 'https://blog.example/article' },
+          ]),
+      },
+    });
+
+    // Resolution polls webNavigation for the promoted frame up to an 8s budget;
+    // drive that clock so the never-committed frame falls back to unsupported.
+    vi.useFakeTimers();
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await pending;
+
+    expect(result.form).toMatchObject({
+      readiness: 'not_found',
+      message: 'CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED',
+    });
+    expect(result.form.frame).toBeUndefined();
+  });
+
+  it('prepares a Jetpack submission inside the frame and restores the blog url', async () => {
+    const target = {
+      url: 'https://blog.example/article',
+      editorLabel: 'comment comment',
+      submitLabel: 'Post Comment',
+      hasWebsiteField: true,
+    };
+    const framePrepared = {
+      fingerprint: 'A relevant comment',
+      comment: 'A relevant comment',
+      domToken: 'tok',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      expected: { ...target, url: committedFrameUrl },
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'preparation',
+      preparation: { ok: true, prepared: framePrepared },
+    });
+    const getAllFrames = vi
+      .fn()
+      .mockResolvedValue([{ frameId: 7, url: committedFrameUrl }]);
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+      webNavigation: { getAllFrames },
+    });
+
+    const result = await prepareTabSubmission(
+      42,
+      { comment: 'A relevant comment', websiteUrl: 'https://product.example' },
+      target,
+      frameHint
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        command: expect.objectContaining({
+          type: 'submit.prepare',
+          expected: expect.objectContaining({ url: committedFrameUrl }),
+        }),
+      }),
+      { frameId: 7 }
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      prepared: { expected: { url: 'https://blog.example/article' } },
+    });
+  });
+
+  it('clicks a prepared Jetpack submission inside the frame', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      comment: 'A relevant comment',
+      domToken: 'tok',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      expected: {
+        url: 'https://blog.example/article',
+        editorLabel: 'comment comment',
+        submitLabel: 'Post Comment',
+        hasWebsiteField: true,
+      },
+    };
+    const result = {
+      status: 'submitted' as const,
+      message: 'COMMENT_SUBMITTED',
+      fingerprint: prepared.fingerprint,
+    };
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValue({ type: 'submission', result });
+    const getAllFrames = vi
+      .fn()
+      .mockResolvedValue([{ frameId: 7, url: committedFrameUrl }]);
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      webNavigation: { getAllFrames },
+    });
+
+    await expect(
+      clickPreparedTabSubmission(42, prepared, frameHint)
+    ).resolves.toEqual(result);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        command: expect.objectContaining({
+          type: 'submit.click',
+          prepared: expect.objectContaining({
+            expected: expect.objectContaining({ url: committedFrameUrl }),
+          }),
+        }),
+      }),
+      { frameId: 7 }
+    );
+  });
+
+  it('maps a closed frame port to a navigation-in-progress for a Jetpack click', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      comment: 'A relevant comment',
+      domToken: 'tok',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      expected: {
+        url: 'https://blog.example/article',
+        editorLabel: 'c',
+        submitLabel: 'Post Comment',
+        hasWebsiteField: true,
+      },
+    };
+    vi.stubGlobal('chrome', {
+      tabs: {
+        sendMessage: vi
+          .fn()
+          .mockRejectedValue(new Error('The message port closed.')),
+      },
+      webNavigation: {
+        getAllFrames: vi
+          .fn()
+          .mockResolvedValue([{ frameId: 7, url: committedFrameUrl }]),
+      },
+    });
+
+    await expect(
+      clickPreparedTabSubmission(42, prepared, frameHint)
+    ).rejects.toThrow('PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS');
+  });
+});

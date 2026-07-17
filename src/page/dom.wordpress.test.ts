@@ -81,6 +81,59 @@ describe('WordPress-native recognition', () => {
     }
   );
 
+  it('recognizes, prepares, and binds the Jetpack in-frame comment form', async () => {
+    // The document served inside the jetpack.wordpress.com/jetpack-comment/
+    // frame is a WordPress comment form that POSTs to jetpack.wordpress.com and
+    // whose submit carries name="submit" but id="comment-submit" (not #submit).
+    document.body.innerHTML = `
+      <form
+        action="https://jetpack.wordpress.com/jetpack-comment/"
+        method="post"
+        id="commentform"
+        class="comment-form">
+        <textarea id="comment" name="comment"></textarea>
+        <input id="author" name="author" type="text">
+        <input id="email" name="email" type="email">
+        <input id="url" name="url" type="url">
+        <input name="submit" type="submit" id="comment-submit" value="Post Comment">
+      </form>
+    `;
+    let submitted = false;
+    document
+      .querySelector('#commentform')
+      ?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitted = true;
+      });
+
+    const analysis = await analyzePageDocument(document);
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      hasNameField: true,
+      hasEmailField: true,
+      hasWebsiteField: true,
+    });
+    // The in-frame document must not classify itself as a Jetpack frame target.
+    expect(analysis.form.frame).toBeUndefined();
+
+    const preparation = await prepareSubmissionDocument(document, {
+      comment: 'A genuinely useful comment about the article.',
+      displayName: 'Seed Audio',
+      email: 'support@example.com',
+      websiteUrl: 'https://example.com',
+    });
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok) return;
+
+    const result = await clickPreparedSubmissionDocument(
+      document,
+      preparation.prepared,
+      0
+    );
+    expect(submitted).toBe(true);
+    expect(result.clickOccurred).toBe(true);
+  });
+
   it('skips a hidden name="comment" honeypot decoy and binds the visible #comment editor', async () => {
     document.body.innerHTML = `
       <article><p>Long-form article copy about testing web forms in detail.</p></article>

@@ -67,6 +67,7 @@ describe('runtime origin permissions', () => {
         'https://example.com/*',
         'https://product.test/*',
         'https://www.product.test/*',
+        'https://jetpack.wordpress.com/*',
       ],
     });
   });
@@ -88,6 +89,7 @@ describe('runtime origin permissions', () => {
         'http://localhost:3000/*',
         'http://127.0.0.1:8080/*',
         'http://[::1]:9000/*',
+        'https://jetpack.wordpress.com/*',
       ],
     });
   });
@@ -99,7 +101,11 @@ describe('runtime origin permissions', () => {
     await requestBatchOriginPermissions(['https://example.co.uk/article']);
 
     expect(request).toHaveBeenCalledWith({
-      origins: ['https://example.co.uk/*', 'https://www.example.co.uk/*'],
+      origins: [
+        'https://example.co.uk/*',
+        'https://www.example.co.uk/*',
+        'https://jetpack.wordpress.com/*',
+      ],
     });
   });
 
@@ -117,6 +123,22 @@ describe('runtime origin permissions', () => {
         'https://www.example.com/*',
         'http://example.com/*',
         'https://example.com/*',
+        'https://jetpack.wordpress.com/*',
+      ],
+    });
+  });
+
+  it('includes the Jetpack comment host so remote-comment frames are scriptable', async () => {
+    const request = vi.spyOn(chrome.permissions, 'request');
+    request.mockImplementation((async () => true) as never);
+
+    await requestBatchOriginPermissions(['https://blog.example/article']);
+
+    expect(request).toHaveBeenCalledWith({
+      origins: [
+        'https://blog.example/*',
+        'https://www.blog.example/*',
+        'https://jetpack.wordpress.com/*',
       ],
     });
   });
