@@ -375,6 +375,83 @@ function documentRoots(document: Document): Array<Document | ShadowRoot> {
   return roots;
 }
 
+// Jetpack renders the ONLY comment form of a Jetpack-comments blog inside a
+// cross-origin iframe served from jetpack.wordpress.com/jetpack-comment/. The
+// frame is same-origin-scriptable from the extension (its sandbox grants
+// allow-same-origin allow-scripts), so we treat it as a supported target and
+// run submit/click inside it rather than writing it off as unsupported.
+const JETPACK_COMMENT_FRAME_HOST = 'jetpack.wordpress.com';
+const JETPACK_COMMENT_FRAME_PATH = '/jetpack-comment';
+
+interface JetpackCommentFrame {
+  element: HTMLIFrameElement;
+  url: string;
+}
+
+function jetpackCommentFrameUrl(element: Element): string | null {
+  // Lazy-loading themes park the frame URL in a data attribute until the frame
+  // scrolls into view, so read those before assuming no source.
+  const raw =
+    element.getAttribute('src') ??
+    element.getAttribute('data-lazy-src') ??
+    element.getAttribute('data-src') ??
+    '';
+  if (!raw) return null;
+  try {
+    const url = new URL(raw, element.ownerDocument.baseURI);
+    if (
+      url.host === JETPACK_COMMENT_FRAME_HOST &&
+      url.pathname.startsWith(JETPACK_COMMENT_FRAME_PATH)
+    ) {
+      return url.href;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolveJetpackCommentFrame(
+  document: Document
+): JetpackCommentFrame | null {
+  for (const element of queryAllDeep(
+    document,
+    'iframe[src], iframe[data-lazy-src], iframe[data-src]'
+  )) {
+    if (element.tagName !== 'IFRAME' || !isVisible(element)) continue;
+    const url = jetpackCommentFrameUrl(element);
+    if (url) return { element: element as HTMLIFrameElement, url };
+  }
+  return null;
+}
+
+// Background worker tabs never scroll the frame into view, so the theme's
+// viewport lazy-loader never promotes `data-lazy-src` to `src`. Promote it
+// directly so Chrome commits the real frame document and it becomes scriptable.
+function promoteJetpackCommentFrame(frame: JetpackCommentFrame): void {
+  if (!frame.element.getAttribute('src')) {
+    frame.element.setAttribute('src', frame.url);
+  }
+}
+
+function buildJetpackFrameSummary(
+  frame: JetpackCommentFrame
+): CommentFormSummary {
+  // The in-frame form's real field shape is resolved by re-analyzing inside the
+  // frame (page-commands merges it in); these top-document flags are placeholders.
+  return {
+    readiness: 'ready',
+    editorLabel: '',
+    submitLabel: '',
+    hasNameField: false,
+    hasEmailField: false,
+    hasWebsiteField: false,
+    requiresWebsiteField: false,
+    message: 'JETPACK_COMMENT_FRAME',
+    frame: { kind: 'jetpack', url: frame.url },
+  };
+}
+
 function hasUnsupportedCrossOriginCommentFrame(document: Document): boolean {
   return queryAllDeep(
     document,
@@ -859,6 +936,8 @@ function buildWordPressFormSummary(
 function buildFormSummary(document: Document): CommentFormSummary {
   const wpForm = resolveWordPressCommentForm(document);
   if (wpForm) return buildWordPressFormSummary(document, wpForm);
+  const jetpackFrame = resolveJetpackCommentFrame(document);
+  if (jetpackFrame) return buildJetpackFrameSummary(jetpackFrame);
   const editor = findEditor(document);
   const captcha = hasCaptcha(document);
   if (!editor) {
@@ -1070,6 +1149,8 @@ export async function analyzePageDocument(
     );
   }
   scrollCommentRegionIntoView(document);
+  const jetpackFrame = resolveJetpackCommentFrame(document);
+  if (jetpackFrame) promoteJetpackCommentFrame(jetpackFrame);
   let analysis = buildPageAnalysis(document);
   // Only pay the bounded settle when nothing was found and the page still looks
   // like it is mounting content; a fully loaded page with no editor is final.

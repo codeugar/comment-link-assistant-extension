@@ -689,6 +689,40 @@ describe('batch runner', () => {
     ]);
   });
 
+  it('threads a Jetpack frame reference into prepare and click', async () => {
+    const jetpack = analysis();
+    jetpack.form.frame = {
+      kind: 'jetpack',
+      url: 'https://jetpack.wordpress.com/jetpack-comment/?blogid=1&postid=2',
+    };
+    const context = dependencies(initialBatch(), {
+      analyzeTab: vi.fn(async () => jetpack),
+    });
+
+    for (let step = 0; step < 12; step += 1) {
+      await advanceBatchStep(context.deps);
+      if (context.read()?.status === 'completed') break;
+    }
+
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'submitted' }],
+    });
+    expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
+      7,
+      expect.anything(),
+      expect.anything(),
+      'batch-1',
+      jetpack.form.frame
+    );
+    expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledWith(
+      7,
+      expect.anything(),
+      'batch-1',
+      jetpack.form.frame
+    );
+  });
+
   it('uses a confidently detected standard comment form without AI planning', async () => {
     const ready = analysis('ready');
     const batch = updateBatchProgress(
@@ -759,7 +793,8 @@ describe('batch runner', () => {
       7,
       expect.objectContaining({ websiteUrl: 'https://product.example' }),
       expect.objectContaining({ hasWebsiteField: true }),
-      'batch-1'
+      'batch-1',
+      undefined
     );
   });
 
@@ -797,7 +832,8 @@ describe('batch runner', () => {
       7,
       expect.objectContaining({ websiteUrl: 'https://product.example' }),
       expect.anything(),
-      'batch-1'
+      'batch-1',
+      undefined
     );
   });
 

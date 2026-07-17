@@ -133,6 +133,10 @@ const commentFormSummarySchema = z
     hasWebsiteField: z.boolean(),
     requiresWebsiteField: z.boolean().optional(),
     message: z.string().max(500),
+    frame: z
+      .object({ kind: z.literal('jetpack'), url: httpUrlSchema })
+      .strict()
+      .optional(),
   })
   .strict();
 

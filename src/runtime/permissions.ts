@@ -3,6 +3,11 @@ import {
   originPermissionPattern,
 } from '@/website/profile';
 
+// Jetpack-comments blogs render their form inside a jetpack.wordpress.com frame.
+// Bundle its origin into every batch request/check so the frame is scriptable,
+// prompted once alongside the target-site permissions rather than mid-run.
+const JETPACK_COMMENT_ORIGIN = 'https://jetpack.wordpress.com/*';
+
 export async function requestOriginPermissions(
   urls: string[]
 ): Promise<boolean> {
@@ -36,7 +41,12 @@ function permissionOrigins(urls: string[]): string[] {
 }
 
 function batchPermissionOrigins(targetUrls: string[]): string[] {
-  return Array.from(new Set(targetUrls.flatMap(targetPermissionOrigins)));
+  return Array.from(
+    new Set([
+      ...targetUrls.flatMap(targetPermissionOrigins),
+      JETPACK_COMMENT_ORIGIN,
+    ])
+  );
 }
 
 function targetPermissionOrigins(value: string): string[] {

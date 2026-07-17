@@ -81,7 +81,7 @@ describe('cross-origin comment frames', () => {
     document.body.innerHTML = '';
   });
 
-  it('reports a lazy-loaded Jetpack remote-comment iframe as unsupported', async () => {
+  function mountJetpackFrame() {
     // greenerideal.com shape: the iframe has no `src` until a lazy-load
     // script promotes `data-lazy-src` when scrolled into view.
     document.body.innerHTML = `
@@ -99,6 +99,46 @@ describe('cross-origin comment frames', () => {
             data-lazy-method="viewport"
             data-lazy-attributes="src"></iframe>
         </form>
+      </div>
+    `;
+    return document.getElementById(
+      'jetpack_remote_comment'
+    ) as HTMLIFrameElement;
+  }
+
+  it('reports a lazy-loaded Jetpack remote-comment iframe as a ready frame', async () => {
+    mountJetpackFrame();
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      frame: {
+        kind: 'jetpack',
+        url: 'https://jetpack.wordpress.com/jetpack-comment/?blogid=115909882&postid=44294',
+      },
+    });
+  });
+
+  it('promotes the Jetpack frame data-lazy-src so a background tab loads it', async () => {
+    const frame = mountJetpackFrame();
+    expect(frame.getAttribute('src')).toBeNull();
+
+    await analyzePageDocument(document);
+
+    expect(frame.getAttribute('src')).toBe(
+      'https://jetpack.wordpress.com/jetpack-comment/?blogid=115909882&postid=44294'
+    );
+  });
+
+  it('still reports a non-Jetpack cross-origin comment frame as unsupported', async () => {
+    document.body.innerHTML = `
+      <article><h1>Disconnect to reconnect</h1><p>Enough article copy to build an excerpt for generation.</p></article>
+      <div id="comments">
+        <iframe
+          title="Comments"
+          src="https://widget.disqus.com/embed.html?forum=example#comment"
+          style="width:100%; height:430px; border:0;"></iframe>
       </div>
     `;
 

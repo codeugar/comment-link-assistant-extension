@@ -1,5 +1,6 @@
 import { type GenerateCommentInput, generateComment } from '@/api/client';
 import type {
+  CommentFrameReference,
   PageAnalysis,
   PageSubmissionExpectation,
   PageSubmissionInput,
@@ -75,12 +76,14 @@ export interface BatchRunnerDependencies {
     tabId: number,
     input: PageSubmissionInput,
     target: PageSubmissionExpectation,
-    batchId: string
+    batchId: string,
+    frame?: CommentFrameReference
   ): Promise<PageSubmissionPreparation>;
   clickPreparedTabSubmission(
     tabId: number,
     prepared: PreparedPageSubmission,
-    batchId: string
+    batchId: string,
+    frame?: CommentFrameReference
   ): Promise<PageSubmissionResult>;
   verifyTabSubmission(
     tabId: number,
@@ -131,13 +134,13 @@ const defaultDependencies: BatchRunnerDependencies = {
     return analyzeTab(tabId);
   },
   generateComment,
-  async prepareTabSubmission(tabId, input, target, batchId) {
+  async prepareTabSubmission(tabId, input, target, batchId, frame) {
     await assertWorkerTabOwnership(batchId, tabId);
-    return prepareTabSubmission(tabId, input, target);
+    return prepareTabSubmission(tabId, input, target, frame);
   },
-  async clickPreparedTabSubmission(tabId, prepared, batchId) {
+  async clickPreparedTabSubmission(tabId, prepared, batchId, frame) {
     await assertWorkerTabOwnership(batchId, tabId);
-    return clickPreparedTabSubmission(tabId, prepared);
+    return clickPreparedTabSubmission(tabId, prepared, frame);
   },
   async verifyTabSubmission(tabId, prepared, expectedUrl, batchId) {
     await assertWorkerTabOwnership(batchId, tabId);
@@ -876,7 +879,8 @@ async function prepareGeneratedComment(
       tab.id,
       input,
       target,
-      batch.id
+      batch.id,
+      item.analysis.form.frame
     );
     if (!preparation.ok) {
       return saveSubmissionResult(batch, preparation.result, dependencies);
@@ -1019,7 +1023,8 @@ async function dispatchPreparedComment(
     const result = await dependencies.clickPreparedTabSubmission(
       batch.workerTabId,
       item.prepared,
-      batch.id
+      batch.id,
+      item.analysis?.form.frame
     );
     if (!result.clickOccurred) {
       return saveSubmissionResult(dispatched, result, dependencies);
