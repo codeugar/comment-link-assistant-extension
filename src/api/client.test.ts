@@ -124,27 +124,113 @@ describe('direct comment generation', () => {
     await expect(request).resolves.toBe('A useful comment.');
   });
 
-  it('aborts a provider request before the MV3 worker deadline', async () => {
+  it('retries a request that times out on its first attempt', async () => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async (_url: string, request?: RequestInit) =>
+    const fetchMock = vi
+      .fn<(url: string, request?: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce(
+        (_url, request) =>
           new Promise<Response>((_resolve, reject) => {
             request?.signal?.addEventListener('abort', () => {
               reject(new DOMException('Aborted', 'AbortError'));
             });
           })
       )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            choices: [
+              { message: { content: '{"comment":"A useful comment."}' } },
+            ],
+          }),
+          { status: 200 }
+        )
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = generateComment(
+      { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+      input
     );
+
+    await vi.advanceTimersByTimeAsync(30_000); // per-attempt budget expires, aborting attempt 1
+    await vi.advanceTimersByTimeAsync(250); // retry backoff before attempt 2
+
+    await expect(request).resolves.toBe('A useful comment.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws COMMENT_GENERATION_TIMEOUT only once every attempt has timed out', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      async (_url: string, request?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          request?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
 
     const request = generateComment(
       { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
       input
     ).catch((error: unknown) => error);
 
-    await vi.advanceTimersByTimeAsync(20_000);
-    await expect(request).resolves.toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(30_000); // attempt 1 times out
+    await vi.advanceTimersByTimeAsync(250); // backoff before attempt 2
+    await vi.advanceTimersByTimeAsync(30_000); // attempt 2 times out
+    await vi.advanceTimersByTimeAsync(500); // backoff before attempt 3
+    await vi.advanceTimersByTimeAsync(30_000); // attempt 3 times out
+
+    const error = await request;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('COMMENT_GENERATION_TIMEOUT');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not let an earlier attempt's expired timer abort a later attempt", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<(url: string, request?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(new Response('', { status: 500 }))
+      .mockImplementationOnce(
+        (_url, request) =>
+          new Promise<Response>((resolve, reject) => {
+            request?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            });
+            // Resolves after attempt 1's original 30s deadline has passed but
+            // well within attempt 2's own fresh 30s budget.
+            setTimeout(() => {
+              resolve(
+                new Response(
+                  JSON.stringify({
+                    choices: [
+                      {
+                        message: { content: '{"comment":"A useful comment."}' },
+                      },
+                    ],
+                  }),
+                  { status: 200 }
+                )
+              );
+            }, 29_800);
+          })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const request = generateComment(
+      { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+      input
+    );
+
+    // 250ms backoff + 29_800ms = 30_050ms, past attempt 1's original 30_000ms
+    // deadline measured from call start, but before attempt 2's own deadline.
+    await vi.advanceTimersByTimeAsync(30_100);
+
+    await expect(request).resolves.toBe('A useful comment.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('requires the key for the selected provider', async () => {

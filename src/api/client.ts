@@ -8,8 +8,8 @@ import { z } from 'zod';
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 const KIE_ENDPOINT =
   'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
-const DEEPSEEK_REQUEST_TIMEOUT_MS = 18_000;
-const KIE_REQUEST_TIMEOUT_MS = 120_000;
+const DEEPSEEK_ATTEMPT_TIMEOUT_MS = 30_000;
+const KIE_ATTEMPT_TIMEOUT_MS = 120_000;
 const KEEP_ALIVE_INTERVAL_MS = 25_000;
 const MAX_REQUEST_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 250;
@@ -120,7 +120,7 @@ function providerRequest(
       apiKey: keys.deepseekApiKey.trim(),
       label: 'DeepSeek',
       responseFormat: 'openai',
-      timeoutMs: DEEPSEEK_REQUEST_TIMEOUT_MS,
+      timeoutMs: DEEPSEEK_ATTEMPT_TIMEOUT_MS,
       body: {
         model: 'deepseek-v4-flash',
         stream: false,
@@ -142,7 +142,7 @@ function providerRequest(
     apiKey: keys.kieApiKey.trim(),
     label: 'KIE Gemini',
     responseFormat: 'gemini',
-    timeoutMs: KIE_REQUEST_TIMEOUT_MS,
+    timeoutMs: KIE_ATTEMPT_TIMEOUT_MS,
     body: {
       stream: true,
       contents: [
@@ -161,8 +161,6 @@ function providerRequest(
 }
 
 async function requestProvider(request: ProviderRequest): Promise<string> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), request.timeoutMs);
   const keepWorkerAlive = () => {
     try {
       void chrome.runtime.getPlatformInfo().catch(() => undefined);
@@ -179,45 +177,56 @@ async function requestProvider(request: ProviderRequest): Promise<string> {
         })();
   try {
     for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
-      let response: Response;
+      // Each attempt gets its own abort deadline: a single slow response must
+      // not burn the budget of the retries after it. The timer stays armed
+      // through the body read so a stalled (streaming) body is still bounded.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), request.timeoutMs);
       try {
-        response = await fetch(request.endpoint, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${request.apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(request.body),
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          throw error;
+        let response: Response;
+        try {
+          response = await fetch(request.endpoint, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${request.apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(request.body),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          // A per-attempt timeout is retryable like any network failure; only
+          // the final attempt's abort surfaces as COMMENT_GENERATION_TIMEOUT.
+          if (attempt < MAX_REQUEST_ATTEMPTS - 1) {
+            await waitForRetry(attempt);
+            continue;
+          }
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            throw error;
+          }
+          throw new Error(`${request.label.toUpperCase()}_REQUEST_FAILED`);
         }
-        if (attempt < MAX_REQUEST_ATTEMPTS - 1) {
-          await waitForRetry(attempt);
-          continue;
+        if (!response.ok) {
+          if (
+            isRetryableStatus(response.status) &&
+            attempt < MAX_REQUEST_ATTEMPTS - 1
+          ) {
+            await waitForRetry(attempt);
+            continue;
+          }
+          throw new Error(
+            `${request.label.toUpperCase()}_HTTP_${response.status}`
+          );
         }
-        throw new Error(`${request.label.toUpperCase()}_REQUEST_FAILED`);
-      }
-      if (!response.ok) {
-        if (
-          isRetryableStatus(response.status) &&
-          attempt < MAX_REQUEST_ATTEMPTS - 1
-        ) {
-          await waitForRetry(attempt);
-          continue;
-        }
-        throw new Error(
-          `${request.label.toUpperCase()}_HTTP_${response.status}`
+        const content = await readProviderContent(
+          response,
+          request.responseFormat
         );
+        if (!content) throw new Error('COMMENT_GENERATION_EMPTY');
+        return content;
+      } finally {
+        clearTimeout(timer);
       }
-      const content = await readProviderContent(
-        response,
-        request.responseFormat
-      );
-      if (!content) throw new Error('COMMENT_GENERATION_EMPTY');
-      return content;
     }
     throw new Error('COMMENT_GENERATION_FAILED');
   } catch (error) {
@@ -226,7 +235,6 @@ async function requestProvider(request: ProviderRequest): Promise<string> {
     }
     throw error;
   } finally {
-    clearTimeout(timeout);
     if (keepAlive !== undefined) clearInterval(keepAlive);
   }
 }
