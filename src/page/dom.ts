@@ -42,7 +42,7 @@ const NON_COMMENT_FORM_CONTEXT =
   /\b(?:report|flag|spam|abuse|delete|remove|edit|update|moderat(?:e|ion)|approve|reject|ban|block|hide|archive|trash|discard|share|forward|invite|private[\s_-]*message|direct[\s_-]*message|message[\s_-]*author|order|checkout|payment|purchase|cart|billing|shipping|donat(?:e|ion)|booking|reservation|rsvp|application|apply|log[\s_-]*in|sign[\s_-]*(?:in|up)|register|account)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄|分享|转发|轉發|邀请|邀請|私信|私人消息|私人訊息|站内信|站內信|订单|訂單|结账|結帳|支付|付款|购买|購買|购物车|購物車|账单|帳單|捐赠|捐贈|预订|預訂|预约|預約|申请|申請|登录|登入|注册|註冊|加入|账号|帳號/i;
 const CHECKOUT_THEME_IDENTITY_TOKEN = /(^|[\s_-])checkout(?=$|[\s_-])/gi;
 const LOGIN_COPY =
-  /log[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*up\s+to\s+(?:comment|reply)|register\s+to\s+(?:comment|reply)|create\s+(?:an?\s+)?account\s+to\s+(?:comment|reply)|you must be logged in|登录后(?:才可)?(?:评论|回复|留言)|请先登录|登入後(?:才可)?(?:評論|回覆)|注册后(?:才可)?(?:评论|回复|留言)|註冊後(?:才可)?(?:評論|回覆)/i;
+  /log[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*up\s+to\s+(?:comment|reply)|register\s+to\s+(?:comment|reply)|create\s+(?:an?\s+)?account\s+to\s+(?:comment|reply)|(?:log[\s-]*in|sign[\s-]*(?:in|up)|register)\s+(?:or\s+(?:sign[\s-]*up|register)\s+)?to\s+(?:post|leave|add|write|submit)\s+(?:a\s+|your\s+)?(?:comment|repl(?:y|ies))s?|you must be logged in|登录后(?:才可)?(?:评论|回复|留言)|请先登录|登入後(?:才可)?(?:評論|回覆)|注册后(?:才可)?(?:评论|回复|留言)|註冊後(?:才可)?(?:評論|回覆)/i;
 const CAPTCHA_SELECTOR = [
   'iframe[src*="recaptcha"]',
   'iframe[src*="hcaptcha"]',
@@ -97,6 +97,12 @@ const COMMENT_REGION_SELECTOR = [
   '[id*="comment"]',
   '[class*="comment"]',
 ].join(',');
+// Controls that only reveal an initially absent / hidden comment form. Count
+// links ("5 comments") are deliberately excluded: they usually just scroll.
+const REVEAL_COMMENT_COPY =
+  /(?:leave|write|post|add|drop)\s+(?:a\s+|your\s+)?(?:comment|reply)|join\s+the\s+(?:discussion|conversation)|(?:show|view|load|open)\s+(?:the\s+)?comments?|^\s*respond\s*$|发表评论|寫評論|写评论|添加评论|发表留言|我要评论|我要留言/i;
+const REVEAL_REJECT =
+  /\b(?:like|unlike|upvote|downvote|vote|follow|bookmark|copy|share|report|flag)\b|点赞|點讚|投票|关注|關注|收藏|复制|複製|分享|举报|舉報/i;
 
 interface ActiveDomSubmission {
   token: string;
@@ -370,11 +376,19 @@ function documentRoots(document: Document): Array<Document | ShadowRoot> {
 }
 
 function hasUnsupportedCrossOriginCommentFrame(document: Document): boolean {
-  return queryAllDeep(document, 'iframe[src]').some((element) => {
+  return queryAllDeep(
+    document,
+    'iframe[src], iframe[data-lazy-src], iframe[data-src]'
+  ).some((element) => {
     if (!isVisible(element)) return false;
     try {
+      // Lazy-loading themes park the frame URL in a data attribute until the
+      // frame scrolls into view, so read those before assuming no source.
       const source = new URL(
-        element.getAttribute('src') ?? '',
+        element.getAttribute('src') ??
+          element.getAttribute('data-lazy-src') ??
+          element.getAttribute('data-src') ??
+          '',
         element.ownerDocument.baseURI
       );
       if (!/^https?:$/.test(source.protocol)) return false;
@@ -674,6 +688,37 @@ function hasCaptcha(document: Document): boolean {
   return queryAllDeep(document, CAPTCHA_SELECTOR).some(isVisible);
 }
 
+// A login-to-comment notice that is not article prose: the copy must sit in a
+// short element outside the article body (WordPress and most CMSes render the
+// gate adjacent to or inside the comment area, never inside the post content).
+// Bare text nodes directly under `body` cover minimal notice-only pages.
+function hasLoginGateNotice(document: Document): boolean {
+  const bareBodyText = normalizeWhitespace(
+    Array.from(document.body?.childNodes ?? [])
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent ?? '')
+      .join(' ')
+  );
+  if (bareBodyText && LOGIN_COPY.test(bareBodyText)) return true;
+  for (const candidate of queryAllDeep(
+    document,
+    'p, div, span, li, label, legend, a'
+  )) {
+    const text = normalizeWhitespace(candidate.textContent ?? '');
+    if (!text || text.length > 300 || !LOGIN_COPY.test(text)) continue;
+    if (!isVisible(candidate)) continue;
+    if (
+      candidate.closest(
+        'article, .entry-content, .post-content, .article-content, [itemprop="articleBody"]'
+      )
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 function hasLoginForm(document: Document): boolean {
   return queryAllDeep(document, 'input[type="password"]')
     .filter(isVisible)
@@ -801,10 +846,7 @@ function buildWordPressFormSummary(
       message: 'CAPTCHA_REQUIRED',
     };
   }
-  const bodyCopy = document.body
-    ? normalizeWhitespace(renderedPageText(document.body))
-    : '';
-  if (LOGIN_COPY.test(bodyCopy) || hasLoginForm(document)) {
+  if (hasLoginGateNotice(document) || hasLoginForm(document)) {
     return {
       ...summary,
       readiness: 'login_required',
@@ -818,9 +860,6 @@ function buildFormSummary(document: Document): CommentFormSummary {
   const wpForm = resolveWordPressCommentForm(document);
   if (wpForm) return buildWordPressFormSummary(document, wpForm);
   const editor = findEditor(document);
-  const bodyCopy = document.body
-    ? normalizeWhitespace(renderedPageText(document.body))
-    : '';
   const captcha = hasCaptcha(document);
   if (!editor) {
     if (captcha) {
@@ -834,7 +873,7 @@ function buildFormSummary(document: Document): CommentFormSummary {
         message: 'CAPTCHA_REQUIRED',
       };
     }
-    if (LOGIN_COPY.test(bodyCopy) || hasLoginForm(document)) {
+    if (hasLoginGateNotice(document) || hasLoginForm(document)) {
       return {
         readiness: 'login_required',
         editorLabel: '',
@@ -861,7 +900,7 @@ function buildFormSummary(document: Document): CommentFormSummary {
   const container = findContainer(editor);
   const submit = findSubmit(container);
   const loginGate =
-    !submit && (LOGIN_COPY.test(bodyCopy) || hasLoginControl(container));
+    !submit && (hasLoginGateNotice(document) || hasLoginControl(container));
   const confident = Boolean(
     submit && isConfidentCommentForm(editor, container, submit)
   );
@@ -967,6 +1006,60 @@ function waitForCommentEditor(
   });
 }
 
+function isSamePageAnchor(element: HTMLElement): boolean {
+  const href = element.getAttribute('href');
+  return (
+    !href || href === '#' || href.startsWith('#') || /^javascript:/i.test(href)
+  );
+}
+
+// One safe control whose only plausible effect is revealing an initially
+// absent / hidden comment form. Links that navigate, auth prompts, and
+// destructive or social actions are never candidates.
+function findCommentRevealControl(document: Document): HTMLElement | null {
+  const candidates = queryAllDeep(
+    document,
+    'button, [role="button"], summary, a'
+  )
+    .filter(isHtmlElement)
+    .map((element) => {
+      if (!isVisible(element) || isDisabled(element)) return null;
+      if (element.closest('form')) return null;
+      const copy = normalizeWhitespace(visibleTextContent(element));
+      if (!copy || copy.length > 80 || !REVEAL_COMMENT_COPY.test(copy)) {
+        return null;
+      }
+      const descriptor = controlActionDescriptor(element);
+      if (
+        AUTH_CONTROL.test(descriptor) ||
+        NEGATIVE_SUBMIT.test(descriptor) ||
+        DESTRUCTIVE_SUBMIT.test(descriptor) ||
+        REVEAL_REJECT.test(descriptor)
+      ) {
+        return null;
+      }
+      if (element.tagName === 'A' && !isSamePageAnchor(element)) return null;
+      return { element, score: element.tagName === 'A' ? 1 : 2 };
+    })
+    .filter((candidate): candidate is { element: HTMLElement; score: number } =>
+      Boolean(candidate)
+    )
+    .sort((left, right) => right.score - left.score);
+  return candidates[0]?.element ?? null;
+}
+
+async function revealHiddenCommentForm(document: Document): Promise<boolean> {
+  const control = findCommentRevealControl(document);
+  if (!control) return false;
+  try {
+    control.click();
+  } catch {
+    return false;
+  }
+  await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+  return true;
+}
+
 export async function analyzePageDocument(
   document: Document
 ): Promise<PageAnalysis> {
@@ -977,15 +1070,24 @@ export async function analyzePageDocument(
     );
   }
   scrollCommentRegionIntoView(document);
-  const analysis = buildPageAnalysis(document);
+  let analysis = buildPageAnalysis(document);
   // Only pay the bounded settle when nothing was found and the page still looks
   // like it is mounting content; a fully loaded page with no editor is final.
-  if (findEditor(document) || !looksUnsettled(document)) {
-    return analysis;
+  if (!findEditor(document) && looksUnsettled(document)) {
+    await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+    scrollCommentRegionIntoView(document);
+    analysis = buildPageAnalysis(document);
   }
-  await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
-  scrollCommentRegionIntoView(document);
-  return buildPageAnalysis(document);
+  // The form may still hide behind a "Leave a comment" style toggle. Click at
+  // most one reveal control per analyze; verify never runs this path.
+  if (
+    analysis.form.readiness === 'not_found' &&
+    (await revealHiddenCommentForm(document))
+  ) {
+    scrollCommentRegionIntoView(document);
+    return buildPageAnalysis(document);
+  }
+  return analysis;
 }
 
 function setNativeValue(
