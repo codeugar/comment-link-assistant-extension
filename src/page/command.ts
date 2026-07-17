@@ -4,6 +4,7 @@ import {
   prepareSubmissionDocument,
   verifySubmissionDocument,
 } from './dom';
+import { hasWordPressSubmitReceipt } from './receipts';
 import type {
   PageAnalysis,
   PageSubmissionBaseline,
@@ -143,7 +144,7 @@ export async function runPageCommand(
     );
     if (
       result.status === 'submitted' &&
-      hasNewWordPressCommentAnchor(document.location.href, command.expectedUrl)
+      hasWordPressSubmitReceipt(document.location.href, command.expectedUrl)
     ) {
       return {
         type: 'submission',
@@ -190,22 +191,4 @@ function isAllowedSubmissionReturnUrl(
     (expected.protocol === 'http:' || expected.protocol === 'https:') &&
     current.origin === expected.origin
   );
-}
-
-function hasNewWordPressCommentAnchor(
-  currentValue: string,
-  expectedValue: string
-): boolean {
-  try {
-    const current = new URL(currentValue);
-    const expected = new URL(expectedValue);
-    return (
-      current.origin === expected.origin &&
-      current.pathname === expected.pathname &&
-      !/^#comment-\d+$/i.test(expected.hash) &&
-      /^#comment-\d+$/i.test(current.hash)
-    );
-  } catch {
-    return false;
-  }
 }

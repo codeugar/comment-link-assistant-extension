@@ -1033,6 +1033,90 @@ describe('batch runner', () => {
     });
   });
 
+  it('retries a transient verify failure while the retry window is open', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      verifyTabSubmission: vi.fn(async () => {
+        throw new Error('PAGE_COMMAND_TIMEOUT');
+      }),
+      now: () => 30_000,
+    });
+
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
+
+    expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
+    expect(context.read()).toMatchObject({
+      status: 'running',
+      items: [{ status: 'verifying' }],
+    });
+  });
+
+  it('records an unconfirmed submission once the verify retry window closes', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      verifyTabSubmission: vi.fn(async () => {
+        throw new Error('PAGE_COMMAND_TIMEOUT');
+      }),
+      now: () => 100_000,
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        {
+          status: 'failed',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        },
+      ],
+    });
+  });
+
+  it('does not retry verification after the tab left the submission page', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      {
+        workerTabId: 7,
+        item: { status: 'verifying', prepared },
+      },
+      3
+    );
+    const context = dependencies(batch, {
+      verifyTabSubmission: vi.fn(async () => {
+        throw new Error('PAGE_CHANGED_SINCE_SUBMISSION');
+      }),
+      now: () => 30_000,
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        {
+          status: 'failed',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        },
+      ],
+    });
+  });
+
   it('treats a clicked but unconfirmed result as submitted without any re-fetch', async () => {
     const unconfirmed: PageSubmissionResult = {
       status: 'submitted',

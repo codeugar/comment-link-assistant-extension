@@ -37,6 +37,11 @@ const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const TARGET_LOAD_GRACE_MS = 30_000;
+// Post-submit verification races the content-script re-injection against a
+// still-loading page, so a failed attempt is usually transient. The recovery
+// alarm ticks every 30s; this window guarantees at least two more attempts
+// before the item is written off as unconfirmed.
+const VERIFY_RETRY_WINDOW_MS = 90_000;
 // Heavy / slow pages keep their tab in `loading` far longer than it takes their
 // server-rendered comment form to appear. Because analyze is now load-tolerant,
 // we hand off to analysis on an on-target tab after this short settle instead of
@@ -1120,7 +1125,17 @@ async function verifyDispatchedComment(
       batch.id
     );
     return saveSubmissionResult(batch, result, dependencies);
-  } catch {
+  } catch (error) {
+    // A tab that left the submission page is a real signal and stays terminal.
+    // Anything else (command timeout, injection race) retries on later wakes:
+    // the batch is left unwritten so item.updatedAt keeps anchoring the window
+    // at the moment verification began.
+    if (
+      errorMessage(error) !== 'PAGE_CHANGED_SINCE_SUBMISSION' &&
+      dependencies.now() - item.updatedAt < VERIFY_RETRY_WINDOW_MS
+    ) {
+      return 'wait';
+    }
     return saveUnconfirmedSubmission(batch, dependencies);
   }
 }
