@@ -271,7 +271,7 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('verifies a prepared submission after a WordPress moderation redirect', async () => {
+  it('confirms a WordPress moderation redirect from the URL alone', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       comment: 'A relevant comment',
@@ -283,6 +283,132 @@ describe('page command runtime', () => {
         submitLabel: 'Post comment',
         hasWebsiteField: true,
       },
+    };
+    const sendMessage = vi.fn();
+    const executeScript = vi.fn();
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article?unapproved=42&moderation-hash=abc#comment-42',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, prepared.expected.url)
+    ).resolves.toMatchObject({
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
+      fingerprint: prepared.fingerprint,
+      clickOccurred: true,
+    });
+
+    // The URL receipt is authoritative; a still-loading page must not be
+    // consulted (that race is exactly what used to produce false failures).
+    expect(executeScript).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('confirms a new WordPress comment anchor from the URL alone', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+    };
+    const sendMessage = vi.fn();
+    const executeScript = vi.fn();
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article#comment-539871',
+          status: 'loading',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
+    ).resolves.toMatchObject({
+      status: 'submitted',
+      clickOccurred: true,
+    });
+
+    expect(executeScript).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('confirms a paginated-comments redirect carrying the anchor', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+    };
+    const sendMessage = vi.fn();
+    const executeScript = vi.fn();
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article/comment-page-2/#comment-99',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article/')
+    ).resolves.toMatchObject({
+      status: 'submitted',
+      clickOccurred: true,
+    });
+
+    expect(executeScript).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('verifies in-page on a paginated-comments path without a receipt', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+    };
+    const result = {
+      status: 'submitted' as const,
+      message: 'COMMENT_SUBMITTED',
+      fingerprint: prepared.fingerprint,
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result,
+    });
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article/comment-page-2/',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript: vi.fn() },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
+    ).resolves.toEqual(result);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('injects immediately when verification needs the content script', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
     };
     const result = {
       status: 'submitted' as const,
@@ -305,8 +431,8 @@ describe('page command runtime', () => {
       tabs: {
         get: vi.fn().mockResolvedValue({
           id: 42,
-          url: 'https://blog.example/article?unapproved=42&moderation-hash=abc#comment-42',
-          status: 'complete',
+          url: 'https://blog.example/article',
+          status: 'loading',
         }),
         sendMessage,
       },
@@ -314,21 +440,14 @@ describe('page command runtime', () => {
     });
 
     await expect(
-      verifyTabSubmission(42, prepared, prepared.expected.url)
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
     ).resolves.toEqual(result);
 
+    // A slow page must not delay re-injection until document_idle.
     expect(executeScript).toHaveBeenCalledWith({
       target: { tabId: 42 },
       files: ['content-scripts/page-command.js'],
-    });
-    expect(sendMessage).toHaveBeenCalledWith(42, {
-      type: 'comment-link-assistant:page-command',
-      command: {
-        type: 'verify',
-        fingerprint: prepared.fingerprint,
-        baseline: prepared.baseline,
-        expectedUrl: prepared.expected.url,
-      },
+      injectImmediately: true,
     });
   });
 

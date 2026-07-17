@@ -3,6 +3,10 @@ import {
   type PageCommand,
   type PageCommandResult,
 } from '@/page/command';
+import {
+  hasWordPressSubmitReceipt,
+  matchesWordPressCommentPathname,
+} from '@/page/receipts';
 import type {
   PageAnalysis,
   PageSubmissionExpectation,
@@ -80,6 +84,9 @@ async function executePageCommand(
     chrome.scripting.executeScript({
       target: { tabId },
       files: [PAGE_COMMAND_SCRIPT],
+      // Without this the injection waits for document_idle, which a heavy
+      // still-loading page can push past the command timeout.
+      injectImmediately: true,
     }),
     commandTimeout(command)
   );
@@ -189,6 +196,17 @@ export async function verifyTabSubmission(
   expectedUrl: string
 ): Promise<PageSubmissionResult> {
   const current = await chrome.tabs.get(tabId).catch(() => null);
+  // The WordPress redirect receipt on the tab URL is authoritative and needs
+  // no content script — the page may still be loading and stay unreachable
+  // long past the command timeout.
+  if (current && hasWordPressSubmitReceipt(current.url ?? '', expectedUrl)) {
+    return {
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
+      fingerprint: prepared.fingerprint,
+      clickOccurred: true,
+    };
+  }
   if (
     !current ||
     !isAllowedSubmissionReturnUrl(current.url ?? '', expectedUrl)
@@ -299,7 +317,7 @@ function isAllowedSubmissionReturnUrl(
   }
   if (
     current.origin !== expected.origin ||
-    current.pathname !== expected.pathname
+    !matchesWordPressCommentPathname(current.pathname, expected.pathname)
   ) {
     return false;
   }
