@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 type BusyState =
   | 'idle'
   | 'preparing'
+  | 'refreshing'
   | 'starting'
   | 'continuing'
   | 'stopping'
@@ -394,6 +395,27 @@ export default function App() {
     }
   }
 
+  async function refreshWebsiteProfile() {
+    setBusy('refreshing');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({
+        type: 'batch.preview',
+        websiteUrl: settings.websiteUrl,
+        refresh: true,
+      });
+      if (response.type !== 'batch.preview') {
+        throw new Error('BATCH_PREVIEW_FAILED');
+      }
+      setWebsiteProfile(response.data);
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
   async function startBatch() {
     if (!websiteProfile) return;
     setBusy('starting');
@@ -680,9 +702,21 @@ export default function App() {
               </div>
 
               <div className="profile-card">
-                <p className="profile-label">
-                  {translate('websiteProfileTitle')}
-                </p>
+                <div className="profile-card-heading">
+                  <p className="profile-label">
+                    {translate('websiteProfileTitle')}
+                  </p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={busy !== 'idle'}
+                    onClick={refreshWebsiteProfile}
+                  >
+                    {busy === 'refreshing'
+                      ? translate('refreshingWebsiteProfile')
+                      : translate('refreshWebsiteProfile')}
+                  </button>
+                </div>
                 <dl>
                   <div>
                     <dt>{translate('websiteUrlLabel')}</dt>

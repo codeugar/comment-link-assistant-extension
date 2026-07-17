@@ -203,6 +203,12 @@
   "websiteProfileTitle": {
     "message": "Website context"
   },
+  "refreshWebsiteProfile": {
+    "message": "Refresh"
+  },
+  "refreshingWebsiteProfile": {
+    "message": "Refreshing…"
+  },
   "metaTitleLabel": {
     "message": "Meta title"
   },

@@ -373,6 +373,13 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.42);
 }
 
+.profile-card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .profile-label {
   margin-bottom: 0;
   color: var(--accent-dark);

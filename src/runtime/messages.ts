@@ -9,7 +9,7 @@ import type { WebsiteProfile } from '@/website/profile';
 export type PopupMessage =
   | { type: 'page.analyze' }
   | { type: 'comment.prepare' }
-  | { type: 'batch.preview'; websiteUrl: string }
+  | { type: 'batch.preview'; websiteUrl: string; refresh?: boolean }
   | {
       type: 'batch.start';
       targetText: string;

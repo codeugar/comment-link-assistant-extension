@@ -67,6 +67,8 @@ export const MESSAGE_KEYS = [
   'preparingBatch',
   'batchReviewTitle',
   'websiteProfileTitle',
+  'refreshWebsiteProfile',
+  'refreshingWebsiteProfile',
   'metaTitleLabel',
   'metaDescriptionLabel',
   'targetUrlsSummary',
