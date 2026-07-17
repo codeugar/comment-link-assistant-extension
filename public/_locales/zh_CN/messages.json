@@ -203,6 +203,12 @@
   "websiteProfileTitle": {
     "message": "外链网站信息"
   },
+  "refreshWebsiteProfile": {
+    "message": "刷新"
+  },
+  "refreshingWebsiteProfile": {
+    "message": "刷新中…"
+  },
   "metaTitleLabel": {
     "message": "Meta Title"
   },

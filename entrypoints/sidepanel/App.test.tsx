@@ -47,6 +47,20 @@ async function enterInputValue(input: HTMLInputElement, value: string) {
   });
 }
 
+async function enterTextareaValue(
+  textarea: HTMLTextAreaElement,
+  value: string
+) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set;
+  await act(async () => {
+    setValue?.call(textarea, value);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 beforeEach(async () => {
   await fakeBrowser.reset();
   (
@@ -331,5 +345,87 @@ describe('side panel navigation', () => {
       ).toHaveProperty('open', true);
     });
     expect(currentFlow).toHaveProperty('open', false);
+  });
+});
+
+describe('website context refresh', () => {
+  const cachedProfile = {
+    url: 'https://product.example/',
+    title: 'Cached profile title',
+    description: 'Cached profile description',
+  };
+  const refreshedProfile = {
+    url: 'https://product.example/',
+    title: 'Refreshed profile title',
+    description: 'Refreshed profile description',
+  };
+
+  async function showWebsiteContext() {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: {
+        provider: 'deepseek',
+        websiteUrl: 'https://product.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
+      [PROVIDER_API_KEYS_STORAGE_KEY]: {
+        deepseekApiKey: 'deepseek-key',
+        kieApiKey: '',
+      },
+    });
+    vi.spyOn(chrome.permissions, 'request').mockImplementation(
+      (async () => true) as never
+    );
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        const typed = message as { type: string; refresh?: boolean };
+        if (typed.type !== 'batch.preview') {
+          throw new Error('UNEXPECTED_MESSAGE');
+        }
+        return {
+          ok: true,
+          data: {
+            type: 'batch.preview',
+            data: typed.refresh === true ? refreshedProfile : cachedProfile,
+          },
+        };
+      }) as never);
+
+    await renderSidePanel();
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    expect(targetEditor).not.toBeNull();
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, 'https://blog.example/post');
+    await clickButton('prepareBatch');
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Cached profile title');
+    });
+    return sendMessage;
+  }
+
+  it('shows a refresh button next to the website context', async () => {
+    await showWebsiteContext();
+
+    const refreshButton = Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === 'refreshWebsiteProfile'
+    );
+    expect(refreshButton).toBeDefined();
+  });
+
+  it('refetches the profile past the cache and shows the fresh metadata', async () => {
+    const sendMessage = await showWebsiteContext();
+
+    await clickButton('refreshWebsiteProfile');
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Refreshed profile title');
+    });
+    expect(container.textContent).not.toContain('Cached profile title');
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'batch.preview', refresh: true })
+    );
   });
 });

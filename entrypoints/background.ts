@@ -44,7 +44,7 @@ import {
   requestBatchStop,
 } from '@/storage/stop-intent';
 import { releaseWorkerTab } from '@/storage/worker-tab-ownership';
-import { fetchWebsiteProfile } from '@/website/profile';
+import { loadWebsiteProfile } from '@/website/profile-cache';
 
 type SendResponse = (response: BackgroundResponse) => void;
 
@@ -151,7 +151,7 @@ async function prepareComment(): Promise<PopupMessageResult> {
     );
   }
 
-  const websiteProfile = await fetchWebsiteProfile(settings.websiteUrl);
+  const websiteProfile = await loadWebsiteProfile(settings.websiteUrl);
   const effectiveLinkMode =
     settings.linkMode === 'prefer-website-field' &&
     !analysis.form.hasWebsiteField
@@ -294,7 +294,9 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   if (message.type === 'batch.preview') {
     return {
       type: message.type,
-      data: await fetchWebsiteProfile(message.websiteUrl),
+      data: await loadWebsiteProfile(message.websiteUrl, {
+        refresh: message.refresh === true,
+      }),
     };
   }
   if (message.type === 'batch.start') return startBatch(message);
