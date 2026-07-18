@@ -26,7 +26,8 @@ type BusyState =
   | 'continuing'
   | 'stopping'
   | 'opening'
-  | 'resetting';
+  | 'resetting'
+  | 'retrying';
 
 function providerLabel(provider: ExtensionSettings['provider']): string {
   return translate(
@@ -284,6 +285,16 @@ export default function App() {
 
   const batchIsActive =
     batch?.status === 'running' || batch?.status === 'paused';
+  const batchIsTerminal =
+    batch?.status === 'completed' || batch?.status === 'stopped';
+  const canRetryItem = (item: BatchItem): boolean =>
+    batchIsTerminal &&
+    (item.status === 'failed' ||
+      item.status === 'no_form' ||
+      item.status === 'validation_error');
+  const retryableItemIds = batch
+    ? batch.items.filter(canRetryItem).map((item) => item.id)
+    : [];
   const currentItem =
     batch && batch.currentIndex < batch.items.length
       ? batch.items[batch.currentIndex]
@@ -467,6 +478,27 @@ export default function App() {
         setTargetText('');
         setWebsiteProfile(null);
       }
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function retryBatchItems(itemIds: string[]) {
+    if (itemIds.length === 0) return;
+    setBusy('retrying');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({
+        type: 'batch.retry-items',
+        itemIds,
+      });
+      if (response.type !== 'batch.retry-items') {
+        throw new Error('BATCH_COMMAND_FAILED');
+      }
+      setBatch(response.data);
     } catch (caught) {
       setError(friendlyError(caught));
     } finally {
@@ -843,6 +875,16 @@ export default function App() {
               <p className="batch-summary">
                 {translate('batchSummary', batchSummary(batch))}
               </p>
+              {retryableItemIds.length > 0 ? (
+                <button
+                  type="button"
+                  className="secondary-button full-width-button"
+                  disabled={busy !== 'idle'}
+                  onClick={() => retryBatchItems(retryableItemIds)}
+                >
+                  {translate('batchRetryFailed')}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="primary-button full-width-button"
@@ -937,16 +979,31 @@ export default function App() {
                       <p className="site-result-detail">{detail}</p>
                     ) : null}
 
-                    {item.status === 'failed' && item.message ? (
+                    {(item.status === 'failed' && item.message) ||
+                    canRetryItem(item) ? (
                       <div className="site-diagnostics">
-                        <code>{item.message}</code>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => copyDiagnostics(item)}
-                        >
-                          {translate('copyDiagnostics')}
-                        </button>
+                        {item.status === 'failed' && item.message ? (
+                          <>
+                            <code>{item.message}</code>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => copyDiagnostics(item)}
+                            >
+                              {translate('copyDiagnostics')}
+                            </button>
+                          </>
+                        ) : null}
+                        {canRetryItem(item) ? (
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={busy !== 'idle'}
+                            onClick={() => retryBatchItems([item.id])}
+                          >
+                            {translate('batchRetryItem')}
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
 

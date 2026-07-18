@@ -429,3 +429,111 @@ describe('website context refresh', () => {
     );
   });
 });
+
+describe('batch item retry', () => {
+  const retrySettings = {
+    provider: 'deepseek' as const,
+    websiteUrl: 'https://product.example',
+    displayName: '',
+    email: '',
+    linkMode: 'prefer-website-field' as const,
+  };
+
+  function twoItemBatch() {
+    return createBatch({
+      id: 'batch-retry',
+      targetText: 'https://blog.example/one\nhttps://forum.example/two',
+      settings: retrySettings,
+      now: 1_000,
+    });
+  }
+
+  function mockRetryResponse() {
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      const typed = message as { type: string };
+      if (typed.type !== 'batch.retry-items') {
+        throw new Error('UNEXPECTED_MESSAGE');
+      }
+      return {
+        ok: true,
+        data: { type: 'batch.retry-items', data: twoItemBatch() },
+      };
+    }) as never);
+  }
+
+  it('offers a per-row retry on a failed item and sends its id', async () => {
+    let batch = twoItemBatch();
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 2_000);
+    batch = completeCurrentItem(batch, 'failed', 'FORM_PLAN_INVALID', 3_000);
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+
+    await clickButton('batchRetryItem');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'batch.retry-items',
+        itemIds: ['batch-retry:1'],
+      })
+    );
+  });
+
+  it('offers a batch-level retry that sends every failed id', async () => {
+    let batch = twoItemBatch();
+    batch = completeCurrentItem(batch, 'no_form', 'NO_FORM', 2_000);
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 3_000);
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+
+    await clickButton('batchRetryFailed');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'batch.retry-items',
+        itemIds: ['batch-retry:0', 'batch-retry:1'],
+      })
+    );
+  });
+
+  it('hides the batch-level retry when nothing failed', async () => {
+    let batch = twoItemBatch();
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 2_000);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 3_000);
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).not.toContain('batchRetryFailed');
+    expect(container.textContent).not.toContain('batchRetryItem');
+  });
+
+  it('does not offer retry while the batch is still running', async () => {
+    let batch = twoItemBatch();
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 2_000);
+    expect(batch.status).toBe('running');
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).not.toContain('batchRetryItem');
+    expect(container.textContent).not.toContain('batchRetryFailed');
+  });
+});

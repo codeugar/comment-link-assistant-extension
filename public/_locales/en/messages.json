@@ -269,6 +269,12 @@
   "startNewBatch": {
     "message": "Start a new batch"
   },
+  "batchRetryItem": {
+    "message": "Retry"
+  },
+  "batchRetryFailed": {
+    "message": "Retry failed items"
+  },
   "batchStatusQueued": {
     "message": "Queued"
   },

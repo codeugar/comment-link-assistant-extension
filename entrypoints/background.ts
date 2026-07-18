@@ -4,6 +4,7 @@ import { type BatchStepResult, runBatchUntilBlocked } from '@/batch/runner';
 import {
   createBatch,
   resumeBatch,
+  retryItems,
   stopBatch,
   updateBatchProgress,
 } from '@/batch/state';
@@ -255,6 +256,21 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
   }
 }
 
+async function retryBatchItems(
+  message: Extract<PopupMessage, { type: 'batch.retry-items' }>
+): Promise<PopupMessageResult> {
+  const batch = await getBatch();
+  if (!batch) throw new Error('BATCH_NOT_FOUND');
+  const next = retryItems(batch, message.itemIds);
+  await setBatch(next);
+  // The finished run may have left a stop-intent flag behind (e.g. a service
+  // worker torn down mid-stop). Clear it so the fresh run is not immediately
+  // re-stopped by consumeBatchStopIntent on the next wake.
+  await clearBatchStopIntent();
+  requestBatchWake();
+  return { type: 'batch.retry-items', data: next };
+}
+
 async function resetBatch(): Promise<PopupMessageResult> {
   const batch = await getBatch();
   if (batch?.status === 'running' || batch?.status === 'paused') {
@@ -303,6 +319,7 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   if (message.type === 'batch.continue') return continueBatch();
   if (message.type === 'batch.stop') return stopCurrentBatch();
   if (message.type === 'batch.reset') return resetBatch();
+  if (message.type === 'batch.retry-items') return retryBatchItems(message);
   if (message.type === 'batch.open-current') {
     return openCurrentBatchTarget();
   }

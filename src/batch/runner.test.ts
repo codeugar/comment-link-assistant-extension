@@ -14,6 +14,7 @@ import {
   createBatch,
   pauseCurrentItem,
   resumeBatch,
+  retryItems,
   updateBatchProgress,
 } from './state';
 import type { BatchSnapshot } from './types';
@@ -1540,5 +1541,140 @@ describe('batch runner', () => {
       currentIndex: 1,
       items: [{ status: 'submitted' }, { status: 'opening' }],
     });
+  });
+
+  it('does not block a retried item from its own earlier failed attempt', async () => {
+    let batch = initialBatch('https://blog.example/post');
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 3);
+    batch = retryItems(batch, ['batch-1:0'], 4);
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      5
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        status: 'complete',
+      })),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'analyzing',
+      message: '',
+    });
+    expect(context.read()?.items[0]?.status).not.toBe('failed');
+  });
+
+  it('blocks a retried item when a later item already submitted the same canonical target', async () => {
+    let batch = initialBatch(
+      'https://blog.example/post\nhttps://www.blog.example/post'
+    );
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 3);
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 4);
+    expect(batch.status).toBe('completed');
+    batch = retryItems(batch, ['batch-1:0'], 5);
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'opening',
+          message: 'BATCH_TARGET_NAVIGATION_PENDING',
+        },
+      },
+      6
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://blog.example/post',
+        status: 'complete',
+      })),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'failed',
+      message: 'DUPLICATE_CANONICAL_TARGET',
+    });
+    expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+    expect(context.deps.generateComment).not.toHaveBeenCalled();
+  });
+
+  it('lets a retried item regenerate a comment its own cleared fingerprint would not block', async () => {
+    let batch = initialBatch(
+      'https://blog.example/first\nhttps://forum.example/second'
+    );
+    batch = updateBatchProgress(
+      batch,
+      {
+        item: {
+          status: 'generating',
+          commentFingerprint: commentFingerprint('Comment A'),
+        },
+      },
+      3
+    );
+    batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 4);
+    const secondAnalysis = analysis();
+    secondAnalysis.page.url = 'https://forum.example/second';
+    batch = updateBatchProgress(
+      batch,
+      {
+        item: {
+          status: 'generating',
+          analysis: secondAnalysis,
+          comment: 'Comment B',
+          commentFingerprint: commentFingerprint('Comment B'),
+        },
+      },
+      5
+    );
+    batch = completeCurrentItem(
+      batch,
+      'failed',
+      'COMMENT_SUBMISSION_UNCONFIRMED',
+      6
+    );
+    expect(batch.items[1]?.commentFingerprint).toBe(
+      commentFingerprint('Comment B')
+    );
+
+    batch = retryItems(batch, ['batch-1:1'], 7);
+    expect(batch.items[1]?.commentFingerprint).toBeNull();
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: secondAnalysis,
+          message: 'COMMENT_GENERATION_READY',
+        },
+      },
+      8
+    );
+    const context = dependencies(batch, {
+      generateComment: vi.fn(async () => 'Comment B'),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()?.items[1]).toMatchObject({
+      status: 'generating',
+      comment: 'Comment B',
+    });
+    expect(context.read()?.items[1]?.status).not.toBe('failed');
   });
 });

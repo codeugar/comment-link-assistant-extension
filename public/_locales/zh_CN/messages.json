@@ -269,6 +269,12 @@
   "startNewBatch": {
     "message": "开始新批次"
   },
+  "batchRetryItem": {
+    "message": "重试"
+  },
+  "batchRetryFailed": {
+    "message": "重跑失败项"
+  },
   "batchStatusQueued": {
     "message": "等待处理"
   },
