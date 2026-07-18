@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { analyzePageDocument } from './dom';
+import { analyzePageDocument, fillAndSubmitDocument } from './dom';
 
 describe('login-gated comment areas', () => {
   beforeEach(() => {
@@ -251,5 +251,196 @@ describe('comment form reveal controls', () => {
 
     expect(clicked).not.toHaveBeenCalled();
     expect(analysis.form).toMatchObject({ readiness: 'not_found' });
+  });
+});
+
+describe('HUBzero CKEditor iframe comment form', () => {
+  beforeEach(() => {
+    document.documentElement.lang = 'en';
+    document.head.innerHTML =
+      '<meta name="description" content="A knowledge-base article rendered by HUBzero.">';
+    document.title = 'Knowledge base article';
+    document.body.innerHTML = '';
+  });
+
+  // CKEditor 4 mounts its rich-text surface inside a same-origin, srcless
+  // iframe whose contentDocument.body carries contenteditable="true" and only
+  // generic cke_* classes — no "comment" anywhere in the iframe document.
+  function mountCkEditorBody(
+    iframe: HTMLIFrameElement,
+    comment = ''
+  ): Document | null {
+    const frameDocument = iframe.contentDocument;
+    if (!frameDocument) return null;
+    frameDocument.body.innerHTML = '';
+    frameDocument.body.setAttribute('contenteditable', 'true');
+    frameDocument.body.className =
+      'cke_editable cke_editable_themed cke_contents_ltr';
+    if (comment) frameDocument.body.textContent = comment;
+    return frameDocument;
+  }
+
+  // The exact logged-in pharmahub.org (HUBzero) KB comment form: a hidden
+  // decoy <textarea>, the visible CKEditor chrome, a same-origin srcless
+  // iframe editor, an anonymous checkbox, a name="submit" value="Save"
+  // button, and several hidden bookkeeping inputs.
+  function mountLoggedInHubzeroForm(): Document | null {
+    document.body.innerHTML = `
+      <article><h1>Knowledge base article</h1><p>Enough article copy to build an excerpt for generation and analysis of the topic.</p></article>
+      <h3 class="post-comment-title">Post a comment</h3>
+      <form method="post" action="/kb/registration/login2" id="commentform">
+        <p class="comment-member-photo"><img alt=""></p>
+        <fieldset>
+          <legend>Post a comment</legend>
+          <div class="form-group">
+            <label for="commentcontent">Your comments: <span class="required">Required</span></label>
+            <textarea name="comment[content]" id="commentcontent" rows="15" cols="40"
+              class="minimal ckeditor-content" style="visibility: hidden; display: none;"></textarea>
+            <div id="cke_commentcontent" class="cke cke_reset cke_chrome cke_editor_commentcontent cke_ltr">
+              <div class="cke_inner">
+                <span class="cke_top">
+                  <a class="cke_button" role="button" title="Source">Source</a>
+                  <a class="cke_button" role="button" title="Link">Link</a>
+                  <a class="cke_button" role="button" title="Bold">Bold</a>
+                </span>
+                <div class="cke_contents" style="height:270px">
+                  <iframe id="cke_wysiwyg_frame" class="cke_reset" title="Rich Text Editor, commentcontent" frameborder="0"></iframe>
+                </div>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+        <p><input type="checkbox" name="comment[anonymous]" id="comment-anonymous" value="1" class="option"> Post anonymously</p>
+        <input type="submit" name="submit" value="Save">
+        <input type="hidden" name="comment[id]" value="0">
+        <input type="hidden" name="comment[entry_id]" value="4">
+        <input type="hidden" name="comment[parent]" value="">
+        <input type="hidden" name="option" value="com_kb">
+        <input type="hidden" name="task" value="savecomment">
+      </form>
+    `;
+    const iframe = document.getElementById(
+      'cke_wysiwyg_frame'
+    ) as HTMLIFrameElement | null;
+    if (!iframe) return null;
+    return mountCkEditorBody(iframe);
+  }
+
+  // A neighbouring already-posted comment's "Reply" editor: the identical
+  // CKEditor iframe pattern, but collapsed (display:none) until clicked.
+  function appendCollapsedReplyForm(): void {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'comment-reply-wrapper';
+    wrapper.style.display = 'none';
+    wrapper.innerHTML = `
+      <form method="post" action="/kb/registration/login2" class="comment-reply-form">
+        <textarea name="comment[content]" class="ckeditor-content" style="display:none"></textarea>
+        <div class="cke cke_reset cke_chrome">
+          <div class="cke_contents">
+            <iframe class="cke_reply_frame cke_reset" title="Rich Text Editor, reply" frameborder="0"></iframe>
+          </div>
+        </div>
+        <input type="submit" name="submit" value="Save">
+      </form>
+    `;
+    document.body.appendChild(wrapper);
+    const iframe = wrapper.querySelector('iframe') as HTMLIFrameElement | null;
+    if (iframe) mountCkEditorBody(iframe);
+  }
+
+  it('reports the logged-in CKEditor comment form as ready', async () => {
+    expect(mountLoggedInHubzeroForm()).toBeTruthy();
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+    });
+  });
+
+  it('writes the comment into the iframe body, not the hidden textarea, and submits the outer form', async () => {
+    const frameDocument = mountLoggedInHubzeroForm();
+    expect(frameDocument).toBeTruthy();
+    if (!frameDocument) return;
+    let submitted = false;
+    document
+      .querySelector('#commentform')
+      ?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitted = true;
+        const notice = document.createElement('p');
+        notice.setAttribute('role', 'alert');
+        notice.textContent = 'Your comment was submitted.';
+        document.body.append(notice);
+      });
+
+    const comment =
+      'The KB walkthrough clears up the registration flow nicely.';
+    const result = await fillAndSubmitDocument(
+      document,
+      { comment, websiteUrl: '' },
+      0
+    );
+
+    expect(result).toMatchObject({ status: 'submitted', clickOccurred: true });
+    expect(submitted).toBe(true);
+    expect(frameDocument.body.textContent).toContain('KB walkthrough');
+    expect(
+      (document.getElementById('commentcontent') as HTMLTextAreaElement).value
+    ).toBe('');
+  });
+
+  it('stays ready while ignoring a sibling collapsed CKEditor reply form', async () => {
+    expect(mountLoggedInHubzeroForm()).toBeTruthy();
+    appendCollapsedReplyForm();
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({ readiness: 'ready' });
+  });
+
+  it('does not pick a standalone collapsed CKEditor reply form', async () => {
+    document.body.innerHTML = `
+      <article><h1>Knowledge base article</h1><p>Enough article copy to build an excerpt for generation and analysis of the topic.</p></article>
+    `;
+    appendCollapsedReplyForm();
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'not_found',
+      message: 'COMMENT_FORM_NOT_FOUND',
+    });
+  });
+
+  it('accepts a plain comment form whose submit is name="submit" value="Save"', async () => {
+    document.body.innerHTML = `
+      <article><h1>Knowledge base article</h1><p>Enough article copy to build an excerpt for generation and analysis of the topic.</p></article>
+      <form class="comment-form" action="/kb/comments/save">
+        <label for="c">Your comments</label>
+        <textarea id="c" name="comment"></textarea>
+        <input type="submit" name="submit" value="Save">
+      </form>
+    `;
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({ readiness: 'ready' });
+  });
+
+  it('does not report a plain settings form with a name="submit" Save button as ready', async () => {
+    document.body.innerHTML = `
+      <article><h1>Account settings</h1><p>Enough article copy to build an excerpt for generation and analysis of the topic.</p></article>
+      <form class="account-settings" action="/account/save">
+        <label for="bio">Bio</label>
+        <textarea id="bio" name="bio"></textarea>
+        <input type="submit" name="submit" value="Save">
+      </form>
+    `;
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form.readiness).toBe('not_found');
   });
 });
