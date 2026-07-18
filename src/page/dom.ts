@@ -284,6 +284,22 @@ function isCanonicalWordPressSubmit(element: Element): boolean {
 function isPositiveSubmitControl(element: Element): boolean {
   if (element.matches('.comment-submit')) return true;
   if (isCanonicalWordPressSubmit(element)) return true;
+  // A canonical submit identity (id/name of `submit`, `post`, `reply`, …) is
+  // authoritative on its own. Check it unconditionally, not only as a fallback
+  // when the control has no labels: a control whose value doubles as a label
+  // (e.g. `<input type="submit" name="submit" value="Save">`) must not be
+  // rejected merely because "Save" misses the action-word whitelist.
+  if (
+    /^(?:submit|post|publish|send|reply|respond)(?:[-_](?:comment|reply))?$/i.test(
+      normalizeWhitespace(
+        [element.getAttribute('id'), element.getAttribute('name')]
+          .filter(Boolean)
+          .join(' ')
+      )
+    )
+  ) {
+    return true;
+  }
   const labels = controlLabels(element);
   if (labels.length > 0) {
     return labels.some(
@@ -291,13 +307,7 @@ function isPositiveSubmitControl(element: Element): boolean {
         BARE_SUBMIT_ACTION.test(label) || STRONG_COMMENT_SUBMIT.test(label)
     );
   }
-  return /^(?:submit|post|publish|send|reply|respond)(?:[-_](?:comment|reply))?$/i.test(
-    normalizeWhitespace(
-      [element.getAttribute('id'), element.getAttribute('name')]
-        .filter(Boolean)
-        .join(' ')
-    )
-  );
+  return false;
 }
 
 function structuralDescriptor(
@@ -485,6 +495,49 @@ function queryAllDeep(document: Document, selector: string): Element[] {
   );
 }
 
+// The <iframe> in the parent document that hosts `frameDocument`. Real browsers
+// expose this directly as `Window.frameElement`; when that is unavailable (or
+// not a usable element, as under happy-dom), resolve it by matching
+// `contentDocument` against the same-origin parent document's frames.
+function ownerFrameElement(frameDocument: Document): HTMLElement | null {
+  const view = frameDocument.defaultView;
+  if (!view) return null;
+  const nativeFrame = view.frameElement;
+  if (nativeFrame && isHtmlElement(nativeFrame)) return nativeFrame;
+  const parentDocument = view.parent?.document;
+  if (!parentDocument || parentDocument === frameDocument) return null;
+  for (const frame of Array.from(parentDocument.querySelectorAll('iframe'))) {
+    if (
+      (frame as HTMLIFrameElement).contentDocument === frameDocument &&
+      isHtmlElement(frame)
+    ) {
+      return frame;
+    }
+  }
+  return null;
+}
+
+// `Element.closest()` cannot cross a frame boundary, so an editor hosted inside
+// a same-origin iframe (e.g. CKEditor's contenteditable body) can never reach
+// its real <form> in the outer document. Climb out of each frame via its owning
+// <iframe> element so container/form lookups resolve across the boundary. For
+// every non-iframe case the first local `closest()` matches on the first
+// iteration, leaving behavior unchanged.
+function crossFrameAncestor(
+  element: Element,
+  selector: string
+): HTMLElement | null {
+  let current: Element | null = element;
+  for (let depth = 0; current && depth < 8; depth += 1) {
+    const match = current.closest(selector);
+    if (match && isHtmlElement(match)) return match;
+    const frameElement = ownerFrameElement(current.ownerDocument);
+    if (!frameElement) return null;
+    current = frameElement;
+  }
+  return null;
+}
+
 function scoreEditor(element: Element): number {
   if (!isVisible(element) || isDisabled(element))
     return Number.NEGATIVE_INFINITY;
@@ -492,7 +545,10 @@ function scoreEditor(element: Element): number {
   let score = isTextAreaElement(element) ? 6 : 4;
   if (POSITIVE_EDITOR.test(descriptor)) score += 8;
   if (NEGATIVE_EDITOR.test(descriptor)) score -= 12;
-  const container = element.closest('form, section, article, [role="form"]');
+  const container = crossFrameAncestor(
+    element,
+    'form, section, article, [role="form"]'
+  );
   const containerDescriptor = container ? elementDescriptor(container) : '';
   if (POSITIVE_EDITOR.test(containerDescriptor)) score += 5;
   if (NEGATIVE_EDITOR.test(containerDescriptor)) score -= 7;
@@ -510,8 +566,8 @@ function findEditor(document: Document): HTMLElement | null {
 }
 
 function findContainer(editor: HTMLElement): HTMLElement {
-  const form = editor.closest('form');
-  if (form && isHtmlElement(form)) return form;
+  const form = crossFrameAncestor(editor, 'form');
+  if (form) return form;
 
   let current = editor.parentElement;
   for (let depth = 0; current && depth < 6; depth += 1) {
