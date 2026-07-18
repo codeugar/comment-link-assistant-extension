@@ -1,17 +1,38 @@
-import type { ExtensionSettings, ProviderApiKeys } from '@/types';
+import type { BatchSettingsSnapshot } from '@/batch/types';
+import type {
+  CommentProvider,
+  ExtensionSettings,
+  ProviderApiKeys,
+  SiteProfile,
+} from '@/types';
 import { z } from 'zod';
 
 export const SETTINGS_STORAGE_KEY = 'comment-link-assistant.settings';
 export const PROVIDER_API_KEYS_STORAGE_KEY =
   'comment-link-assistant.provider-api-keys';
 
-export const DEFAULT_SETTINGS: ExtensionSettings = {
-  provider: 'deepseek',
-  websiteUrl: '',
-  displayName: '',
-  email: '',
-  linkMode: 'prefer-website-field',
-};
+const DEFAULT_SITE_ID = 'site-1';
+
+function createDefaultSite(): SiteProfile {
+  return {
+    id: DEFAULT_SITE_ID,
+    label: '',
+    websiteUrl: '',
+    displayName: '',
+    email: '',
+    linkMode: 'prefer-website-field',
+  };
+}
+
+export function createDefaultSettings(): ExtensionSettings {
+  return {
+    provider: 'deepseek',
+    sites: [createDefaultSite()],
+    activeSiteId: DEFAULT_SITE_ID,
+  };
+}
+
+export const DEFAULT_SETTINGS: ExtensionSettings = createDefaultSettings();
 
 export const DEFAULT_PROVIDER_API_KEYS: ProviderApiKeys = {
   deepseekApiKey: '',
@@ -47,13 +68,92 @@ const optionalEmailSchema = z
     'Invalid email address'
   );
 
-export const extensionSettingsSchema = z.object({
-  provider: z.enum(['deepseek', 'kie-gemini']),
-  websiteUrl: optionalHttpUrlSchema,
-  displayName: z.string().trim().max(200),
-  email: optionalEmailSchema,
-  linkMode: z.enum(['prefer-website-field', 'inline']),
-});
+const siteProfileSchema = z
+  .object({
+    id: z.string().trim().min(1).max(200),
+    label: z.string().trim().max(100),
+    websiteUrl: optionalHttpUrlSchema,
+    displayName: z.string().trim().max(200),
+    email: optionalEmailSchema,
+    linkMode: z.enum(['prefer-website-field', 'inline']),
+  })
+  .strict();
+
+export const extensionSettingsSchema = z
+  .object({
+    provider: z.enum(['deepseek', 'kie-gemini']),
+    sites: z.array(siteProfileSchema).min(1).max(20),
+    activeSiteId: z.string().trim().min(1).max(200),
+  })
+  .superRefine((settings, context) => {
+    if (!settings.sites.some((site) => site.id === settings.activeSiteId)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'activeSiteId must reference an existing site',
+        path: ['activeSiteId'],
+      });
+    }
+  });
+
+function hostnameLabel(websiteUrl: string): string {
+  const trimmed = websiteUrl.trim();
+  if (!trimmed) return '';
+  try {
+    return new URL(trimmed).hostname.replace(/^www\./i, '');
+  } catch {
+    return '';
+  }
+}
+
+// Turns the pre-multi-site flat settings shape ({provider, websiteUrl, ...})
+// into a one-site configuration. Mirrors addLegacyItemEvents in storage/batch.ts.
+function migrateLegacySettings(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const legacy = value as Record<string, unknown>;
+  if (Object.hasOwn(legacy, 'sites') || !Object.hasOwn(legacy, 'websiteUrl')) {
+    return value;
+  }
+  const websiteUrl =
+    typeof legacy.websiteUrl === 'string' ? legacy.websiteUrl : '';
+  return {
+    provider: legacy.provider,
+    sites: [
+      {
+        id: DEFAULT_SITE_ID,
+        label: hostnameLabel(websiteUrl),
+        websiteUrl,
+        displayName:
+          typeof legacy.displayName === 'string' ? legacy.displayName : '',
+        email: typeof legacy.email === 'string' ? legacy.email : '',
+        linkMode: legacy.linkMode,
+      },
+    ],
+    activeSiteId: DEFAULT_SITE_ID,
+  };
+}
+
+export function getActiveSite(settings: ExtensionSettings): SiteProfile {
+  return (
+    settings.sites.find((site) => site.id === settings.activeSiteId) ??
+    settings.sites[0] ??
+    createDefaultSite()
+  );
+}
+
+export function buildBatchSettingsSnapshot(
+  provider: CommentProvider,
+  site: SiteProfile
+): BatchSettingsSnapshot {
+  return {
+    provider,
+    websiteUrl: site.websiteUrl,
+    displayName: site.displayName,
+    email: site.email,
+    linkMode: site.linkMode,
+    siteId: site.id,
+    siteLabel: site.label,
+  };
+}
 
 const providerApiKeysSchema = z.object({
   deepseekApiKey: z.string().trim().max(4_096),
@@ -73,10 +173,21 @@ export async function restrictStorageToTrustedContexts(): Promise<void> {
 
 export async function getSettings(): Promise<ExtensionSettings> {
   const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
-  const parsed = extensionSettingsSchema.safeParse(
-    stored[SETTINGS_STORAGE_KEY]
-  );
-  return parsed.success ? parsed.data : { ...DEFAULT_SETTINGS };
+  const value = stored[SETTINGS_STORAGE_KEY];
+  const parsed = extensionSettingsSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+
+  const migrated = migrateLegacySettings(value);
+  if (migrated !== value) {
+    const remigrated = extensionSettingsSchema.safeParse(migrated);
+    if (remigrated.success) {
+      await chrome.storage.local.set({
+        [SETTINGS_STORAGE_KEY]: remigrated.data,
+      });
+      return remigrated.data;
+    }
+  }
+  return createDefaultSettings();
 }
 
 export async function setSettings(

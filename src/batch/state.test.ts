@@ -1,4 +1,3 @@
-import type { ExtensionSettings } from '@/types';
 import { describe, expect, it } from 'vitest';
 import {
   RETRYABLE_ITEM_STATUSES,
@@ -10,9 +9,10 @@ import {
   stopBatch,
   updateBatchProgress,
 } from './state';
+import type { BatchSettingsSnapshot } from './types';
 import { batchSnapshotSchema } from './types';
 
-const settings: ExtensionSettings = {
+const settings: BatchSettingsSnapshot = {
   provider: 'deepseek',
   websiteUrl: 'https://product.example',
   displayName: 'Alex',
@@ -455,5 +455,36 @@ describe('batch retry', () => {
     batch = completeCurrentItem(batch, 'submitted', 'A', 2_000);
     expect(batch).toMatchObject({ status: 'running', currentIndex: 1 });
     expect(batch.items[1]?.status).toBe('queued');
+  });
+});
+
+describe('batch snapshot site provenance', () => {
+  it('carries siteId and siteLabel when the input settings provide them', () => {
+    const batch = createBatch({
+      id: 'batch-site',
+      targetText: 'https://blog.example/post',
+      settings: { ...settings, siteId: 'site-9', siteLabel: 'Museimage' },
+      now: 1_000,
+    });
+
+    expect(batch.settings).toMatchObject({
+      siteId: 'site-9',
+      siteLabel: 'Museimage',
+      websiteUrl: 'https://product.example',
+    });
+    expect(() => batchSnapshotSchema.parse(batch)).not.toThrow();
+  });
+
+  it('omits provenance for a legacy settings snapshot and still parses', () => {
+    const batch = createBatch({
+      id: 'batch-legacy',
+      targetText: 'https://blog.example/post',
+      settings,
+      now: 1_000,
+    });
+
+    expect(batch.settings).not.toHaveProperty('siteId');
+    expect(batch.settings).not.toHaveProperty('siteLabel');
+    expect(() => batchSnapshotSchema.parse(batch)).not.toThrow();
   });
 });

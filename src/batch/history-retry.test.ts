@@ -13,6 +13,9 @@ const settings = {
   displayName: 'Alex',
   email: '',
   linkMode: 'inline' as const,
+  // Provenance from a multi-site batch must survive a history rerun unchanged.
+  siteId: 'site-7',
+  siteLabel: 'Museimage',
 };
 
 function entry(overrides: Partial<BatchHistoryEntry> = {}): BatchHistoryEntry {

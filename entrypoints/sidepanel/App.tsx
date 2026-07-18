@@ -14,13 +14,14 @@ import {
 import {
   DEFAULT_SETTINGS,
   extensionSettingsSchema,
+  getActiveSite,
   getProviderApiKeys,
   getSettings,
   setSettings as persistSettings,
   restrictStorageToTrustedContexts,
   setProviderApiKeys,
 } from '@/storage/settings';
-import type { ExtensionSettings, ProviderApiKeys } from '@/types';
+import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
 import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -274,15 +275,17 @@ export default function App() {
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
   }, []);
 
+  const activeSite = getActiveSite(settings);
+
   const configured = useMemo(
     () =>
       Boolean(
-        settings.websiteUrl &&
+        activeSite.websiteUrl &&
           (settings.provider === 'deepseek'
             ? apiKeys.deepseekApiKey
             : apiKeys.kieApiKey)
       ),
-    [apiKeys, settings.provider, settings.websiteUrl]
+    [apiKeys, settings.provider, activeSite.websiteUrl]
   );
 
   const targets = useMemo(() => {
@@ -324,10 +327,52 @@ export default function App() {
       : batch.currentIndex
     : 0;
 
-  const updateSetting = <Key extends keyof ExtensionSettings>(
+  const updateProvider = (provider: ExtensionSettings['provider']) =>
+    setSettings((current) => ({ ...current, provider }));
+
+  const selectActiveSite = (siteId: string) =>
+    setSettings((current) => ({ ...current, activeSiteId: siteId }));
+
+  const updateActiveSiteField = <Key extends keyof SiteProfile>(
     key: Key,
-    value: ExtensionSettings[Key]
-  ) => setSettings((current) => ({ ...current, [key]: value }));
+    value: SiteProfile[Key]
+  ) =>
+    setSettings((current) => ({
+      ...current,
+      sites: current.sites.map((site) =>
+        site.id === current.activeSiteId ? { ...site, [key]: value } : site
+      ),
+    }));
+
+  const addSite = () =>
+    setSettings((current) => {
+      const site: SiteProfile = {
+        id: globalThis.crypto.randomUUID(),
+        label: '',
+        websiteUrl: '',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      };
+      return {
+        ...current,
+        sites: [...current.sites, site],
+        activeSiteId: site.id,
+      };
+    });
+
+  const removeActiveSite = () =>
+    setSettings((current) => {
+      if (current.sites.length <= 1) return current;
+      const remaining = current.sites.filter(
+        (site) => site.id !== current.activeSiteId
+      );
+      return {
+        ...current,
+        sites: remaining,
+        activeSiteId: remaining[0]?.id ?? current.activeSiteId,
+      };
+    });
 
   const updateApiKey = <Key extends keyof ProviderApiKeys>(
     key: Key,
@@ -337,9 +382,12 @@ export default function App() {
   async function persistConfiguration(permissionUrls?: string[]) {
     const normalized = extensionSettingsSchema.parse({
       ...settings,
-      websiteUrl: settings.websiteUrl.trim()
-        ? normalizeWebsiteUrl(settings.websiteUrl)
-        : '',
+      sites: settings.sites.map((site) => ({
+        ...site,
+        websiteUrl: site.websiteUrl.trim()
+          ? normalizeWebsiteUrl(site.websiteUrl)
+          : '',
+      })),
     });
     if (permissionUrls) {
       const selectedKey =
@@ -353,7 +401,9 @@ export default function App() {
             : 'KIE_API_KEY_REQUIRED'
         );
       }
-      if (!normalized.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
+      if (!getActiveSite(normalized).websiteUrl) {
+        throw new Error('WEBSITE_URL_REQUIRED');
+      }
       const granted = await requestBatchOriginPermissions(permissionUrls);
       if (!granted) throw new Error('ORIGIN_PERMISSION_DENIED');
     }
@@ -394,11 +444,11 @@ export default function App() {
     setNotice('');
     try {
       parseTargetUrls(targetText);
-      const normalizedWebsiteUrl = normalizeWebsiteUrl(settings.websiteUrl);
+      const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
       const normalized = await persistConfiguration([normalizedWebsiteUrl]);
       const response = await sendToBackground({
         type: 'batch.preview',
-        websiteUrl: normalized.websiteUrl,
+        websiteUrl: getActiveSite(normalized).websiteUrl,
       });
       if (response.type !== 'batch.preview') {
         throw new Error('BATCH_PREVIEW_FAILED');
@@ -423,7 +473,7 @@ export default function App() {
     try {
       const response = await sendToBackground({
         type: 'batch.preview',
-        websiteUrl: settings.websiteUrl,
+        websiteUrl: activeSite.websiteUrl,
         refresh: true,
       });
       if (response.type !== 'batch.preview') {
@@ -444,13 +494,14 @@ export default function App() {
     setNotice('');
     try {
       const parsedTargets = parseTargetUrls(targetText);
-      const normalizedWebsiteUrl = normalizeWebsiteUrl(settings.websiteUrl);
+      const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
       await persistConfiguration([normalizedWebsiteUrl, ...parsedTargets]);
 
       const response = await sendToBackground({
         type: 'batch.start',
         targetText,
         websiteProfile,
+        siteId: settings.activeSiteId,
       });
       if (response.type !== 'batch.start') {
         throw new Error('BATCH_START_FAILED');
@@ -632,13 +683,61 @@ export default function App() {
                 autoComplete="off"
               />
             </label>
+            <div className="field field-wide site-manager">
+              <span>{translate('siteSelectorLabel')}</span>
+              <div className="site-manager-controls">
+                <select
+                  value={settings.activeSiteId}
+                  disabled={batchIsActive}
+                  onChange={(event) => {
+                    selectActiveSite(event.target.value);
+                    setWebsiteProfile(null);
+                  }}
+                >
+                  {settings.sites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.label ||
+                        displayTarget(site.websiteUrl) ||
+                        translate('siteUnnamed')}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={batchIsActive}
+                  onClick={addSite}
+                >
+                  {translate('siteAdd')}
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={batchIsActive || settings.sites.length <= 1}
+                  onClick={removeActiveSite}
+                >
+                  {translate('siteRemove')}
+                </button>
+              </div>
+            </div>
+            <label className="field field-wide">
+              <span>{translate('siteLabelField')}</span>
+              <input
+                value={activeSite.label}
+                disabled={batchIsActive}
+                onChange={(event) =>
+                  updateActiveSiteField('label', event.target.value)
+                }
+                placeholder={translate('siteLabelPlaceholder')}
+              />
+            </label>
             <label className="field field-wide">
               <span>{translate('websiteUrlLabel')}</span>
               <input
-                value={settings.websiteUrl}
+                value={activeSite.websiteUrl}
                 disabled={batchIsActive}
                 onChange={(event) => {
-                  updateSetting('websiteUrl', event.target.value);
+                  updateActiveSiteField('websiteUrl', event.target.value);
                   setWebsiteProfile(null);
                 }}
                 placeholder={translate('websiteUrlPlaceholder')}
@@ -651,8 +750,7 @@ export default function App() {
                 value={settings.provider}
                 disabled={batchIsActive}
                 onChange={(event) =>
-                  updateSetting(
-                    'provider',
+                  updateProvider(
                     event.target.value as ExtensionSettings['provider']
                   )
                 }
@@ -668,12 +766,12 @@ export default function App() {
             <label className="field">
               <span>{translate('linkModeLabel')}</span>
               <select
-                value={settings.linkMode}
+                value={activeSite.linkMode}
                 disabled={batchIsActive}
                 onChange={(event) =>
-                  updateSetting(
+                  updateActiveSiteField(
                     'linkMode',
-                    event.target.value as ExtensionSettings['linkMode']
+                    event.target.value as SiteProfile['linkMode']
                   )
                 }
               >
@@ -686,10 +784,10 @@ export default function App() {
             <label className="field">
               <span>{translate('displayNameLabel')}</span>
               <input
-                value={settings.displayName}
+                value={activeSite.displayName}
                 disabled={batchIsActive}
                 onChange={(event) =>
-                  updateSetting('displayName', event.target.value)
+                  updateActiveSiteField('displayName', event.target.value)
                 }
                 placeholder={translate('displayNamePlaceholder')}
               />
@@ -698,9 +796,11 @@ export default function App() {
               <span>{translate('emailLabel')}</span>
               <input
                 type="email"
-                value={settings.email}
+                value={activeSite.email}
                 disabled={batchIsActive}
-                onChange={(event) => updateSetting('email', event.target.value)}
+                onChange={(event) =>
+                  updateActiveSiteField('email', event.target.value)
+                }
                 placeholder={translate('emailPlaceholder')}
               />
             </label>
@@ -725,6 +825,25 @@ export default function App() {
                 <p>{translate('batchSetupDescription')}</p>
               </div>
             </div>
+
+            <label className="field">
+              <span>{translate('siteSelectorLabel')}</span>
+              <select
+                value={settings.activeSiteId}
+                onChange={(event) => {
+                  selectActiveSite(event.target.value);
+                  setWebsiteProfile(null);
+                }}
+              >
+                {settings.sites.map((site) => (
+                  <option key={site.id} value={site.id}>
+                    {site.label ||
+                      displayTarget(site.websiteUrl) ||
+                      translate('siteUnnamed')}
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="field">
               <span>{translate('targetUrlsLabel')}</span>
@@ -1086,7 +1205,8 @@ export default function App() {
                       <details className="history-entry">
                         <summary>
                           <span className="history-entry-site">
-                            {displayTarget(entry.settings.websiteUrl)}
+                            {entry.settings.siteLabel ||
+                              displayTarget(entry.settings.websiteUrl)}
                           </span>
                           <small>
                             {translate('batchSummary', [

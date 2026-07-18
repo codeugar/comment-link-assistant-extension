@@ -287,6 +287,24 @@
   "batchHistoryEmpty": {
     "message": "No finished batches yet"
   },
+  "siteSelectorLabel": {
+    "message": "Website"
+  },
+  "siteAdd": {
+    "message": "Add website"
+  },
+  "siteRemove": {
+    "message": "Remove website"
+  },
+  "siteLabelField": {
+    "message": "Label"
+  },
+  "siteLabelPlaceholder": {
+    "message": "e.g. Seed Audio"
+  },
+  "siteUnnamed": {
+    "message": "Untitled website"
+  },
   "batchStatusQueued": {
     "message": "Queued"
   },

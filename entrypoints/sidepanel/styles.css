@@ -980,3 +980,23 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.site-manager {
+  display: grid;
+  gap: 4px;
+}
+
+.site-manager-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.site-manager-controls select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.site-manager-controls .text-button {
+  flex: 0 0 auto;
+}
