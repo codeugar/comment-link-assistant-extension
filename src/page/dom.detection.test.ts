@@ -284,7 +284,7 @@ describe('HUBzero CKEditor iframe comment form', () => {
   // decoy <textarea>, the visible CKEditor chrome, a same-origin srcless
   // iframe editor, an anonymous checkbox, a name="submit" value="Save"
   // button, and several hidden bookkeeping inputs.
-  function mountLoggedInHubzeroForm(): Document | null {
+  function mountLoggedInHubzeroShell(): HTMLElement | null {
     document.body.innerHTML = `
       <article><h1>Knowledge base article</h1><p>Enough article copy to build an excerpt for generation and analysis of the topic.</p></article>
       <h3 class="post-comment-title">Post a comment</h3>
@@ -296,6 +296,7 @@ describe('HUBzero CKEditor iframe comment form', () => {
             <label for="commentcontent">Your comments: <span class="required">Required</span></label>
             <textarea name="comment[content]" id="commentcontent" rows="15" cols="40"
               class="minimal ckeditor-content" style="visibility: hidden; display: none;"></textarea>
+            <script id="commentcontent-ckeconfig" type="application/json">{}</script>
             <div id="cke_commentcontent" class="cke cke_reset cke_chrome cke_editor_commentcontent cke_ltr">
               <div class="cke_inner">
                 <span class="cke_top">
@@ -303,9 +304,7 @@ describe('HUBzero CKEditor iframe comment form', () => {
                   <a class="cke_button" role="button" title="Link">Link</a>
                   <a class="cke_button" role="button" title="Bold">Bold</a>
                 </span>
-                <div class="cke_contents" style="height:270px">
-                  <iframe id="cke_wysiwyg_frame" class="cke_reset" title="Rich Text Editor, commentcontent" frameborder="0"></iframe>
-                </div>
+                <div class="cke_contents" style="height:270px"></div>
               </div>
             </div>
           </div>
@@ -319,11 +318,21 @@ describe('HUBzero CKEditor iframe comment form', () => {
         <input type="hidden" name="task" value="savecomment">
       </form>
     `;
-    const iframe = document.getElementById(
-      'cke_wysiwyg_frame'
-    ) as HTMLIFrameElement | null;
-    if (!iframe) return null;
-    return mountCkEditorBody(iframe);
+    return document.querySelector('.cke_contents');
+  }
+
+  function appendCkEditorFrame(container: HTMLElement): HTMLIFrameElement {
+    const iframe = document.createElement('iframe');
+    iframe.id = 'cke_wysiwyg_frame';
+    iframe.className = 'cke_reset';
+    iframe.title = 'Rich Text Editor, commentcontent';
+    container.appendChild(iframe);
+    return iframe;
+  }
+
+  function mountLoggedInHubzeroForm(): Document | null {
+    const container = mountLoggedInHubzeroShell();
+    return container ? mountCkEditorBody(appendCkEditorFrame(container)) : null;
   }
 
   // A neighbouring already-posted comment's "Reply" editor: the identical
@@ -357,6 +366,81 @@ describe('HUBzero CKEditor iframe comment form', () => {
       readiness: 'ready',
       message: 'COMMENT_FORM_READY',
     });
+  });
+
+  it('waits for CKEditor to finish taking over a hidden comment textarea after load', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'readyState', {
+      value: 'complete',
+      configurable: true,
+    });
+
+    try {
+      const frameContainer = mountLoggedInHubzeroShell();
+      if (!frameContainer) throw new Error('CKEditor fixture shell missing');
+      const frame = appendCkEditorFrame(frameContainer);
+
+      document.defaultView?.setTimeout(() => {
+        mountCkEditorBody(frame);
+      }, 250);
+
+      const pending = analyzePageDocument(document);
+      const settled = vi.fn();
+      void pending.then(settled);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(pending).resolves.toMatchObject({
+        form: {
+          readiness: 'ready',
+          message: 'COMMENT_FORM_READY',
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits while the HUBzero adapter has hidden the textarea before creating the CKEditor shell', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'readyState', {
+      value: 'complete',
+      configurable: true,
+    });
+
+    try {
+      const frameContainer = mountLoggedInHubzeroShell();
+      const shell = frameContainer?.closest('.cke');
+      const form = document.getElementById('commentform');
+      if (!frameContainer || !shell || !form) {
+        throw new Error('HUBzero takeover fixture missing');
+      }
+      shell.remove();
+
+      document.defaultView?.setTimeout(() => {
+        form.appendChild(shell);
+        mountCkEditorBody(appendCkEditorFrame(frameContainer));
+      }, 250);
+
+      const pending = analyzePageDocument(document);
+      const settled = vi.fn();
+      void pending.then(settled);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(pending).resolves.toMatchObject({
+        form: {
+          readiness: 'ready',
+          message: 'COMMENT_FORM_READY',
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('writes the comment into the iframe body, not the hidden textarea, and submits the outer form', async () => {

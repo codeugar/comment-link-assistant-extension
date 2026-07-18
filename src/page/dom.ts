@@ -90,6 +90,10 @@ const PREPARATION_TTL_MS = 30_000;
 // form is present early. These bounds keep the settle deterministic and short.
 const ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS = 5_000;
 const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
+const ANALYZE_CKEDITOR_TAKEOVER_TIMEOUT_MS = 12_000;
+const ANALYZE_CKEDITOR_POLL_INTERVAL_MS = 250;
+const CKEDITOR_TEXTAREA_MARKER = /(?:^|[\s_-])ckeditor(?:$|[\s_-])/i;
+const CKEDITOR_SHELL_SELECTOR = '.cke, [id^="cke_"], [class*="cke_editor_"]';
 const COMMENT_REGION_SELECTOR = [
   '#respond',
   '#commentform',
@@ -1076,6 +1080,68 @@ function looksUnsettled(document: Document): boolean {
   return document.readyState !== 'complete';
 }
 
+function hasPendingCkEditorTakeover(document: Document): boolean {
+  return queryAllDeep(document, 'textarea')
+    .filter(isTextAreaElement)
+    .some((textarea) => {
+      if (isVisible(textarea)) return false;
+      const descriptor = structuralDescriptor(textarea);
+      if (!CKEDITOR_TEXTAREA_MARKER.test(descriptor)) return false;
+
+      const form = textarea.closest('form, [role="form"]');
+      if (!form || !isHtmlElement(form) || !isVisible(form)) return false;
+      if (!findSubmit(form)) return false;
+      if (
+        !POSITIVE_EDITOR.test(`${descriptor} ${structuralDescriptor(form)}`)
+      ) {
+        return false;
+      }
+
+      const config = textarea.id
+        ? textarea.ownerDocument.getElementById(`${textarea.id}-ckeconfig`)
+        : null;
+      const hasHubzeroConfig =
+        config?.tagName === 'SCRIPT' &&
+        config.getAttribute('type') === 'application/json';
+      const hasVisibleShell = Array.from(
+        form.querySelectorAll(CKEDITOR_SHELL_SELECTOR)
+      )
+        .filter(isHtmlElement)
+        .some(isVisible);
+      return hasHubzeroConfig || hasVisibleShell;
+    });
+}
+
+function waitForCkEditorTakeover(
+  document: Document,
+  timeoutMs: number
+): Promise<void> {
+  if (findEditor(document) || !hasPendingCkEditorTakeover(document)) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const view = document.defaultView;
+    const startedAt = Date.now();
+    const poll = () => {
+      if (
+        findEditor(document) ||
+        !hasPendingCkEditorTakeover(document) ||
+        Date.now() - startedAt >= timeoutMs
+      ) {
+        resolve();
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      (view?.setTimeout ?? setTimeout)(
+        poll,
+        Math.min(ANALYZE_CKEDITOR_POLL_INTERVAL_MS, timeoutMs - elapsed)
+      );
+    };
+    poll();
+  });
+}
+
 function scrollCommentRegionIntoView(document: Document): void {
   const target: Element | null =
     findEditor(document) ?? document.querySelector(COMMENT_REGION_SELECTOR);
@@ -1208,10 +1274,22 @@ export async function analyzePageDocument(
   const jetpackFrame = resolveJetpackCommentFrame(document);
   if (jetpackFrame) promoteJetpackCommentFrame(jetpackFrame);
   let analysis = buildPageAnalysis(document);
-  // Only pay the bounded settle when nothing was found and the page still looks
-  // like it is mounting content; a fully loaded page with no editor is final.
-  if (!findEditor(document) && looksUnsettled(document)) {
-    await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+  let waitedForEditor = false;
+  if (!findEditor(document)) {
+    // CKEditor hides its source textarea before its iframe editable is ready.
+    // Poll only when a visible comment form exposes an explicit takeover signal.
+    if (hasPendingCkEditorTakeover(document)) {
+      await waitForCkEditorTakeover(
+        document,
+        ANALYZE_CKEDITOR_TAKEOVER_TIMEOUT_MS
+      );
+      waitedForEditor = true;
+    } else if (looksUnsettled(document)) {
+      await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+      waitedForEditor = true;
+    }
+  }
+  if (waitedForEditor) {
     scrollCommentRegionIntoView(document);
     analysis = buildPageAnalysis(document);
   }
