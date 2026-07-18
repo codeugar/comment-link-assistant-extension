@@ -275,6 +275,18 @@
   "batchRetryFailed": {
     "message": "重跑失败项"
   },
+  "batchHistoryTitle": {
+    "message": "历史记录"
+  },
+  "batchHistoryRetryFailed": {
+    "message": "重跑失败项"
+  },
+  "batchHistoryRetryUrl": {
+    "message": "重试"
+  },
+  "batchHistoryEmpty": {
+    "message": "暂无历史批次"
+  },
   "batchStatusQueued": {
     "message": "等待处理"
   },

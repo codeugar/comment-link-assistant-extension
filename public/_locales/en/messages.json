@@ -275,6 +275,18 @@
   "batchRetryFailed": {
     "message": "Retry failed items"
   },
+  "batchHistoryTitle": {
+    "message": "History"
+  },
+  "batchHistoryRetryFailed": {
+    "message": "Retry failed items"
+  },
+  "batchHistoryRetryUrl": {
+    "message": "Retry"
+  },
+  "batchHistoryEmpty": {
+    "message": "No finished batches yet"
+  },
   "batchStatusQueued": {
     "message": "Queued"
   },

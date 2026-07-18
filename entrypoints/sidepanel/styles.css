@@ -894,3 +894,89 @@ textarea:focus {
     transition-duration: 0.01ms !important;
   }
 }
+
+.history-section > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.history-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.history-section > summary h3 {
+  display: inline;
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 14px;
+}
+
+.history-empty {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.history-list {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-entry {
+  border: 1px solid rgba(31, 33, 30, 0.13);
+  border-left: 3px solid var(--line);
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.history-entry > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.history-entry > summary::-webkit-details-marker {
+  display: none;
+}
+
+.history-entry-site {
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-entry > summary small,
+.history-entry > summary time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.history-failed-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 10px 10px;
+  list-style: none;
+}
+
+.history-failed-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.history-failed-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

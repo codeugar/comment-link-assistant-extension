@@ -4,6 +4,7 @@ import {
   updateBatchProgress,
 } from '@/batch/state';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
+import { HISTORY_STORAGE_KEY } from '@/storage/batch-history';
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
@@ -535,5 +536,124 @@ describe('batch item retry', () => {
 
     expect(container.textContent).not.toContain('batchRetryItem');
     expect(container.textContent).not.toContain('batchRetryFailed');
+  });
+});
+
+describe('batch history', () => {
+  const historyEntry = {
+    id: 'hist-1',
+    settings: {
+      provider: 'deepseek' as const,
+      websiteUrl: 'https://product.example',
+      displayName: '',
+      email: '',
+      linkMode: 'prefer-website-field' as const,
+    },
+    createdAt: 1_000,
+    archivedAt: 2_000,
+    counts: { submitted: 2, failed: 1, total: 3 },
+    items: [
+      { url: 'https://blog.example/one', status: 'submitted', message: '' },
+      { url: 'https://blog.example/two', status: 'submitted', message: '' },
+      { url: 'https://forum.example/three', status: 'failed', message: 'BOOM' },
+    ],
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  function mockRetryResponse() {
+    const running = createBatch({
+      id: 'hist-run',
+      targetText: 'https://forum.example/three',
+      settings: historyEntry.settings,
+      now: 5_000,
+    });
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      const typed = message as { type: string };
+      if (typed.type !== 'batch.retry-from-history') {
+        throw new Error('UNEXPECTED_MESSAGE');
+      }
+      return {
+        ok: true,
+        data: { type: 'batch.retry-from-history', data: running },
+      };
+    }) as never);
+  }
+
+  it('renders archived batches with site, summary, and failed urls', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('batchHistoryTitle');
+    expect(container.textContent).toContain('product.example');
+    expect(container.textContent).toContain('forum.example/three');
+    expect(findButton('batchHistoryRetryFailed')).toBeDefined();
+    expect(findButton('batchHistoryRetryUrl')).toBeDefined();
+  });
+
+  it('shows an empty hint when there is no history', async () => {
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('batchHistoryEmpty');
+    expect(findButton('batchHistoryRetryUrl')).toBeUndefined();
+  });
+
+  it('retries a single archived url', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+    await clickButton('batchHistoryRetryUrl');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'batch.retry-from-history',
+        historyId: 'hist-1',
+        urls: ['https://forum.example/three'],
+      })
+    );
+  });
+
+  it('retries all failed urls of an entry without listing them', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+    await clickButton('batchHistoryRetryFailed');
+
+    const call = sendMessage.mock.calls.find(
+      ([message]) =>
+        (message as { type?: string }).type === 'batch.retry-from-history'
+    );
+    expect(call?.[0]).toMatchObject({
+      type: 'batch.retry-from-history',
+      historyId: 'hist-1',
+    });
+    expect((call?.[0] as { urls?: string[] }).urls).toBeUndefined();
+  });
+
+  it('disables history retry while a batch is active', async () => {
+    const running = createBatch({
+      id: 'active-batch',
+      targetText: 'https://blog.example/live',
+      settings: historyEntry.settings,
+      now: 4_000,
+    });
+    await chrome.storage.local.set({
+      [BATCH_STORAGE_KEY]: running,
+      [HISTORY_STORAGE_KEY]: [historyEntry],
+    });
+
+    await renderSidePanel();
+
+    expect(findButton('batchHistoryRetryUrl')?.disabled).toBe(true);
+    expect(findButton('batchHistoryRetryFailed')?.disabled).toBe(true);
   });
 });

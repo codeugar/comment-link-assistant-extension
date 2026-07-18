@@ -19,6 +19,7 @@ export type PopupMessage =
   | { type: 'batch.stop' }
   | { type: 'batch.reset' }
   | { type: 'batch.retry-items'; itemIds: string[] }
+  | { type: 'batch.retry-from-history'; historyId: string; urls?: string[] }
   | { type: 'batch.open-current' }
   | {
       type: 'comment.submit';
@@ -45,6 +46,7 @@ export type PopupMessageResult =
         | 'batch.stop'
         | 'batch.reset'
         | 'batch.retry-items'
+        | 'batch.retry-from-history'
         | 'batch.open-current';
       data: BatchSnapshot | null;
     };

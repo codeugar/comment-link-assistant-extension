@@ -1,4 +1,5 @@
 import { generateComment } from '@/api/client';
+import { runHistoryRetry } from '@/batch/history-retry';
 import { BATCH_RECOVERY_ALARM, armBatchRecoveryAlarm } from '@/batch/recovery';
 import { type BatchStepResult, runBatchUntilBlocked } from '@/batch/runner';
 import {
@@ -12,7 +13,7 @@ import {
   handleRemovedWorkerTabSafely,
   openCurrentTargetSafely,
 } from '@/batch/tab-coordinator';
-import type { BatchSnapshot } from '@/batch/types';
+import type { BatchSettingsSnapshot, BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
 import { closeTerminalBatchWorker } from '@/batch/worker-cleanup';
 import type {
@@ -33,6 +34,7 @@ import {
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
 import { configureSidePanel } from '@/runtime/side-panel';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
+import { archiveBatch, getBatchHistory } from '@/storage/batch-history';
 import {
   getProviderApiKeys,
   getSettings,
@@ -45,6 +47,7 @@ import {
   requestBatchStop,
 } from '@/storage/stop-intent';
 import { releaseWorkerTab } from '@/storage/worker-tab-ownership';
+import type { WebsiteProfile } from '@/website/profile';
 import { loadWebsiteProfile } from '@/website/profile-cache';
 
 type SendResponse = (response: BackgroundResponse) => void;
@@ -184,11 +187,17 @@ async function prepareComment(): Promise<PopupMessageResult> {
   };
 }
 
-async function startBatch(
-  message: Extract<PopupMessage, { type: 'batch.start' }>
-): Promise<PopupMessageResult> {
-  const [settings, keys, existing] = await Promise.all([
-    getSettings(),
+// Shared start path for both the sidepanel-confirmed batch and history reruns.
+// When a reviewed profile is supplied (batch.start) it is used as-is; otherwise
+// the promoted site's profile is loaded through the 30-day cache (history rerun,
+// which has no sidepanel preview payload). All start guards live here so callers
+// never duplicate them.
+async function startBatchFromBackground(
+  targetText: string,
+  settings: BatchSettingsSnapshot,
+  websiteProfile?: WebsiteProfile
+): Promise<BatchSnapshot> {
+  const [keys, existing] = await Promise.all([
     getProviderApiKeys(),
     getBatch(),
   ]);
@@ -203,18 +212,30 @@ async function startBatch(
     throw new Error('BATCH_ALREADY_ACTIVE');
   }
 
-  const targets = parseTargetUrls(message.targetText);
+  const targets = parseTargetUrls(targetText);
   if (!(await hasBatchOriginPermissions([settings.websiteUrl, ...targets]))) {
     throw new Error('ORIGIN_PERMISSION_REQUIRED');
   }
 
-  let batch = createBatch({ targetText: message.targetText, settings });
-  batch = updateBatchProgress(batch, {
-    websiteProfile: message.websiteProfile,
-  });
+  const profile =
+    websiteProfile ?? (await loadWebsiteProfile(settings.websiteUrl));
+  let batch = createBatch({ targetText, settings });
+  batch = updateBatchProgress(batch, { websiteProfile: profile });
   await setBatch(batch);
   requestBatchWake();
-  return { type: 'batch.start', data: batch };
+  return batch;
+}
+
+async function startBatch(
+  message: Extract<PopupMessage, { type: 'batch.start' }>
+): Promise<PopupMessageResult> {
+  const settings = await getSettings();
+  const data = await startBatchFromBackground(
+    message.targetText,
+    settings,
+    message.websiteProfile
+  );
+  return { type: 'batch.start', data };
 }
 
 async function continueBatch(): Promise<PopupMessageResult> {
@@ -276,9 +297,30 @@ async function resetBatch(): Promise<PopupMessageResult> {
   if (batch?.status === 'running' || batch?.status === 'paused') {
     throw new Error('BATCH_ALREADY_ACTIVE');
   }
+  // Preserve the finished batch in history before discarding it, so a reset is
+  // no longer destructive.
+  if (batch) await archiveBatch(batch);
   await clearBatch();
   await updateBatchBadge(null);
   return { type: 'batch.reset', data: null };
+}
+
+async function retryFromHistory(
+  message: Extract<PopupMessage, { type: 'batch.retry-from-history' }>
+): Promise<PopupMessageResult> {
+  const data = await runHistoryRetry(
+    {
+      getBatchHistory,
+      getBatch,
+      archiveBatch,
+      clearBatch,
+      startBatch: (targetText, settings) =>
+        startBatchFromBackground(targetText, settings),
+    },
+    message.historyId,
+    message.urls
+  );
+  return { type: 'batch.retry-from-history', data };
 }
 
 async function openCurrentBatchTarget(): Promise<PopupMessageResult> {
@@ -320,6 +362,9 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   if (message.type === 'batch.stop') return stopCurrentBatch();
   if (message.type === 'batch.reset') return resetBatch();
   if (message.type === 'batch.retry-items') return retryBatchItems(message);
+  if (message.type === 'batch.retry-from-history') {
+    return retryFromHistory(message);
+  }
   if (message.type === 'batch.open-current') {
     return openCurrentBatchTarget();
   }

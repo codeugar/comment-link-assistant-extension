@@ -6,6 +6,12 @@ import { sendToBackground } from '@/runtime/messages';
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
 import { BATCH_STORAGE_KEY, getBatch } from '@/storage/batch';
 import {
+  type BatchHistoryEntry,
+  HISTORY_STORAGE_KEY,
+  getBatchHistory,
+  isFailedHistoryStatus,
+} from '@/storage/batch-history';
+import {
   DEFAULT_SETTINGS,
   extensionSettingsSchema,
   getProviderApiKeys,
@@ -236,6 +242,7 @@ export default function App() {
   );
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [history, setHistory] = useState<BatchHistoryEntry[]>([]);
   const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
     Set<string>
   >(() => new Set());
@@ -246,10 +253,12 @@ export default function App() {
       getSettings(),
       getProviderApiKeys(),
       getBatch(),
-    ]).then(([, storedSettings, storedKeys, storedBatch]) => {
+      getBatchHistory(),
+    ]).then(([, storedSettings, storedKeys, storedBatch, storedHistory]) => {
       setSettings(storedSettings);
       setApiKeys(storedKeys);
       setBatch(storedBatch);
+      setHistory(storedHistory);
       setLoaded(true);
     });
 
@@ -257,8 +266,9 @@ export default function App() {
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string
     ) => {
-      if (areaName !== 'local' || !changes[BATCH_STORAGE_KEY]) return;
-      void getBatch().then(setBatch);
+      if (areaName !== 'local') return;
+      if (changes[BATCH_STORAGE_KEY]) void getBatch().then(setBatch);
+      if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
     };
     chrome.storage.onChanged.addListener(onStorageChanged);
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
@@ -499,6 +509,30 @@ export default function App() {
         throw new Error('BATCH_COMMAND_FAILED');
       }
       setBatch(response.data);
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function retryFromHistory(historyId: string, urls?: string[]) {
+    if (batchIsActive) return;
+    setBusy('retrying');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground(
+        urls
+          ? { type: 'batch.retry-from-history', historyId, urls }
+          : { type: 'batch.retry-from-history', historyId }
+      );
+      if (response.type !== 'batch.retry-from-history') {
+        throw new Error('BATCH_COMMAND_FAILED');
+      }
+      setBatch(response.data);
+      setWebsiteProfile(null);
+      setTargetText('');
     } catch (caught) {
       setError(friendlyError(caught));
     } finally {
@@ -1029,6 +1063,81 @@ export default function App() {
           </section>
         </section>
       )}
+
+      {!settingsOpen ? (
+        <section
+          className="panel history-panel"
+          aria-labelledby="history-title"
+        >
+          <details className="history-section">
+            <summary>
+              <h3 id="history-title">{translate('batchHistoryTitle')}</h3>
+            </summary>
+            {history.length === 0 ? (
+              <p className="history-empty">{translate('batchHistoryEmpty')}</p>
+            ) : (
+              <ul className="history-list">
+                {history.map((entry) => {
+                  const failedItems = entry.items.filter((item) =>
+                    isFailedHistoryStatus(item.status)
+                  );
+                  return (
+                    <li key={entry.id}>
+                      <details className="history-entry">
+                        <summary>
+                          <span className="history-entry-site">
+                            {displayTarget(entry.settings.websiteUrl)}
+                          </span>
+                          <small>
+                            {translate('batchSummary', [
+                              String(entry.counts.submitted),
+                              String(entry.counts.failed),
+                            ])}
+                          </small>
+                          <time
+                            dateTime={new Date(entry.archivedAt).toISOString()}
+                          >
+                            {formatEventTime(entry.archivedAt)}
+                          </time>
+                        </summary>
+                        {entry.counts.failed > 0 ? (
+                          <button
+                            type="button"
+                            className="secondary-button full-width-button"
+                            disabled={busy !== 'idle' || batchIsActive}
+                            onClick={() => retryFromHistory(entry.id)}
+                          >
+                            {translate('batchHistoryRetryFailed')}
+                          </button>
+                        ) : null}
+                        <ul className="history-failed-list">
+                          {failedItems.map((item) => (
+                            <li key={item.url} className="history-failed-item">
+                              <span title={item.url}>
+                                {displayTarget(item.url)}
+                              </span>
+                              <button
+                                type="button"
+                                className="text-button"
+                                disabled={busy !== 'idle' || batchIsActive}
+                                onClick={() =>
+                                  retryFromHistory(entry.id, [item.url])
+                                }
+                              >
+                                {translate('batchHistoryRetryUrl')}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </details>
+        </section>
+      ) : null}
 
       {notice ? <p className="toast success-toast">{notice}</p> : null}
       {error ? <p className="toast error-toast">{error}</p> : null}
