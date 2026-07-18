@@ -113,6 +113,11 @@ interface ActiveDomSubmission {
   expiresAt: number;
 }
 
+interface PendingCkEditorTakeover {
+  textarea: HTMLTextAreaElement;
+  form: HTMLElement;
+}
+
 interface PreparedDomReference {
   document: Document;
   container: HTMLElement;
@@ -1080,10 +1085,12 @@ function looksUnsettled(document: Document): boolean {
   return document.readyState !== 'complete';
 }
 
-function hasPendingCkEditorTakeover(document: Document): boolean {
-  return queryAllDeep(document, 'textarea')
+function findPendingCkEditorTakeover(
+  document: Document
+): PendingCkEditorTakeover | null {
+  const textarea = queryAllDeep(document, 'textarea')
     .filter(isTextAreaElement)
-    .some((textarea) => {
+    .find((textarea) => {
       if (isVisible(textarea)) return false;
       const descriptor = structuralDescriptor(textarea);
       if (!CKEDITOR_TEXTAREA_MARKER.test(descriptor)) return false;
@@ -1096,37 +1103,65 @@ function hasPendingCkEditorTakeover(document: Document): boolean {
       ) {
         return false;
       }
-
-      const config = textarea.id
-        ? textarea.ownerDocument.getElementById(`${textarea.id}-ckeconfig`)
-        : null;
-      const hasHubzeroConfig =
-        config?.tagName === 'SCRIPT' &&
-        config.getAttribute('type') === 'application/json';
-      const hasVisibleShell = Array.from(
-        form.querySelectorAll(CKEDITOR_SHELL_SELECTOR)
-      )
-        .filter(isHtmlElement)
-        .some(isVisible);
-      return hasHubzeroConfig || hasVisibleShell;
+      return true;
     });
+
+  if (!textarea) return null;
+  const form = textarea.closest('form, [role="form"]');
+  return form && isHtmlElement(form) ? { textarea, form } : null;
+}
+
+function isCkEditorTakeoverSettled(takeover: PendingCkEditorTakeover): boolean {
+  const { textarea, form } = takeover;
+  if (
+    !textarea.isConnected ||
+    !form.isConnected ||
+    !isVisible(form) ||
+    isVisible(textarea)
+  ) {
+    return true;
+  }
+
+  const shells = Array.from(form.querySelectorAll(CKEDITOR_SHELL_SELECTOR))
+    .filter(isHtmlElement)
+    .filter(isVisible);
+  for (const shell of shells) {
+    const editor = Array.from(shell.querySelectorAll(EDITOR_SELECTOR))
+      .filter(isHtmlElement)
+      .find((element) => scoreEditor(element) >= 8);
+    if (editor) return true;
+
+    const frames = [
+      ...(shell.tagName === 'IFRAME' ? [shell] : []),
+      ...Array.from(shell.querySelectorAll('iframe')),
+    ];
+    for (const frame of frames) {
+      if (!isHtmlElement(frame) || !isVisible(frame)) continue;
+      try {
+        const body = (frame as HTMLIFrameElement).contentDocument?.body;
+        if (body?.matches(EDITOR_SELECTOR) && scoreEditor(body) >= 8) {
+          return true;
+        }
+      } catch {
+        // Cross-origin editor frames cannot be inspected by the page worker.
+      }
+    }
+  }
+  return false;
 }
 
 function waitForCkEditorTakeover(
-  document: Document,
+  takeover: PendingCkEditorTakeover,
   timeoutMs: number
 ): Promise<void> {
-  if (findEditor(document) || !hasPendingCkEditorTakeover(document)) {
-    return Promise.resolve();
-  }
+  if (isCkEditorTakeoverSettled(takeover)) return Promise.resolve();
 
   return new Promise((resolve) => {
-    const view = document.defaultView;
+    const view = takeover.textarea.ownerDocument.defaultView;
     const startedAt = Date.now();
     const poll = () => {
       if (
-        findEditor(document) ||
-        !hasPendingCkEditorTakeover(document) ||
+        isCkEditorTakeoverSettled(takeover) ||
         Date.now() - startedAt >= timeoutMs
       ) {
         resolve();
@@ -1278,9 +1313,10 @@ export async function analyzePageDocument(
   if (!findEditor(document)) {
     // CKEditor hides its source textarea before its iframe editable is ready.
     // Poll only when a visible comment form exposes an explicit takeover signal.
-    if (hasPendingCkEditorTakeover(document)) {
+    const pendingTakeover = findPendingCkEditorTakeover(document);
+    if (pendingTakeover) {
       await waitForCkEditorTakeover(
-        document,
+        pendingTakeover,
         ANALYZE_CKEDITOR_TAKEOVER_TIMEOUT_MS
       );
       waitedForEditor = true;

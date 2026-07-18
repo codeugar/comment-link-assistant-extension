@@ -417,6 +417,7 @@ describe('HUBzero CKEditor iframe comment form', () => {
       if (!frameContainer || !shell || !form) {
         throw new Error('HUBzero takeover fixture missing');
       }
+      document.getElementById('commentcontent-ckeconfig')?.remove();
       shell.remove();
 
       document.defaultView?.setTimeout(() => {
