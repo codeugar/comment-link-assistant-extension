@@ -368,6 +368,57 @@ describe('HUBzero CKEditor iframe comment form', () => {
     });
   });
 
+  it("ignores HUBzero's generic subject layout class around the comment form", async () => {
+    const frameContainer = mountLoggedInHubzeroShell();
+    const form = document.getElementById('commentform');
+    if (!frameContainer || !form) {
+      throw new Error('HUBzero comment form fixture missing');
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'subject';
+    form.before(wrapper);
+    wrapper.appendChild(form);
+    expect(mountCkEditorBody(appendCkEditorFrame(frameContainer))).toBeTruthy();
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+    });
+  });
+
+  it.each([
+    ['class', 'subject-field'],
+    ['class', 'email_subject'],
+    ['id', 'subject'],
+    ['name', 'subject'],
+    ['data-testid', 'subject'],
+  ])(
+    'keeps ancestor %s="%s" as a negative editor signal',
+    async (attribute, value) => {
+      const frameContainer = mountLoggedInHubzeroShell();
+      const form = document.getElementById('commentform');
+      if (!frameContainer || !form) {
+        throw new Error('HUBzero comment form fixture missing');
+      }
+      const wrapper = document.createElement('div');
+      wrapper.setAttribute(attribute, value);
+      form.before(wrapper);
+      wrapper.appendChild(form);
+      expect(
+        mountCkEditorBody(appendCkEditorFrame(frameContainer))
+      ).toBeTruthy();
+
+      const analysis = await analyzePageDocument(document);
+
+      expect(analysis.form).toMatchObject({
+        readiness: 'not_found',
+        message: 'COMMENT_FORM_NOT_FOUND',
+      });
+    }
+  );
+
   it('waits for CKEditor to finish taking over a hidden comment textarea after load', async () => {
     vi.useFakeTimers();
     Object.defineProperty(document, 'readyState', {

@@ -93,6 +93,7 @@ const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
 const ANALYZE_CKEDITOR_TAKEOVER_TIMEOUT_MS = 12_000;
 const ANALYZE_CKEDITOR_POLL_INTERVAL_MS = 250;
 const CKEDITOR_TEXTAREA_MARKER = /(?:^|[\s_-])ckeditor(?:$|[\s_-])/i;
+const CKEDITOR_EDITABLE_MARKER = /(?:^|[\s_-])cke_editable(?:$|[\s_-])/i;
 const CKEDITOR_SHELL_SELECTOR = '.cke, [id^="cke_"], [class*="cke_editor_"]';
 const COMMENT_REGION_SELECTOR = [
   '#respond',
@@ -321,14 +322,23 @@ function isPositiveSubmitControl(element: Element): boolean {
 
 function structuralDescriptor(
   element: Element | null,
-  ignoreCheckoutThemeIdentity = false
+  ignoreCheckoutThemeIdentity = false,
+  ignoreSubjectLayoutClass = false
 ): string {
   if (!element) return '';
   const identityAttribute = (name: 'id' | 'class') => {
-    const value = element.getAttribute(name);
-    return ignoreCheckoutThemeIdentity
-      ? value?.replace(CHECKOUT_THEME_IDENTITY_TOKEN, '$1')
-      : value;
+    let value = element.getAttribute(name);
+    if (ignoreCheckoutThemeIdentity) {
+      value = value?.replace(CHECKOUT_THEME_IDENTITY_TOKEN, '$1') ?? null;
+    }
+    if (name === 'class' && ignoreSubjectLayoutClass) {
+      value =
+        value
+          ?.split(/\s+/)
+          .filter((token) => token.toLowerCase() !== 'subject')
+          .join(' ') ?? null;
+    }
+    return value;
   };
   return normalizeWhitespace(
     [
@@ -679,7 +689,31 @@ function isConfidentCommentForm(
         controlActionDescriptor(submit),
       ].join(' ')
     : `${actionContext} ${controlActionDescriptor(submit)}`;
-  if (NEGATIVE_EDITOR.test(structuralContext)) return false;
+  const editorContext = structuralDescriptor(editor);
+  const containerContext = structuralDescriptor(container);
+  const ignoreSubjectLayoutClass =
+    CKEDITOR_EDITABLE_MARKER.test(editorContext) &&
+    POSITIVE_EDITOR.test(containerContext);
+  const ancestorContext = `${structuralDescriptor(
+    container.parentElement,
+    false,
+    ignoreSubjectLayoutClass
+  )} ${structuralDescriptor(
+    container.parentElement?.parentElement ?? null,
+    false,
+    ignoreSubjectLayoutClass
+  )}`;
+  // HUBzero uses `.subject` as a generic layout wrapper around its CKEditor
+  // comment form. Ignore only that exact wrapper token when the inner
+  // CKEditor and form already carry positive comment identity; keep all other
+  // ancestor negatives so survey/contact/search forms remain blocked.
+  if (
+    NEGATIVE_EDITOR.test(
+      `${editorContext} ${containerContext} ${ancestorContext}`
+    )
+  ) {
+    return false;
+  }
   if (NON_COMMENT_FORM_CONTEXT.test(safetyContext)) return false;
   if (POSITIVE_EDITOR.test(structuralContext)) return true;
   if (COMMENT_HEADING.test(headingCopy)) return true;
