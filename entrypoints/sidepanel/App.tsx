@@ -1,3 +1,4 @@
+import { isDueToday, nextPendingChunk, planProgress } from '@/batch/plan';
 import type { BatchItem, BatchItemStatus, BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
 import { TextLoop } from '@/components/core/text-loop';
@@ -11,6 +12,7 @@ import {
   getBatchHistory,
   isFailedHistoryStatus,
 } from '@/storage/batch-history';
+import { PLANS_STORAGE_KEY, type PlansMap, getPlans } from '@/storage/plans';
 import {
   DEFAULT_SETTINGS,
   extensionSettingsSchema,
@@ -34,7 +36,8 @@ type BusyState =
   | 'stopping'
   | 'opening'
   | 'resetting'
-  | 'retrying';
+  | 'retrying'
+  | 'planning';
 
 function providerLabel(provider: ExtensionSettings['provider']): string {
   return translate(
@@ -244,6 +247,10 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [history, setHistory] = useState<BatchHistoryEntry[]>([]);
+  const [plans, setPlans] = useState<PlansMap>({});
+  const [planSiteId, setPlanSiteId] = useState('');
+  const [planTargetText, setPlanTargetText] = useState('');
+  const [planChunkSize, setPlanChunkSize] = useState(30);
   const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
     Set<string>
   >(() => new Set());
@@ -255,13 +262,25 @@ export default function App() {
       getProviderApiKeys(),
       getBatch(),
       getBatchHistory(),
-    ]).then(([, storedSettings, storedKeys, storedBatch, storedHistory]) => {
-      setSettings(storedSettings);
-      setApiKeys(storedKeys);
-      setBatch(storedBatch);
-      setHistory(storedHistory);
-      setLoaded(true);
-    });
+      getPlans(),
+    ]).then(
+      ([
+        ,
+        storedSettings,
+        storedKeys,
+        storedBatch,
+        storedHistory,
+        storedPlans,
+      ]) => {
+        setSettings(storedSettings);
+        setApiKeys(storedKeys);
+        setBatch(storedBatch);
+        setHistory(storedHistory);
+        setPlans(storedPlans);
+        setPlanSiteId(storedSettings.activeSiteId);
+        setLoaded(true);
+      }
+    );
 
     const onStorageChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -270,6 +289,7 @@ export default function App() {
       if (areaName !== 'local') return;
       if (changes[BATCH_STORAGE_KEY]) void getBatch().then(setBatch);
       if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
+      if (changes[PLANS_STORAGE_KEY]) void getPlans().then(setPlans);
     };
     chrome.storage.onChanged.addListener(onStorageChanged);
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
@@ -295,6 +315,27 @@ export default function App() {
       return [];
     }
   }, [targetText]);
+
+  const planUrlCount = useMemo(() => {
+    try {
+      return parseTargetUrls(planTargetText).length;
+    } catch {
+      return 0;
+    }
+  }, [planTargetText]);
+  const planBatchCount =
+    planChunkSize > 0 ? Math.ceil(planUrlCount / planChunkSize) : 0;
+
+  const siteLabelById = (siteId: string): string => {
+    const site = settings.sites.find((candidate) => candidate.id === siteId);
+    if (!site) return siteId;
+    return site.label || displayTarget(site.websiteUrl) || siteId;
+  };
+  const planEntries = Object.values(plans);
+  const duePlans = planEntries.filter((plan) => isDueToday(plan, Date.now()));
+  const ranTodayPlans = planEntries.filter(
+    (plan) => !isDueToday(plan, Date.now()) && nextPendingChunk(plan) !== null
+  );
 
   const batchIsActive =
     batch?.status === 'running' || batch?.status === 'paused';
@@ -591,6 +632,77 @@ export default function App() {
     }
   }
 
+  async function createPlan() {
+    setBusy('planning');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({
+        type: 'plan.create',
+        siteId: planSiteId,
+        targetText: planTargetText,
+        chunkSize: planChunkSize,
+      });
+      if (response.type !== 'plan.create')
+        throw new Error('PLAN_CREATE_FAILED');
+      setPlans((current) => ({
+        ...current,
+        [response.data.siteId]: response.data,
+      }));
+      setPlanTargetText('');
+      setNotice(translate('planCreated'));
+    } catch (caught) {
+      const raw = caught instanceof Error ? caught.message : String(caught);
+      if (raw.includes('PLAN_NO_URLS') || raw.includes('TARGET_URL_')) {
+        setError(translate('invalidTargetUrls'));
+      } else setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function deletePlan(siteId: string) {
+    setBusy('planning');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({ type: 'plan.delete', siteId });
+      if (response.type !== 'plan.delete')
+        throw new Error('PLAN_DELETE_FAILED');
+      setPlans((current) => {
+        const next = { ...current };
+        delete next[siteId];
+        return next;
+      });
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function runPlan(siteId: string) {
+    if (batchIsActive) return;
+    setBusy('planning');
+    setError('');
+    setNotice('');
+    try {
+      const response = await sendToBackground({
+        type: 'plan.run-next',
+        siteId,
+      });
+      if (response.type !== 'plan.run-next') {
+        throw new Error('PLAN_RUN_FAILED');
+      }
+      setBatch(response.data);
+      setWebsiteProfile(null);
+    } catch (caught) {
+      setError(friendlyError(caught));
+    } finally {
+      setBusy('idle');
+    }
+  }
+
   async function copyGeneratedComment(comment: string) {
     try {
       await navigator.clipboard.writeText(comment);
@@ -643,6 +755,42 @@ export default function App() {
           )}
         </span>
       </div>
+
+      {!settingsOpen &&
+      !batchIsActive &&
+      (duePlans.length > 0 || ranTodayPlans.length > 0) ? (
+        <section className="plan-due-banners" aria-live="polite">
+          {duePlans.map((plan) => {
+            const { done, total } = planProgress(plan);
+            const chunk = nextPendingChunk(plan);
+            return (
+              <div key={plan.siteId} className="plan-due-banner">
+                <p>
+                  {translate('planDueBanner', [
+                    siteLabelById(plan.siteId),
+                    String(done + 1),
+                    String(total),
+                    String(chunk?.urls.length ?? 0),
+                  ])}
+                </p>
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={busy !== 'idle'}
+                  onClick={() => runPlan(plan.siteId)}
+                >
+                  {translate('planRunNext')}
+                </button>
+              </div>
+            );
+          })}
+          {ranTodayPlans.map((plan) => (
+            <p key={plan.siteId} className="plan-done-today">
+              {translate('planDoneToday', [siteLabelById(plan.siteId)])}
+            </p>
+          ))}
+        </section>
+      ) : null}
 
       {settingsOpen ? (
         <section
@@ -1182,6 +1330,118 @@ export default function App() {
           </section>
         </section>
       )}
+
+      {!settingsOpen ? (
+        <section className="panel plan-panel" aria-labelledby="plan-title">
+          <details className="plan-section">
+            <summary>
+              <h3 id="plan-title">{translate('planTitle')}</h3>
+            </summary>
+
+            <div className="plan-create">
+              <label className="field">
+                <span>{translate('siteSelectorLabel')}</span>
+                <select
+                  value={planSiteId}
+                  disabled={batchIsActive}
+                  onChange={(event) => setPlanSiteId(event.target.value)}
+                >
+                  {settings.sites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.label ||
+                        displayTarget(site.websiteUrl) ||
+                        translate('siteUnnamed')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>{translate('targetUrlsLabel')}</span>
+                <textarea
+                  className="plan-target-editor"
+                  value={planTargetText}
+                  disabled={batchIsActive}
+                  onChange={(event) => setPlanTargetText(event.target.value)}
+                  placeholder={translate('targetUrlsPlaceholder')}
+                  rows={5}
+                />
+              </label>
+              <label className="field">
+                <span>{translate('planChunkSize')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={planChunkSize}
+                  disabled={batchIsActive}
+                  onChange={(event) =>
+                    setPlanChunkSize(
+                      Math.max(1, Math.floor(Number(event.target.value) || 1))
+                    )
+                  }
+                />
+              </label>
+              <p className="plan-preview">
+                {translate('planPreviewSummary', [
+                  String(planUrlCount),
+                  String(planBatchCount),
+                ])}
+              </p>
+              <button
+                type="button"
+                className="secondary-button full-width-button"
+                disabled={
+                  busy !== 'idle' || batchIsActive || planUrlCount === 0
+                }
+                onClick={createPlan}
+              >
+                {translate('planCreate')}
+              </button>
+            </div>
+
+            {planEntries.length === 0 ? (
+              <p className="plan-empty">{translate('planEmpty')}</p>
+            ) : (
+              <ul className="plan-list">
+                {planEntries.map((plan) => {
+                  const { done, total } = planProgress(plan);
+                  const chunk = nextPendingChunk(plan);
+                  return (
+                    <li key={plan.siteId} className="plan-entry">
+                      <div className="plan-entry-head">
+                        <strong>{siteLabelById(plan.siteId)}</strong>
+                        <small>
+                          {translate('planProgress', [
+                            String(done),
+                            String(total),
+                          ])}
+                        </small>
+                      </div>
+                      {chunk ? (
+                        <ul className="plan-next-peek">
+                          {chunk.urls.slice(0, 3).map((url) => (
+                            <li key={url} title={url}>
+                              {displayTarget(url)}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={busy !== 'idle'}
+                        onClick={() => deletePlan(plan.siteId)}
+                      >
+                        {translate('planDelete')}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </details>
+        </section>
+      ) : null}
 
       {!settingsOpen ? (
         <section

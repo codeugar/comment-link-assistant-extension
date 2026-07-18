@@ -436,5 +436,38 @@
   },
   "activityReadingFeedback": {
     "message": "正在解释网站返回信息"
+  },
+  "planTitle": {
+    "message": "计划"
+  },
+  "planCreate": {
+    "message": "创建计划"
+  },
+  "planCreated": {
+    "message": "计划已创建"
+  },
+  "planChunkSize": {
+    "message": "每批条数"
+  },
+  "planPreviewSummary": {
+    "message": "$1 条 → $2 批"
+  },
+  "planDueBanner": {
+    "message": "「$1」今日批次待跑（第 $2/$3 批，$4 条）"
+  },
+  "planRunNext": {
+    "message": "跑今天这批"
+  },
+  "planDoneToday": {
+    "message": "「$1」今日已跑，明天继续"
+  },
+  "planProgress": {
+    "message": "已完成 $1/$2 批"
+  },
+  "planDelete": {
+    "message": "删除计划"
+  },
+  "planEmpty": {
+    "message": "暂无计划"
   }
 }
