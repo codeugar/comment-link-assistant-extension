@@ -197,6 +197,12 @@ h2 {
   line-height: 1.45;
 }
 
+/* The settings heading has no step number, so the 26px track would squeeze
+   its text into a one-word-per-line column. */
+.settings-panel .section-heading {
+  grid-template-columns: 1fr;
+}
+
 .step-number {
   padding-top: 4px;
 }
