@@ -13,9 +13,8 @@ describe('settings heading layout', () => {
   // is squeezed into the 26px track and renders one word per line.
   it('collapses the unused step-number column in the settings panel', () => {
     const override =
-      styles.match(
-        /\.settings-panel\s+\.section-heading\s*\{([^}]*)\}/
-      )?.[1] ?? '';
+      styles.match(/\.settings-panel\s+\.section-heading\s*\{([^}]*)\}/)?.[1] ??
+      '';
     expect(override).toMatch(/grid-template-columns:\s*1fr\s*;/);
   });
 });
