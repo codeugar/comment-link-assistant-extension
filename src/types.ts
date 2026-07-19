@@ -6,12 +6,19 @@ export const LINK_MODES = ['prefer-website-field', 'inline'] as const;
 
 export type LinkMode = (typeof LINK_MODES)[number];
 
-export interface ExtensionSettings {
-  provider: CommentProvider;
+export interface SiteProfile {
+  id: string;
+  label: string;
   websiteUrl: string;
   displayName: string;
   email: string;
   linkMode: LinkMode;
+}
+
+export interface ExtensionSettings {
+  provider: CommentProvider;
+  sites: SiteProfile[];
+  activeSiteId: string;
 }
 
 export interface ProviderApiKeys {

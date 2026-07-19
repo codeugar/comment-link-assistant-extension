@@ -36,6 +36,8 @@ import { configureSidePanel } from '@/runtime/side-panel';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
 import { archiveBatch, getBatchHistory } from '@/storage/batch-history';
 import {
+  buildBatchSettingsSnapshot,
+  getActiveSite,
   getProviderApiKeys,
   getSettings,
   restrictStorageToTrustedContexts,
@@ -148,19 +150,19 @@ async function prepareComment(): Promise<PopupMessageResult> {
     analyzeActivePage(),
   ]);
   const { analysis, tabId } = activePage;
-  if (!settings.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
+  const site = getActiveSite(settings);
+  if (!site.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
   if (analysis.form.readiness !== 'ready') {
     throw new Error(
       analysis.form.message || analysis.form.readiness.toUpperCase()
     );
   }
 
-  const websiteProfile = await loadWebsiteProfile(settings.websiteUrl);
+  const websiteProfile = await loadWebsiteProfile(site.websiteUrl);
   const effectiveLinkMode =
-    settings.linkMode === 'prefer-website-field' &&
-    !analysis.form.hasWebsiteField
+    site.linkMode === 'prefer-website-field' && !analysis.form.hasWebsiteField
       ? 'inline'
-      : settings.linkMode;
+      : site.linkMode;
   const comment = await generateComment(keys, {
     provider: settings.provider,
     websiteProfile,
@@ -230,9 +232,14 @@ async function startBatch(
   message: Extract<PopupMessage, { type: 'batch.start' }>
 ): Promise<PopupMessageResult> {
   const settings = await getSettings();
+  const siteId = message.siteId ?? settings.activeSiteId;
+  const site =
+    settings.sites.find((candidate) => candidate.id === siteId) ??
+    getActiveSite(settings);
+  const snapshot = buildBatchSettingsSnapshot(settings.provider, site);
   const data = await startBatchFromBackground(
     message.targetText,
-    settings,
+    snapshot,
     message.websiteProfile
   );
   return { type: 'batch.start', data };
@@ -369,13 +376,13 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
     return openCurrentBatchTarget();
   }
 
-  const settings = await getSettings();
+  const site = getActiveSite(await getSettings());
   const result = await submitCurrentPage(
     {
       comment: message.comment,
-      displayName: settings.displayName || undefined,
-      email: settings.email || undefined,
-      websiteUrl: message.target.fillWebsiteField ? settings.websiteUrl : '',
+      displayName: site.displayName || undefined,
+      email: site.email || undefined,
+      websiteUrl: message.target.fillWebsiteField ? site.websiteUrl : '',
     },
     message.target
   );

@@ -138,6 +138,12 @@ export function createBatch(input: CreateBatchInput): BatchSnapshot {
     displayName: input.settings.displayName,
     email: input.settings.email,
     linkMode: input.settings.linkMode,
+    ...(input.settings.siteId !== undefined
+      ? { siteId: input.settings.siteId }
+      : {}),
+    ...(input.settings.siteLabel !== undefined
+      ? { siteLabel: input.settings.siteLabel }
+      : {}),
   };
 
   return legalSnapshot({

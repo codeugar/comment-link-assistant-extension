@@ -287,6 +287,24 @@
   "batchHistoryEmpty": {
     "message": "暂无历史批次"
   },
+  "siteSelectorLabel": {
+    "message": "网站"
+  },
+  "siteAdd": {
+    "message": "新增网站"
+  },
+  "siteRemove": {
+    "message": "删除网站"
+  },
+  "siteLabelField": {
+    "message": "名称"
+  },
+  "siteLabelPlaceholder": {
+    "message": "例如 Seed Audio"
+  },
+  "siteUnnamed": {
+    "message": "未命名网站"
+  },
   "batchStatusQueued": {
     "message": "等待处理"
   },

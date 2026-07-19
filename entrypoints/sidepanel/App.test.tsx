@@ -657,3 +657,208 @@ describe('batch history', () => {
     expect(findButton('batchHistoryRetryFailed')?.disabled).toBe(true);
   });
 });
+
+describe('multi-site profiles', () => {
+  const twoSiteSettings = {
+    provider: 'deepseek' as const,
+    sites: [
+      {
+        id: 'seed',
+        label: 'Seed Audio',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: 'Seed',
+        email: '',
+        linkMode: 'prefer-website-field' as const,
+      },
+      {
+        id: 'muse',
+        label: 'Museimage',
+        websiteUrl: 'https://museimage.example',
+        displayName: 'Muse',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+    ],
+    activeSiteId: 'seed',
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  async function selectOption(select: HTMLSelectElement, value: string) {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      'value'
+    )?.set;
+    await act(async () => {
+      setValue?.call(select, value);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  async function seed(keys = true) {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      ...(keys
+        ? {
+            [PROVIDER_API_KEYS_STORAGE_KEY]: {
+              deepseekApiKey: 'deepseek-key',
+              kieApiKey: '',
+            },
+          }
+        : {}),
+    });
+  }
+
+  it('switches the edited fields when the settings site selector changes', async () => {
+    await seed();
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    const websiteInput = container.querySelector<HTMLInputElement>(
+      'input[placeholder="websiteUrlPlaceholder"]'
+    );
+    expect(websiteInput?.value).toBe('https://seedaudio.example');
+
+    const siteSelect = container.querySelector<HTMLSelectElement>(
+      '.site-manager select'
+    );
+    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
+    await selectOption(siteSelect, 'muse');
+
+    expect(websiteInput?.value).toBe('https://museimage.example');
+  });
+
+  it('disables remove for a single site and enables it after adding one', async () => {
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    expect(findButton('siteRemove')?.disabled).toBe(true);
+    await clickButton('siteAdd');
+    expect(findButton('siteRemove')?.disabled).toBe(false);
+  });
+
+  it('persists an edited multi-site configuration on save', async () => {
+    await seed();
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    const siteSelect = container.querySelector<HTMLSelectElement>(
+      '.site-manager select'
+    );
+    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
+    await selectOption(siteSelect, 'muse');
+    const labelInput = container.querySelector<HTMLInputElement>(
+      'input[placeholder="siteLabelPlaceholder"]'
+    );
+    if (!labelInput) throw new Error('LABEL_INPUT_NOT_FOUND');
+    await enterInputValue(labelInput, 'Muse Renamed');
+
+    await clickButton('saveSettings');
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('settingsSaved');
+    });
+    const stored = (await chrome.storage.local.get(SETTINGS_STORAGE_KEY))[
+      SETTINGS_STORAGE_KEY
+    ] as { sites: Array<{ id: string; label: string }> };
+    expect(stored.sites).toHaveLength(2);
+    expect(stored.sites.find((site) => site.id === 'muse')?.label).toBe(
+      'Muse Renamed'
+    );
+  });
+
+  it('starts a batch for the site chosen in the setup picker', async () => {
+    await seed();
+    vi.spyOn(chrome.permissions, 'request').mockImplementation(
+      (async () => true) as never
+    );
+    const profile = {
+      url: 'https://museimage.example/',
+      title: 'Museimage profile',
+      description: 'A useful description',
+    };
+    const runningBatch = createBatch({
+      id: 'batch-muse',
+      targetText: 'https://blog.example/post',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://museimage.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline',
+      },
+      now: 1,
+    });
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        const typed = message as { type: string };
+        if (typed.type === 'batch.preview') {
+          return { ok: true, data: { type: 'batch.preview', data: profile } };
+        }
+        if (typed.type === 'batch.start') {
+          return {
+            ok: true,
+            data: { type: 'batch.start', data: runningBatch },
+          };
+        }
+        throw new Error('UNEXPECTED_MESSAGE');
+      }) as never);
+
+    await renderSidePanel();
+
+    const setupSelect = container.querySelector<HTMLSelectElement>(
+      '.workspace-panel select'
+    );
+    if (!setupSelect) throw new Error('SETUP_SELECT_NOT_FOUND');
+    await selectOption(setupSelect, 'muse');
+
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, 'https://blog.example/post');
+
+    await clickButton('prepareBatch');
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Museimage profile');
+    });
+    await clickButton('confirmAndStartBatch');
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'batch.start', siteId: 'muse' })
+      );
+    });
+  });
+
+  it('labels a history entry with its archived site label', async () => {
+    const entry = {
+      id: 'hist-site',
+      settings: {
+        provider: 'deepseek' as const,
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+        siteId: 'seed',
+        siteLabel: 'Seed Audio',
+      },
+      createdAt: 1,
+      archivedAt: 2,
+      counts: { submitted: 1, failed: 1, total: 2 },
+      items: [
+        { url: 'https://blog.example/a', status: 'submitted', message: '' },
+        { url: 'https://blog.example/b', status: 'failed', message: 'x' },
+      ],
+    };
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [entry] });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('Seed Audio');
+  });
+});

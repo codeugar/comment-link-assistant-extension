@@ -14,6 +14,7 @@ export type PopupMessage =
       type: 'batch.start';
       targetText: string;
       websiteProfile: WebsiteProfile;
+      siteId?: string;
     }
   | { type: 'batch.continue' }
   | { type: 'batch.stop' }

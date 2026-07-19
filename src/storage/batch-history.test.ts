@@ -113,4 +113,20 @@ describe('batch history storage', () => {
     });
     expect(await getBatchHistory()).toEqual([]);
   });
+
+  it('preserves site provenance from a multi-site batch snapshot', async () => {
+    let batch = createBatch({
+      id: 'batch-site',
+      targetText: 'https://blog.example/one',
+      settings: { ...settings, siteId: 'site-9', siteLabel: 'Museimage' },
+      now: 1_000,
+    });
+    batch = completeCurrentItem(batch, 'submitted', 'OK', 1_100);
+    await archiveBatch(batch, 2_000);
+
+    expect((await getBatchHistory())[0]?.settings).toMatchObject({
+      siteId: 'site-9',
+      siteLabel: 'Museimage',
+    });
+  });
 });
