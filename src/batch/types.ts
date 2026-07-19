@@ -1,5 +1,5 @@
 import type { PageAnalysis, PreparedPageSubmission } from '@/page/types';
-import type { ExtensionSettings } from '@/types';
+import type { CommentProvider, LinkMode } from '@/types';
 import type { WebsiteProfile } from '@/website/profile';
 import { z } from 'zod';
 
@@ -37,10 +37,17 @@ export const BATCH_STATUSES = [
 
 export type BatchStatus = (typeof BATCH_STATUSES)[number];
 
-export type BatchSettingsSnapshot = Pick<
-  ExtensionSettings,
-  'provider' | 'websiteUrl' | 'displayName' | 'email' | 'linkMode'
->;
+export interface BatchSettingsSnapshot {
+  provider: CommentProvider;
+  websiteUrl: string;
+  displayName: string;
+  email: string;
+  linkMode: LinkMode;
+  // Provenance of the promoting site (optional so pre-multi-site snapshots and
+  // archived history entries still parse).
+  siteId?: string;
+  siteLabel?: string;
+}
 
 export interface BatchItem {
   id: string;
@@ -96,6 +103,8 @@ export const batchSettingsSnapshotSchema: z.ZodType<BatchSettingsSnapshot> = z
     displayName: z.string().max(200),
     email: optionalEmailSchema,
     linkMode: z.enum(['prefer-website-field', 'inline']),
+    siteId: z.string().min(1).max(200).optional(),
+    siteLabel: z.string().max(100).optional(),
   })
   .strict();
 

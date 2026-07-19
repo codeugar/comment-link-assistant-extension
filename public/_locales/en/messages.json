@@ -275,6 +275,36 @@
   "batchRetryFailed": {
     "message": "Retry failed items"
   },
+  "batchHistoryTitle": {
+    "message": "History"
+  },
+  "batchHistoryRetryFailed": {
+    "message": "Retry failed items"
+  },
+  "batchHistoryRetryUrl": {
+    "message": "Retry"
+  },
+  "batchHistoryEmpty": {
+    "message": "No finished batches yet"
+  },
+  "siteSelectorLabel": {
+    "message": "Website"
+  },
+  "siteAdd": {
+    "message": "Add website"
+  },
+  "siteRemove": {
+    "message": "Remove website"
+  },
+  "siteLabelField": {
+    "message": "Label"
+  },
+  "siteLabelPlaceholder": {
+    "message": "e.g. Seed Audio"
+  },
+  "siteUnnamed": {
+    "message": "Untitled website"
+  },
   "batchStatusQueued": {
     "message": "Queued"
   },
@@ -406,5 +436,38 @@
   },
   "activityReadingFeedback": {
     "message": "Interpreting the submission feedback"
+  },
+  "planTitle": {
+    "message": "Plans"
+  },
+  "planCreate": {
+    "message": "Create plan"
+  },
+  "planCreated": {
+    "message": "Plan created"
+  },
+  "planChunkSize": {
+    "message": "URLs per batch"
+  },
+  "planPreviewSummary": {
+    "message": "$1 URLs → $2 batches"
+  },
+  "planDueBanner": {
+    "message": "“$1” today's batch is due (batch $2/$3, $4 URLs)"
+  },
+  "planRunNext": {
+    "message": "Run today's batch"
+  },
+  "planDoneToday": {
+    "message": "“$1” done for today — next batch tomorrow"
+  },
+  "planProgress": {
+    "message": "$1 / $2 batches done"
+  },
+  "planDelete": {
+    "message": "Delete plan"
+  },
+  "planEmpty": {
+    "message": "No plans yet"
   }
 }

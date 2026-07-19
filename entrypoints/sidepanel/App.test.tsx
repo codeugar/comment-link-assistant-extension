@@ -4,6 +4,8 @@ import {
   updateBatchProgress,
 } from '@/batch/state';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
+import { HISTORY_STORAGE_KEY } from '@/storage/batch-history';
+import { PLANS_STORAGE_KEY } from '@/storage/plans';
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
@@ -535,5 +537,562 @@ describe('batch item retry', () => {
 
     expect(container.textContent).not.toContain('batchRetryItem');
     expect(container.textContent).not.toContain('batchRetryFailed');
+  });
+});
+
+describe('batch history', () => {
+  const historyEntry = {
+    id: 'hist-1',
+    settings: {
+      provider: 'deepseek' as const,
+      websiteUrl: 'https://product.example',
+      displayName: '',
+      email: '',
+      linkMode: 'prefer-website-field' as const,
+    },
+    createdAt: 1_000,
+    archivedAt: 2_000,
+    counts: { submitted: 2, failed: 1, total: 3 },
+    items: [
+      { url: 'https://blog.example/one', status: 'submitted', message: '' },
+      { url: 'https://blog.example/two', status: 'submitted', message: '' },
+      { url: 'https://forum.example/three', status: 'failed', message: 'BOOM' },
+    ],
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  function mockRetryResponse() {
+    const running = createBatch({
+      id: 'hist-run',
+      targetText: 'https://forum.example/three',
+      settings: historyEntry.settings,
+      now: 5_000,
+    });
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      const typed = message as { type: string };
+      if (typed.type !== 'batch.retry-from-history') {
+        throw new Error('UNEXPECTED_MESSAGE');
+      }
+      return {
+        ok: true,
+        data: { type: 'batch.retry-from-history', data: running },
+      };
+    }) as never);
+  }
+
+  it('renders archived batches with site, summary, and failed urls', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('batchHistoryTitle');
+    expect(container.textContent).toContain('product.example');
+    expect(container.textContent).toContain('forum.example/three');
+    expect(findButton('batchHistoryRetryFailed')).toBeDefined();
+    expect(findButton('batchHistoryRetryUrl')).toBeDefined();
+  });
+
+  it('shows an empty hint when there is no history', async () => {
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('batchHistoryEmpty');
+    expect(findButton('batchHistoryRetryUrl')).toBeUndefined();
+  });
+
+  it('retries a single archived url', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+    await clickButton('batchHistoryRetryUrl');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'batch.retry-from-history',
+        historyId: 'hist-1',
+        urls: ['https://forum.example/three'],
+      })
+    );
+  });
+
+  it('retries all failed urls of an entry without listing them', async () => {
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+    const sendMessage = mockRetryResponse();
+
+    await renderSidePanel();
+    await clickButton('batchHistoryRetryFailed');
+
+    const call = sendMessage.mock.calls.find(
+      ([message]) =>
+        (message as { type?: string }).type === 'batch.retry-from-history'
+    );
+    expect(call?.[0]).toMatchObject({
+      type: 'batch.retry-from-history',
+      historyId: 'hist-1',
+    });
+    expect((call?.[0] as { urls?: string[] }).urls).toBeUndefined();
+  });
+
+  it('disables history retry while a batch is active', async () => {
+    const running = createBatch({
+      id: 'active-batch',
+      targetText: 'https://blog.example/live',
+      settings: historyEntry.settings,
+      now: 4_000,
+    });
+    await chrome.storage.local.set({
+      [BATCH_STORAGE_KEY]: running,
+      [HISTORY_STORAGE_KEY]: [historyEntry],
+    });
+
+    await renderSidePanel();
+
+    expect(findButton('batchHistoryRetryUrl')?.disabled).toBe(true);
+    expect(findButton('batchHistoryRetryFailed')?.disabled).toBe(true);
+  });
+});
+
+describe('multi-site profiles', () => {
+  const twoSiteSettings = {
+    provider: 'deepseek' as const,
+    sites: [
+      {
+        id: 'seed',
+        label: 'Seed Audio',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: 'Seed',
+        email: '',
+        linkMode: 'prefer-website-field' as const,
+      },
+      {
+        id: 'muse',
+        label: 'Museimage',
+        websiteUrl: 'https://museimage.example',
+        displayName: 'Muse',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+    ],
+    activeSiteId: 'seed',
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  async function selectOption(select: HTMLSelectElement, value: string) {
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      'value'
+    )?.set;
+    await act(async () => {
+      setValue?.call(select, value);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  async function seed(keys = true) {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      ...(keys
+        ? {
+            [PROVIDER_API_KEYS_STORAGE_KEY]: {
+              deepseekApiKey: 'deepseek-key',
+              kieApiKey: '',
+            },
+          }
+        : {}),
+    });
+  }
+
+  it('switches the edited fields when the settings site selector changes', async () => {
+    await seed();
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    const websiteInput = container.querySelector<HTMLInputElement>(
+      'input[placeholder="websiteUrlPlaceholder"]'
+    );
+    expect(websiteInput?.value).toBe('https://seedaudio.example');
+
+    const siteSelect = container.querySelector<HTMLSelectElement>(
+      '.site-manager select'
+    );
+    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
+    await selectOption(siteSelect, 'muse');
+
+    expect(websiteInput?.value).toBe('https://museimage.example');
+  });
+
+  it('disables remove for a single site and enables it after adding one', async () => {
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    expect(findButton('siteRemove')?.disabled).toBe(true);
+    await clickButton('siteAdd');
+    expect(findButton('siteRemove')?.disabled).toBe(false);
+  });
+
+  it('persists an edited multi-site configuration on save', async () => {
+    await seed();
+    await renderSidePanel();
+    await clickButton('openSettings');
+
+    const siteSelect = container.querySelector<HTMLSelectElement>(
+      '.site-manager select'
+    );
+    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
+    await selectOption(siteSelect, 'muse');
+    const labelInput = container.querySelector<HTMLInputElement>(
+      'input[placeholder="siteLabelPlaceholder"]'
+    );
+    if (!labelInput) throw new Error('LABEL_INPUT_NOT_FOUND');
+    await enterInputValue(labelInput, 'Muse Renamed');
+
+    await clickButton('saveSettings');
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('settingsSaved');
+    });
+    const stored = (await chrome.storage.local.get(SETTINGS_STORAGE_KEY))[
+      SETTINGS_STORAGE_KEY
+    ] as { sites: Array<{ id: string; label: string }> };
+    expect(stored.sites).toHaveLength(2);
+    expect(stored.sites.find((site) => site.id === 'muse')?.label).toBe(
+      'Muse Renamed'
+    );
+  });
+
+  it('starts a batch for the site chosen in the setup picker', async () => {
+    await seed();
+    vi.spyOn(chrome.permissions, 'request').mockImplementation(
+      (async () => true) as never
+    );
+    const profile = {
+      url: 'https://museimage.example/',
+      title: 'Museimage profile',
+      description: 'A useful description',
+    };
+    const runningBatch = createBatch({
+      id: 'batch-muse',
+      targetText: 'https://blog.example/post',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://museimage.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline',
+      },
+      now: 1,
+    });
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        const typed = message as { type: string };
+        if (typed.type === 'batch.preview') {
+          return { ok: true, data: { type: 'batch.preview', data: profile } };
+        }
+        if (typed.type === 'batch.start') {
+          return {
+            ok: true,
+            data: { type: 'batch.start', data: runningBatch },
+          };
+        }
+        throw new Error('UNEXPECTED_MESSAGE');
+      }) as never);
+
+    await renderSidePanel();
+
+    const setupSelect = container.querySelector<HTMLSelectElement>(
+      '.workspace-panel select'
+    );
+    if (!setupSelect) throw new Error('SETUP_SELECT_NOT_FOUND');
+    await selectOption(setupSelect, 'muse');
+
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, 'https://blog.example/post');
+
+    await clickButton('prepareBatch');
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('Museimage profile');
+    });
+    await clickButton('confirmAndStartBatch');
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'batch.start', siteId: 'muse' })
+      );
+    });
+  });
+
+  it('labels a history entry with its archived site label', async () => {
+    const entry = {
+      id: 'hist-site',
+      settings: {
+        provider: 'deepseek' as const,
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+        siteId: 'seed',
+        siteLabel: 'Seed Audio',
+      },
+      createdAt: 1,
+      archivedAt: 2,
+      counts: { submitted: 1, failed: 1, total: 2 },
+      items: [
+        { url: 'https://blog.example/a', status: 'submitted', message: '' },
+        { url: 'https://blog.example/b', status: 'failed', message: 'x' },
+      ],
+    };
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [entry] });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('Seed Audio');
+  });
+});
+
+describe('site link plans', () => {
+  const DAY = 24 * 60 * 60 * 1_000;
+  const twoSiteSettings = {
+    provider: 'deepseek' as const,
+    sites: [
+      {
+        id: 'seed',
+        label: 'Seed Audio',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field' as const,
+      },
+      {
+        id: 'muse',
+        label: 'Museimage',
+        websiteUrl: 'https://muse.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+    ],
+    activeSiteId: 'seed',
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  function mockPlanResponse(
+    type: string,
+    data: unknown
+  ): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      if ((message as { type: string }).type !== type) {
+        throw new Error('UNEXPECTED_MESSAGE');
+      }
+      return { ok: true, data: { type, data } };
+    }) as never);
+  }
+
+  it('creates a plan for the selected site with the chosen chunk size', async () => {
+    await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: twoSiteSettings });
+    const sendMessage = mockPlanResponse('plan.create', {
+      siteId: 'seed',
+      chunkSize: 2,
+      chunks: [
+        {
+          id: 'c0',
+          urls: ['https://a.example/1', 'https://a.example/2'],
+          status: 'pending',
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    await renderSidePanel();
+
+    expect(findButton('planCreate')?.disabled).toBe(true);
+
+    const editor = container.querySelector<HTMLTextAreaElement>(
+      '.plan-target-editor'
+    );
+    if (!editor) throw new Error('PLAN_EDITOR_NOT_FOUND');
+    await enterTextareaValue(
+      editor,
+      'https://a.example/1\nhttps://a.example/2\nhttps://a.example/3'
+    );
+    const chunkInput = container.querySelector<HTMLInputElement>(
+      'input[type="number"]'
+    );
+    if (!chunkInput) throw new Error('CHUNK_INPUT_NOT_FOUND');
+    await enterInputValue(chunkInput, '2');
+
+    expect(findButton('planCreate')?.disabled).toBe(false);
+    await clickButton('planCreate');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'plan.create',
+        siteId: 'seed',
+        chunkSize: 2,
+        targetText: expect.stringContaining('https://a.example/1'),
+      })
+    );
+  });
+
+  it('shows a due banner and runs the next chunk', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            { id: 'c0', urls: ['https://a.example/1'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+    const running = createBatch({
+      id: 'plan-run',
+      targetText: 'https://a.example/1',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
+      now: 1,
+    });
+    const sendMessage = mockPlanResponse('plan.run-next', running);
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planDueBanner');
+    expect(container.textContent).toContain('Seed Audio');
+    await clickButton('planRunNext');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'plan.run-next', siteId: 'seed' })
+    );
+  });
+
+  it('shows the done-today line when today’s chunk already ran', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            {
+              id: 'c0',
+              urls: ['https://a.example/1'],
+              status: 'done',
+              batchId: 'b',
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+            },
+            { id: 'c1', urls: ['https://a.example/2'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planDoneToday');
+    expect(container.textContent).not.toContain('planDueBanner');
+  });
+
+  it('lists a plan with progress and a peek, and deletes it', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            {
+              id: 'c0',
+              urls: ['https://a.example/1'],
+              status: 'done',
+              batchId: 'b',
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+            },
+            { id: 'c1', urls: ['https://a.example/2'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+    const sendMessage = mockPlanResponse('plan.delete', null);
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planProgress');
+    expect(container.textContent).toContain('a.example/2');
+    await clickButton('planDelete');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'plan.delete', siteId: 'seed' })
+    );
+  });
+
+  it('hides the due banner while a batch is running', async () => {
+    const running = createBatch({
+      id: 'active',
+      targetText: 'https://blog.example/live',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
+      now: 1,
+    });
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [BATCH_STORAGE_KEY]: running,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            { id: 'c0', urls: ['https://a.example/1'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).not.toContain('planDueBanner');
   });
 });
