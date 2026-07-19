@@ -89,6 +89,8 @@ export const MESSAGE_KEYS = [
   'batchStoppedTitle',
   'batchSummary',
   'startNewBatch',
+  'batchRetryItem',
+  'batchRetryFailed',
   'batchStatusQueued',
   'batchStatusOpening',
   'batchStatusAnalyzing',

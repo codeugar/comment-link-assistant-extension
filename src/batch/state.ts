@@ -29,6 +29,25 @@ const completionStatuses = [
   'failed',
 ] as const satisfies readonly BatchItemStatus[];
 
+export const RETRYABLE_ITEM_STATUSES = [
+  'failed',
+  'no_form',
+  'validation_error',
+  'stopped',
+] as const satisfies readonly BatchItemStatus[];
+
+const retryableItemStatuses = new Set<BatchItemStatus>(RETRYABLE_ITEM_STATUSES);
+
+// Terminal states the cursor skips over: an item already settled here (either
+// this run or a prior one that a retry left behind) never runs again.
+const terminalItemStatuses = new Set<BatchItemStatus>([
+  'submitted',
+  'no_form',
+  'validation_error',
+  'failed',
+  'stopped',
+]);
+
 type PauseStatus = (typeof pauseStatuses)[number];
 type CompletionStatus = (typeof completionStatuses)[number];
 
@@ -220,7 +239,18 @@ export function completeCurrentItem(
   requireRunning(batch);
   const now = timestamp(at);
   const item = currentItem(batch);
-  const nextIndex = batch.currentIndex + 1;
+
+  // Advance past items that are already terminal. In the normal sequential
+  // flow every later item is still 'queued', so this stops immediately at
+  // currentIndex + 1 and behaves exactly as before. After a retry has rewound
+  // the cursor, earlier-processed items remain terminal and are skipped so the
+  // batch only completes once every item has settled.
+  let nextIndex = batch.currentIndex + 1;
+  while (nextIndex < batch.items.length) {
+    const candidate = batch.items[nextIndex];
+    if (!candidate || !terminalItemStatuses.has(candidate.status)) break;
+    nextIndex += 1;
+  }
 
   return legalSnapshot({
     ...batch,
@@ -237,6 +267,63 @@ export function completeCurrentItem(
     currentIndex: nextIndex,
     updatedAt: now,
   });
+}
+
+// Rebuilds a terminal batch into a fresh run of the selected items. Their
+// prior analysis/comment/prepared payloads are cleared so each retried target
+// is regenerated from scratch; untouched items keep their recorded outcome.
+export function retryItems(
+  batch: BatchSnapshot,
+  itemIds: string[],
+  at?: number
+): BatchSnapshot {
+  if (batch.status !== 'completed' && batch.status !== 'stopped') {
+    throw new Error('BATCH_RETRY_UNAVAILABLE');
+  }
+  const targetIds = new Set(itemIds);
+  if (targetIds.size === 0) throw new Error('BATCH_ITEM_NOT_RETRYABLE');
+
+  const retryIndices: number[] = [];
+  batch.items.forEach((item, index) => {
+    if (targetIds.has(item.id)) retryIndices.push(index);
+  });
+  const everyTargetRetryable =
+    retryIndices.length === targetIds.size &&
+    retryIndices.every((index) => {
+      const item = batch.items[index];
+      return Boolean(item && retryableItemStatuses.has(item.status));
+    });
+  if (!everyTargetRetryable) throw new Error('BATCH_ITEM_NOT_RETRYABLE');
+
+  const now = timestamp(at);
+  const retrySet = new Set(retryIndices);
+  const items = batch.items.map((item, index) =>
+    retrySet.has(index)
+      ? {
+          ...item,
+          status: 'queued' as const,
+          analysis: null,
+          comment: null,
+          commentFingerprint: null,
+          prepared: null,
+          message: '',
+          events: appendStatusEvent(item, 'queued', 'BATCH_ITEM_RETRY', now),
+          updatedAt: now,
+        }
+      : item
+  );
+
+  const next: BatchSnapshot = {
+    ...batch,
+    status: 'running',
+    items,
+    currentIndex: Math.min(...retryIndices),
+    updatedAt: now,
+  };
+  // The worker tab from the finished run was closed at terminal; force a fresh
+  // one rather than trusting a stale id.
+  Reflect.deleteProperty(next, 'workerTabId');
+  return legalSnapshot(next);
 }
 
 export function resumeBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {

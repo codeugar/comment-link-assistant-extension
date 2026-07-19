@@ -294,12 +294,16 @@ function hasAttemptedCanonicalTarget(
   resolvedUrl: string
 ): boolean {
   const key = canonicalTargetKey(resolvedUrl);
-  return batch.items
-    .slice(0, batch.currentIndex)
-    .some(
-      (item) =>
-        item.status === 'submitted' && canonicalTargetKey(item.url) === key
-    );
+  const currentId = batch.items[batch.currentIndex]?.id;
+  // Scan every other item, not just those before the cursor: a retry rewinds
+  // currentIndex, so a duplicate the batch already submitted can now sit at a
+  // later index than the item being processed.
+  return batch.items.some(
+    (item) =>
+      item.id !== currentId &&
+      item.status === 'submitted' &&
+      canonicalTargetKey(item.url) === key
+  );
 }
 
 async function advanceResolvedPage(
