@@ -1,4 +1,7 @@
 import { generateComment } from '@/api/client';
+import { runHistoryRetry } from '@/batch/history-retry';
+import { isDueToday, markChunkDone, splitIntoChunks } from '@/batch/plan';
+import { runPlanNext } from '@/batch/plan-runner';
 import { BATCH_RECOVERY_ALARM, armBatchRecoveryAlarm } from '@/batch/recovery';
 import { type BatchStepResult, runBatchUntilBlocked } from '@/batch/runner';
 import {
@@ -12,8 +15,8 @@ import {
   handleRemovedWorkerTabSafely,
   openCurrentTargetSafely,
 } from '@/batch/tab-coordinator';
-import type { BatchSnapshot } from '@/batch/types';
-import { parseTargetUrls } from '@/batch/urls';
+import type { BatchSettingsSnapshot, BatchSnapshot } from '@/batch/types';
+import { TargetUrlError, parseTargetUrls } from '@/batch/urls';
 import type {
   BackgroundResponse,
   PopupMessage,
@@ -31,7 +34,18 @@ import {
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
 import { configureSidePanel } from '@/runtime/side-panel';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
+import { archiveBatch, getBatchHistory } from '@/storage/batch-history';
 import {
+  type PlansMap,
+  type SitePlan,
+  deletePlan,
+  getPlans,
+  savePlan,
+  setPlans,
+} from '@/storage/plans';
+import {
+  buildBatchSettingsSnapshot,
+  getActiveSite,
   getProviderApiKeys,
   getSettings,
   restrictStorageToTrustedContexts,
@@ -43,6 +57,7 @@ import {
   requestBatchStop,
 } from '@/storage/stop-intent';
 import { releaseWorkerTab } from '@/storage/worker-tab-ownership';
+import type { WebsiteProfile } from '@/website/profile';
 import { loadWebsiteProfile } from '@/website/profile-cache';
 
 type SendResponse = (response: BackgroundResponse) => void;
@@ -79,6 +94,44 @@ async function updateBatchBadge(batch?: BatchSnapshot | null): Promise<void> {
   ]);
 }
 
+// Marks whichever plan chunk a finished batch was running as done. Cheap and
+// idempotent: no-op when there are no plans or none owns this batch id.
+async function settlePlanChunk(batchId: string): Promise<void> {
+  const plans = await getPlans();
+  const now = Date.now();
+  let changed = false;
+  const next: PlansMap = { ...plans };
+  for (const [siteId, plan] of Object.entries(plans)) {
+    const updated = markChunkDone(plan, batchId, now);
+    if (updated !== plan) {
+      next[siteId] = updated;
+      changed = true;
+    }
+  }
+  if (changed) await setPlans(next);
+}
+
+// Layers a due-plan indicator on top of the batch badge. An active batch's
+// progress badge always wins; when idle, a due plan shows '!' and otherwise the
+// batch badge (✓ / empty) is restored.
+async function updateDueBadge(
+  knownBatch?: BatchSnapshot | null
+): Promise<void> {
+  const batch = knownBatch === undefined ? await getBatch() : knownBatch;
+  if (batch?.status === 'running' || batch?.status === 'paused') return;
+  const plans = await getPlans();
+  const now = Date.now();
+  const due = Object.values(plans).some((plan) => isDueToday(plan, now));
+  if (due) {
+    await Promise.all([
+      chrome.action.setBadgeText({ text: '!' }),
+      chrome.action.setBadgeBackgroundColor({ color: '#a66a09' }),
+    ]);
+    return;
+  }
+  await updateBatchBadge(batch);
+}
+
 function scheduleLocalWake(delayMs: number): void {
   if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
   localWakeTimer = self.setTimeout(() => {
@@ -88,8 +141,13 @@ function scheduleLocalWake(delayMs: number): void {
 }
 
 async function reconcileBatchWake(result: BatchStepResult): Promise<void> {
+  // #11 keeps the worker tab open at terminal — no closeTerminalBatchWorker.
   const batch = await getBatch();
+  if (batch?.status === 'completed' || batch?.status === 'stopped') {
+    await settlePlanChunk(batch.id);
+  }
   await updateBatchBadge(batch);
+  await updateDueBadge(batch);
   if (batch?.status !== 'running') {
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
     localWakeTimer = undefined;
@@ -136,19 +194,19 @@ async function prepareComment(): Promise<PopupMessageResult> {
     analyzeActivePage(),
   ]);
   const { analysis, tabId } = activePage;
-  if (!settings.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
+  const site = getActiveSite(settings);
+  if (!site.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
   if (analysis.form.readiness !== 'ready') {
     throw new Error(
       analysis.form.message || analysis.form.readiness.toUpperCase()
     );
   }
 
-  const websiteProfile = await loadWebsiteProfile(settings.websiteUrl);
+  const websiteProfile = await loadWebsiteProfile(site.websiteUrl);
   const effectiveLinkMode =
-    settings.linkMode === 'prefer-website-field' &&
-    !analysis.form.hasWebsiteField
+    site.linkMode === 'prefer-website-field' && !analysis.form.hasWebsiteField
       ? 'inline'
-      : settings.linkMode;
+      : site.linkMode;
   const comment = await generateComment(keys, {
     provider: settings.provider,
     websiteProfile,
@@ -175,11 +233,17 @@ async function prepareComment(): Promise<PopupMessageResult> {
   };
 }
 
-async function startBatch(
-  message: Extract<PopupMessage, { type: 'batch.start' }>
-): Promise<PopupMessageResult> {
-  const [settings, keys, existing] = await Promise.all([
-    getSettings(),
+// Shared start path for both the sidepanel-confirmed batch and history reruns.
+// When a reviewed profile is supplied (batch.start) it is used as-is; otherwise
+// the promoted site's profile is loaded through the 30-day cache (history rerun,
+// which has no sidepanel preview payload). All start guards live here so callers
+// never duplicate them.
+async function startBatchFromBackground(
+  targetText: string,
+  settings: BatchSettingsSnapshot,
+  websiteProfile?: WebsiteProfile
+): Promise<BatchSnapshot> {
+  const [keys, existing] = await Promise.all([
     getProviderApiKeys(),
     getBatch(),
   ]);
@@ -194,18 +258,35 @@ async function startBatch(
     throw new Error('BATCH_ALREADY_ACTIVE');
   }
 
-  const targets = parseTargetUrls(message.targetText);
+  const targets = parseTargetUrls(targetText);
   if (!(await hasBatchOriginPermissions([settings.websiteUrl, ...targets]))) {
     throw new Error('ORIGIN_PERMISSION_REQUIRED');
   }
 
-  let batch = createBatch({ targetText: message.targetText, settings });
-  batch = updateBatchProgress(batch, {
-    websiteProfile: message.websiteProfile,
-  });
+  const profile =
+    websiteProfile ?? (await loadWebsiteProfile(settings.websiteUrl));
+  let batch = createBatch({ targetText, settings });
+  batch = updateBatchProgress(batch, { websiteProfile: profile });
   await setBatch(batch);
   requestBatchWake();
-  return { type: 'batch.start', data: batch };
+  return batch;
+}
+
+async function startBatch(
+  message: Extract<PopupMessage, { type: 'batch.start' }>
+): Promise<PopupMessageResult> {
+  const settings = await getSettings();
+  const siteId = message.siteId ?? settings.activeSiteId;
+  const site =
+    settings.sites.find((candidate) => candidate.id === siteId) ??
+    getActiveSite(settings);
+  const snapshot = buildBatchSettingsSnapshot(settings.provider, site);
+  const data = await startBatchFromBackground(
+    message.targetText,
+    snapshot,
+    message.websiteProfile
+  );
+  return { type: 'batch.start', data };
 }
 
 async function continueBatch(): Promise<PopupMessageResult> {
@@ -231,10 +312,13 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
     }
     const next = stopBatch(batch);
     if (next !== batch) await setBatch(next);
+    // #11 keeps the worker tab open at terminal — no closeTerminalBatchWorker.
+    await settlePlanChunk(next.id);
     await clearBatchStopIntent();
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
     localWakeTimer = undefined;
     await updateBatchBadge(next);
+    await updateDueBadge(next);
     await chrome.alarms.clear(BATCH_RECOVERY_ALARM);
     return { type: 'batch.stop', data: next };
   } finally {
@@ -262,9 +346,93 @@ async function resetBatch(): Promise<PopupMessageResult> {
   if (batch?.status === 'running' || batch?.status === 'paused') {
     throw new Error('BATCH_ALREADY_ACTIVE');
   }
+  // Preserve the finished batch in history before discarding it, so a reset is
+  // no longer destructive.
+  if (batch) {
+    await settlePlanChunk(batch.id);
+    await archiveBatch(batch);
+  }
   await clearBatch();
   await updateBatchBadge(null);
+  await updateDueBadge(null);
   return { type: 'batch.reset', data: null };
+}
+
+async function createPlan(
+  message: Extract<PopupMessage, { type: 'plan.create' }>
+): Promise<PopupMessageResult> {
+  let urls: string[];
+  try {
+    urls = parseTargetUrls(message.targetText);
+  } catch (error) {
+    if (error instanceof TargetUrlError && error.lineNumber === 0) {
+      throw new Error('PLAN_NO_URLS');
+    }
+    throw error;
+  }
+  const now = Date.now();
+  const plan: SitePlan = {
+    siteId: message.siteId,
+    chunkSize: message.chunkSize,
+    chunks: splitIntoChunks(urls, message.chunkSize).map((group, index) => ({
+      id: `${message.siteId}:${now}:${index}`,
+      urls: group,
+      status: 'pending',
+    })),
+    createdAt: now,
+    updatedAt: now,
+  };
+  await savePlan(plan);
+  await updateDueBadge();
+  return { type: 'plan.create', data: plan };
+}
+
+async function removePlan(
+  message: Extract<PopupMessage, { type: 'plan.delete' }>
+): Promise<PopupMessageResult> {
+  await deletePlan(message.siteId);
+  await updateDueBadge();
+  return { type: 'plan.delete', data: null };
+}
+
+async function runPlanChunk(
+  message: Extract<PopupMessage, { type: 'plan.run-next' }>
+): Promise<PopupMessageResult> {
+  const data = await runPlanNext(
+    {
+      getPlans,
+      getSettings,
+      getBatch,
+      archiveBatch,
+      clearBatch,
+      savePlan,
+      onArchive: (snapshot) => settlePlanChunk(snapshot.id),
+      startBatch: (targetText, settings) =>
+        startBatchFromBackground(targetText, settings),
+      buildSnapshot: buildBatchSettingsSnapshot,
+      now: Date.now,
+    },
+    message.siteId
+  );
+  return { type: 'plan.run-next', data };
+}
+
+async function retryFromHistory(
+  message: Extract<PopupMessage, { type: 'batch.retry-from-history' }>
+): Promise<PopupMessageResult> {
+  const data = await runHistoryRetry(
+    {
+      getBatchHistory,
+      getBatch,
+      archiveBatch,
+      clearBatch,
+      startBatch: (targetText, settings) =>
+        startBatchFromBackground(targetText, settings),
+    },
+    message.historyId,
+    message.urls
+  );
+  return { type: 'batch.retry-from-history', data };
 }
 
 async function openCurrentBatchTarget(): Promise<PopupMessageResult> {
@@ -306,17 +474,23 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   if (message.type === 'batch.stop') return stopCurrentBatch();
   if (message.type === 'batch.reset') return resetBatch();
   if (message.type === 'batch.retry-items') return retryBatchItems(message);
+  if (message.type === 'batch.retry-from-history') {
+    return retryFromHistory(message);
+  }
+  if (message.type === 'plan.create') return createPlan(message);
+  if (message.type === 'plan.delete') return removePlan(message);
+  if (message.type === 'plan.run-next') return runPlanChunk(message);
   if (message.type === 'batch.open-current') {
     return openCurrentBatchTarget();
   }
 
-  const settings = await getSettings();
+  const site = getActiveSite(await getSettings());
   const result = await submitCurrentPage(
     {
       comment: message.comment,
-      displayName: settings.displayName || undefined,
-      email: settings.email || undefined,
-      websiteUrl: message.target.fillWebsiteField ? settings.websiteUrl : '',
+      displayName: site.displayName || undefined,
+      email: site.email || undefined,
+      websiteUrl: message.target.fillWebsiteField ? site.websiteUrl : '',
     },
     message.target
   );
@@ -368,9 +542,10 @@ export default defineBackground({
     chrome.runtime.onStartup.addListener(requestBatchWake);
     chrome.runtime.onInstalled.addListener(requestBatchWake);
 
-    void storageReady.then(() => {
+    void storageReady.then(async () => {
       requestBatchWake();
-      return updateBatchBadge();
+      await updateBatchBadge();
+      await updateDueBadge();
     });
   },
 });

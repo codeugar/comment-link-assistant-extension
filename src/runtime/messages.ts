@@ -4,6 +4,7 @@ import type {
   PageSubmissionResult,
   PageSubmissionTarget,
 } from '@/page/types';
+import type { SitePlan } from '@/storage/plans';
 import type { WebsiteProfile } from '@/website/profile';
 
 export type PopupMessage =
@@ -14,12 +15,22 @@ export type PopupMessage =
       type: 'batch.start';
       targetText: string;
       websiteProfile: WebsiteProfile;
+      siteId?: string;
     }
   | { type: 'batch.continue' }
   | { type: 'batch.stop' }
   | { type: 'batch.reset' }
   | { type: 'batch.retry-items'; itemIds: string[] }
+  | { type: 'batch.retry-from-history'; historyId: string; urls?: string[] }
   | { type: 'batch.open-current' }
+  | {
+      type: 'plan.create';
+      siteId: string;
+      targetText: string;
+      chunkSize: number;
+    }
+  | { type: 'plan.delete'; siteId: string }
+  | { type: 'plan.run-next'; siteId: string }
   | {
       type: 'comment.submit';
       comment: string;
@@ -45,9 +56,13 @@ export type PopupMessageResult =
         | 'batch.stop'
         | 'batch.reset'
         | 'batch.retry-items'
-        | 'batch.open-current';
+        | 'batch.retry-from-history'
+        | 'batch.open-current'
+        | 'plan.run-next';
       data: BatchSnapshot | null;
-    };
+    }
+  | { type: 'plan.create'; data: SitePlan }
+  | { type: 'plan.delete'; data: null };
 
 export type BackgroundResponse =
   | { ok: true; data: PopupMessageResult }
