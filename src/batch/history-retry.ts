@@ -2,6 +2,10 @@ import {
   type BatchHistoryEntry,
   isFailedHistoryStatus,
 } from '@/storage/batch-history';
+import {
+  type IdleArchiveDependencies,
+  ensureIdleAndArchive,
+} from './batch-lifecycle';
 import type { BatchSettingsSnapshot, BatchSnapshot } from './types';
 
 export interface HistoryRetryPlan {
@@ -36,11 +40,8 @@ export function planHistoryRetry(
   return { settings: entry.settings, urls: targetUrls };
 }
 
-export interface HistoryRetryDependencies {
+export interface HistoryRetryDependencies extends IdleArchiveDependencies {
   getBatchHistory(): Promise<BatchHistoryEntry[]>;
-  getBatch(): Promise<BatchSnapshot | null>;
-  archiveBatch(snapshot: BatchSnapshot): Promise<void>;
-  clearBatch(): Promise<void>;
   startBatch(
     targetText: string,
     settings: BatchSettingsSnapshot
@@ -54,18 +55,6 @@ export async function runHistoryRetry(
 ): Promise<BatchSnapshot> {
   const history = await dependencies.getBatchHistory();
   const plan = planHistoryRetry(history, historyId, urls);
-
-  const current = await dependencies.getBatch();
-  if (current?.status === 'running' || current?.status === 'paused') {
-    throw new Error('BATCH_ALREADY_ACTIVE');
-  }
-  // A finished current batch is moved to history and cleared before the new run
-  // takes its place. If the start below throws, the terminal batch is already
-  // preserved in history rather than silently overwritten.
-  if (current) {
-    await dependencies.archiveBatch(current);
-    await dependencies.clearBatch();
-  }
-
+  await ensureIdleAndArchive(dependencies);
   return dependencies.startBatch(plan.urls.join('\n'), plan.settings);
 }

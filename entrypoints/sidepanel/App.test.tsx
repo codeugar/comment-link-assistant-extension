@@ -5,6 +5,7 @@ import {
 } from '@/batch/state';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import { HISTORY_STORAGE_KEY } from '@/storage/batch-history';
+import { PLANS_STORAGE_KEY } from '@/storage/plans';
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
@@ -860,5 +861,238 @@ describe('multi-site profiles', () => {
     await renderSidePanel();
 
     expect(container.textContent).toContain('Seed Audio');
+  });
+});
+
+describe('site link plans', () => {
+  const DAY = 24 * 60 * 60 * 1_000;
+  const twoSiteSettings = {
+    provider: 'deepseek' as const,
+    sites: [
+      {
+        id: 'seed',
+        label: 'Seed Audio',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field' as const,
+      },
+      {
+        id: 'muse',
+        label: 'Museimage',
+        websiteUrl: 'https://muse.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+    ],
+    activeSiteId: 'seed',
+  };
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  }
+
+  function mockPlanResponse(
+    type: string,
+    data: unknown
+  ): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      if ((message as { type: string }).type !== type) {
+        throw new Error('UNEXPECTED_MESSAGE');
+      }
+      return { ok: true, data: { type, data } };
+    }) as never);
+  }
+
+  it('creates a plan for the selected site with the chosen chunk size', async () => {
+    await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: twoSiteSettings });
+    const sendMessage = mockPlanResponse('plan.create', {
+      siteId: 'seed',
+      chunkSize: 2,
+      chunks: [
+        {
+          id: 'c0',
+          urls: ['https://a.example/1', 'https://a.example/2'],
+          status: 'pending',
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    await renderSidePanel();
+
+    expect(findButton('planCreate')?.disabled).toBe(true);
+
+    const editor = container.querySelector<HTMLTextAreaElement>(
+      '.plan-target-editor'
+    );
+    if (!editor) throw new Error('PLAN_EDITOR_NOT_FOUND');
+    await enterTextareaValue(
+      editor,
+      'https://a.example/1\nhttps://a.example/2\nhttps://a.example/3'
+    );
+    const chunkInput = container.querySelector<HTMLInputElement>(
+      'input[type="number"]'
+    );
+    if (!chunkInput) throw new Error('CHUNK_INPUT_NOT_FOUND');
+    await enterInputValue(chunkInput, '2');
+
+    expect(findButton('planCreate')?.disabled).toBe(false);
+    await clickButton('planCreate');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'plan.create',
+        siteId: 'seed',
+        chunkSize: 2,
+        targetText: expect.stringContaining('https://a.example/1'),
+      })
+    );
+  });
+
+  it('shows a due banner and runs the next chunk', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            { id: 'c0', urls: ['https://a.example/1'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+    const running = createBatch({
+      id: 'plan-run',
+      targetText: 'https://a.example/1',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
+      now: 1,
+    });
+    const sendMessage = mockPlanResponse('plan.run-next', running);
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planDueBanner');
+    expect(container.textContent).toContain('Seed Audio');
+    await clickButton('planRunNext');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'plan.run-next', siteId: 'seed' })
+    );
+  });
+
+  it('shows the done-today line when today’s chunk already ran', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            {
+              id: 'c0',
+              urls: ['https://a.example/1'],
+              status: 'done',
+              batchId: 'b',
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+            },
+            { id: 'c1', urls: ['https://a.example/2'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planDoneToday');
+    expect(container.textContent).not.toContain('planDueBanner');
+  });
+
+  it('lists a plan with progress and a peek, and deletes it', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            {
+              id: 'c0',
+              urls: ['https://a.example/1'],
+              status: 'done',
+              batchId: 'b',
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+            },
+            { id: 'c1', urls: ['https://a.example/2'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+    const sendMessage = mockPlanResponse('plan.delete', null);
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain('planProgress');
+    expect(container.textContent).toContain('a.example/2');
+    await clickButton('planDelete');
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'plan.delete', siteId: 'seed' })
+    );
+  });
+
+  it('hides the due banner while a batch is running', async () => {
+    const running = createBatch({
+      id: 'active',
+      targetText: 'https://blog.example/live',
+      settings: {
+        provider: 'deepseek',
+        websiteUrl: 'https://seedaudio.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
+      now: 1,
+    });
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
+      [BATCH_STORAGE_KEY]: running,
+      [PLANS_STORAGE_KEY]: {
+        seed: {
+          siteId: 'seed',
+          chunkSize: 1,
+          chunks: [
+            { id: 'c0', urls: ['https://a.example/1'], status: 'pending' },
+          ],
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).not.toContain('planDueBanner');
   });
 });

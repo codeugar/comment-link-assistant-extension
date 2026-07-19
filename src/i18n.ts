@@ -145,6 +145,17 @@ export const MESSAGE_KEYS = [
   'activityWaitingResponse',
   'activityVerifyingPage',
   'activityReadingFeedback',
+  'planTitle',
+  'planCreate',
+  'planCreated',
+  'planChunkSize',
+  'planPreviewSummary',
+  'planDueBanner',
+  'planRunNext',
+  'planDoneToday',
+  'planProgress',
+  'planDelete',
+  'planEmpty',
 ] as const;
 
 export type MessageKey = (typeof MESSAGE_KEYS)[number];

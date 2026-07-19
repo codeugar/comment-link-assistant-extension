@@ -1000,3 +1000,112 @@ textarea:focus {
 .site-manager-controls .text-button {
   flex: 0 0 auto;
 }
+
+.plan-due-banners {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.plan-due-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--yellow);
+  border-left: 3px solid var(--yellow);
+  background: rgba(166, 106, 9, 0.08);
+  font-size: 12px;
+}
+
+.plan-due-banner p {
+  margin: 0;
+}
+
+.plan-done-today {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.plan-section > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.plan-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-section > summary h3 {
+  display: inline;
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 14px;
+}
+
+.plan-create {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.plan-target-editor {
+  resize: vertical;
+}
+
+.plan-preview {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.plan-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-entry {
+  border: 1px solid rgba(31, 33, 30, 0.13);
+  border-left: 3px solid var(--line);
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.plan-entry-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-entry-head small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.plan-next-peek {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.plan-next-peek li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-empty {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
