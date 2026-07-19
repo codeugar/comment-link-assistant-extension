@@ -14,14 +14,12 @@ import {
 } from '@/batch/tab-coordinator';
 import type { BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
-import { closeTerminalBatchWorker } from '@/batch/worker-cleanup';
 import type {
   BackgroundResponse,
   PopupMessage,
   PopupMessageResult,
 } from '@/runtime/messages';
 import {
-  closeOwnedWorkerTab,
   createOwnedWorkerTab,
   updateOwnedWorkerTab,
 } from '@/runtime/owned-worker-tab';
@@ -90,14 +88,7 @@ function scheduleLocalWake(delayMs: number): void {
 }
 
 async function reconcileBatchWake(result: BatchStepResult): Promise<void> {
-  let batch = await getBatch();
-  if (batch) {
-    batch = await closeTerminalBatchWorker(batch, {
-      closeWorkerTab: closeOwnedWorkerTab,
-      setBatch,
-      now: Date.now,
-    });
-  }
+  const batch = await getBatch();
   await updateBatchBadge(batch);
   if (batch?.status !== 'running') {
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
@@ -238,13 +229,8 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
       await clearBatchStopIntent();
       return { type: 'batch.stop', data: null };
     }
-    let next = stopBatch(batch);
+    const next = stopBatch(batch);
     if (next !== batch) await setBatch(next);
-    next = await closeTerminalBatchWorker(next, {
-      closeWorkerTab: closeOwnedWorkerTab,
-      setBatch,
-      now: Date.now,
-    });
     await clearBatchStopIntent();
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
     localWakeTimer = undefined;

@@ -53,31 +53,6 @@ export async function getOwnedWorkerTab(
   return tab;
 }
 
-export async function closeOwnedWorkerTab(
-  batchId: string,
-  tabId: number
-): Promise<boolean> {
-  const tabExists = async (): Promise<boolean | null> => {
-    try {
-      const tabs = await chrome.tabs.query({});
-      return tabs.some((tab) => tab.id === tabId);
-    } catch {
-      return null;
-    }
-  };
-
-  if (!(await ownsWorkerTab(batchId, tabId))) {
-    return (await tabExists()) === false;
-  }
-  try {
-    await chrome.tabs.remove(tabId);
-  } catch {
-    if ((await tabExists()) !== false) return false;
-  }
-  await releaseWorkerTab(tabId);
-  return true;
-}
-
 export async function updateOwnedWorkerTab(
   batchId: string,
   tabId: number,

@@ -1006,6 +1006,7 @@ describe('batch runner', () => {
     expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
     expect(context.read()).toMatchObject({
       status: 'completed',
+      workerTabId: 7,
       items: [{ status: 'submitted', message: 'COMMENT_SUBMITTED' }],
     });
   });
