@@ -304,10 +304,7 @@ function buildPrompt(input: GenerateCommentInput): {
   system: string;
   user: string;
 } {
-  const linkRule =
-    input.linkMode === 'prefer-website-field'
-      ? 'The form has a dedicated website field, so do not include any URL in the comment.'
-      : `Include the relevant website URL ${input.websiteProfile.url} naturally and exactly once. Do not include any other URL.`;
+  const linkRule = `Include the relevant website URL ${input.websiteProfile.url} naturally and exactly once in the comment body. Do not include any other URL.`;
   return {
     system: [
       'Write one genuine, context-specific public comment for a blog or forum.',
@@ -345,22 +342,14 @@ function parseComment(
   }
   const parsed = commentSchema.safeParse(json);
   if (!parsed.success) throw new Error('COMMENT_PROVIDER_PAYLOAD_INVALID');
-  const comment = addMissingInlineUrl(
-    parsed.data.comment,
-    linkMode,
-    websiteUrl
-  );
+  const comment = addMissingInlineUrl(parsed.data.comment, websiteUrl);
   validatePlainText(comment);
-  validateLinkPolicy(comment, linkMode, websiteUrl);
+  validateLinkPolicy(comment, websiteUrl);
   return comment;
 }
 
-function addMissingInlineUrl(
-  comment: string,
-  linkMode: LinkMode,
-  websiteUrl: string
-): string {
-  if (linkMode !== 'inline' || (linkify.match(comment) ?? []).length > 0) {
+function addMissingInlineUrl(comment: string, websiteUrl: string): string {
+  if ((linkify.match(comment) ?? []).length > 0) {
     return comment;
   }
   const repaired = `${comment} ${websiteUrl}`;
@@ -403,22 +392,8 @@ function hasDisallowedUriScheme(comment: string): boolean {
   return false;
 }
 
-function validateLinkPolicy(
-  comment: string,
-  linkMode: LinkMode,
-  websiteUrl: string
-): void {
+function validateLinkPolicy(comment: string, websiteUrl: string): void {
   const urls = (linkify.match(comment) ?? []).map((match) => match.url);
-  if (linkMode === 'prefer-website-field') {
-    const websiteHost = new URL(websiteUrl).hostname.replace(/^www\./, '');
-    if (
-      urls.length > 0 ||
-      comment.toLowerCase().includes(websiteHost.toLowerCase())
-    ) {
-      throw new Error('COMMENT_URL_NOT_ALLOWED');
-    }
-    return;
-  }
   if (urls.length !== 1 || normalizeUrl(urls[0]) !== normalizeUrl(websiteUrl)) {
     throw new Error('COMMENT_RELEVANT_URL_REQUIRED');
   }
