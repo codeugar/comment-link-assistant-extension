@@ -42,7 +42,7 @@ describe('direct comment generation', () => {
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
     ).resolves.toBe(
-      'A useful comment. <a href="https://product.example">Product</a>'
+      'A useful comment. <a href="https://product.example\n">Product</a>'
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -124,7 +124,7 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(67_000);
 
     await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example">Product</a>'
+      'A useful comment. <a href="https://product.example\n">Product</a>'
     );
   });
 
@@ -161,7 +161,7 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(250); // retry backoff before attempt 2
 
     await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example">Product</a>'
+      'A useful comment. <a href="https://product.example\n">Product</a>'
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -236,7 +236,7 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(30_100);
 
     await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example">Product</a>'
+      'A useful comment. <a href="https://product.example\n">Product</a>'
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -271,7 +271,7 @@ describe('direct comment generation', () => {
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
     ).resolves.toBe(
-      'Useful point. See <a href="https://product.example">Product</a>'
+      'Useful point. See <a href="https://product.example\n">Product</a>'
     );
   });
 
@@ -328,7 +328,7 @@ describe('direct comment generation', () => {
         { ...input, linkMode: 'inline' }
       )
     ).resolves.toBe(
-      'A specific, useful observation. <a href="https://product.example">Product</a>'
+      'A specific, useful observation. <a href="https://product.example\n">Product</a>'
     );
     expect(fetchMock).toHaveBeenCalledOnce();
   });
@@ -362,7 +362,7 @@ describe('direct comment generation', () => {
         { ...input, linkMode: 'inline' }
       )
     ).resolves.toBe(
-      'See <a href="https://product.example">Explore Product</a> for details.'
+      'See <a href="https://product.example\n">Explore Product</a> for details.'
     );
   });
 
@@ -385,7 +385,7 @@ describe('direct comment generation', () => {
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
     ).resolves.toBe(
-      'A useful comment. <a href="https://product.example">Product</a>'
+      'A useful comment. <a href="https://product.example\n">Product</a>'
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -413,7 +413,7 @@ describe('direct comment generation', () => {
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
     ).resolves.toBe(
-      'One detail stood out: the example. <a href="https://product.example">Product</a>'
+      'One detail stood out: the example. <a href="https://product.example\n">Product</a>'
     );
   });
 });

@@ -970,9 +970,6 @@ async function advanceGeneration(
     dependencies.now()
   );
   await dependencies.setBatch(requested);
-  // Keep the promoted link in the generated comment even when the form also
-  // exposes a Website field.
-  const effectiveLinkMode = 'inline';
   try {
     const comment = await dependencies.generateComment(keys, {
       provider: requested.settings.provider,
@@ -980,7 +977,7 @@ async function advanceGeneration(
         BatchSnapshot['websiteProfile']
       >,
       targetPage: item.analysis.page,
-      linkMode: effectiveLinkMode,
+      linkMode: requested.settings.linkMode,
     });
     return saveGeneratedComment(requested, comment, dependencies);
   } catch (error) {

@@ -9,6 +9,7 @@ import type {
   PreparedPageSubmission,
   TargetPageContext,
 } from './types';
+import { attachLinkFollow, extractPromotedUrl } from './link-follow';
 import { isLocallyVisible, isVisible } from './visibility';
 
 const EDITOR_SELECTOR = [
@@ -1540,19 +1541,22 @@ function hasWordPressModerationReceipt(document: Document): boolean {
 export function verifySubmissionDocument(
   document: Document,
   fingerprint: string,
-  baseline?: PageSubmissionBaseline
+  baseline?: PageSubmissionBaseline,
+  targetUrl?: string
 ): PageSubmissionResult {
+  const finalize = (result: PageSubmissionResult): PageSubmissionResult =>
+    attachLinkFollow(result, document, targetUrl, fingerprint);
   const form = buildFormSummary(document);
   if (
     form.readiness === 'login_required' ||
     form.readiness === 'captcha_required'
   ) {
-    return {
+    return finalize({
       status: form.readiness,
       message: form.message,
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
   const feedbackMessages = readNewPageFeedbackMessages(document, baseline);
   const feedback = feedbackMessages.join(' ');
@@ -1584,23 +1588,23 @@ export function verifySubmissionDocument(
     !successFeedback &&
     !renderedCommentAdded
   ) {
-    return {
+    return finalize({
       status: 'validation_error',
       message: 'COMMENT_DUPLICATE',
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
   if (
     errorFeedback &&
     (pendingFeedback || successFeedback || renderedCommentAdded)
   ) {
-    return {
+    return finalize({
       status: 'submitted',
       message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
   // WordPress moderation receipt is authoritative for "held for moderation".
   if (
@@ -1609,20 +1613,20 @@ export function verifySubmissionDocument(
       pendingFeedback ||
       (successFeedback && !renderedCommentAdded))
   ) {
-    return {
+    return finalize({
       status: 'submitted',
       message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
   if (!errorFeedback && renderedCommentAdded) {
-    return {
+    return finalize({
       status: 'submitted',
       message: 'COMMENT_SUBMITTED',
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
   if (
     errorFeedback &&
@@ -1630,19 +1634,19 @@ export function verifySubmissionDocument(
     !successFeedback &&
     !renderedCommentAdded
   ) {
-    return {
+    return finalize({
       status: 'validation_error',
       message: feedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
       fingerprint,
       clickOccurred: true,
-    };
+    });
   }
-  return {
+  return finalize({
     status: 'submitted',
     message: 'COMMENT_SUBMITTED',
     fingerprint,
     clickOccurred: true,
-  };
+  });
 }
 
 function waitForPageResponse(
@@ -1985,7 +1989,8 @@ export async function clickPreparedSubmissionDocument(
     return verifySubmissionDocument(
       document,
       prepared.fingerprint,
-      prepared.baseline
+      prepared.baseline,
+      extractPromotedUrl(prepared.comment) ?? undefined
     );
   } finally {
     releaseDomSubmission(document, prepared.domToken);
