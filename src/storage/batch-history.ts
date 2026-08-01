@@ -92,10 +92,16 @@ function toHistoryEntry(
   };
 }
 
+export function parseStoredBatchHistory(
+  value: unknown
+): BatchHistoryEntry[] | null {
+  const parsed = historySchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 export async function getBatchHistory(): Promise<BatchHistoryEntry[]> {
   const stored = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
-  const parsed = historySchema.safeParse(stored[HISTORY_STORAGE_KEY]);
-  return parsed.success ? parsed.data : [];
+  return parseStoredBatchHistory(stored[HISTORY_STORAGE_KEY]) ?? [];
 }
 
 export async function archiveBatch(

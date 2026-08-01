@@ -122,6 +122,12 @@
   "missingKieApiKey": {
     "message": "Add a KIE API key for the selected model."
   },
+  "openDashboard": {
+    "message": "Open dashboard"
+  },
+  "dashboardOpenFailed": {
+    "message": "The dashboard could not be opened"
+  },
   "openSettings": {
     "message": "Open settings"
   },
@@ -242,6 +248,9 @@
   "continueBatch": {
     "message": "Continue batch"
   },
+  "skipCurrentTarget": {
+    "message": "Skip target and continue"
+  },
   "stopBatch": {
     "message": "Stop batch"
   },
@@ -252,10 +261,16 @@
     "message": "Open current target"
   },
   "batchPausedLoginDescription": {
-    "message": "The batch is paused. Log in on the open target page, then continue."
+    "message": "The batch is paused. Log in on the open target page, then continue, or skip this target."
   },
   "batchPausedCaptchaDescription": {
-    "message": "The batch is paused. Complete the CAPTCHA on the open target page, then continue."
+    "message": "The batch is paused. Complete the CAPTCHA on the open target page, then continue, or skip this target."
+  },
+  "batchSkippedLoginDescription": {
+    "message": "This target was skipped because it requires login."
+  },
+  "batchSkippedCaptchaDescription": {
+    "message": "This target was skipped because it requires a CAPTCHA."
   },
   "batchCompletedTitle": {
     "message": "Batch completed"
@@ -343,6 +358,9 @@
   },
   "batchStatusFailed": {
     "message": "Failed"
+  },
+  "batchStatusFiltered": {
+    "message": "Filtered"
   },
   "batchStatusStopped": {
     "message": "Stopped"

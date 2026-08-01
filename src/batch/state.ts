@@ -27,6 +27,7 @@ const completionStatuses = [
   'no_form',
   'validation_error',
   'failed',
+  'filtered',
 ] as const satisfies readonly BatchItemStatus[];
 
 export const RETRYABLE_ITEM_STATUSES = [
@@ -45,6 +46,7 @@ const terminalItemStatuses = new Set<BatchItemStatus>([
   'no_form',
   'validation_error',
   'failed',
+  'filtered',
   'stopped',
 ]);
 
@@ -166,6 +168,50 @@ export function createBatch(input: CreateBatchInput): BatchSnapshot {
     currentIndex: 0,
     websiteProfile: null,
     createdAt: now,
+    updatedAt: now,
+  });
+}
+/**
+ * Applies persisted filters to still-queued items before a batch wakes. It is
+ * also used at initial creation so a fully filtered batch completes without
+ * requesting target-site permissions, opening tabs, or calling a provider.
+ */
+export function filterQueuedItems(
+  batch: BatchSnapshot,
+  filteredUrls: Iterable<string>,
+  message = 'FILTER_LIST_MATCHED',
+  at?: number
+): BatchSnapshot {
+  requireRunning(batch);
+  const urls = new Set(filteredUrls);
+  if (urls.size === 0) return batch;
+
+  const now = timestamp(at);
+  const items = batch.items.map((item) => {
+    if (item.status !== 'queued' || !urls.has(item.url)) return item;
+    return {
+      ...item,
+      status: 'filtered' as const,
+      analysis: null,
+      comment: null,
+      commentFingerprint: null,
+      prepared: null,
+      partialPageAllowed: false,
+      message: boundedMessage(message),
+      events: appendStatusEvent(item, 'filtered', message, now),
+      updatedAt: now,
+    };
+  });
+
+  const nextIndex = items.findIndex(
+    (item) => !terminalItemStatuses.has(item.status)
+  );
+
+  return legalSnapshot({
+    ...batch,
+    status: nextIndex === -1 ? 'completed' : 'running',
+    items,
+    currentIndex: nextIndex === -1 ? items.length : nextIndex,
     updatedAt: now,
   });
 }
@@ -364,6 +410,41 @@ export function resumeBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
   });
 }
 
+/**
+ * Settles a pre-submit manual gate without pretending it was filtered. This is
+ * intentionally unavailable after a click was dispatched: that path must
+ * resume verification so a potentially published comment is never lost or
+ * submitted again.
+ */
+export function skipCurrentManualGate(
+  batch: BatchSnapshot,
+  at?: number
+): BatchSnapshot {
+  if (batch.status !== 'paused') {
+    throw new Error('BATCH_SKIP_UNAVAILABLE');
+  }
+
+  const item = currentItem(batch);
+  if (
+    (item.status !== 'login_required' && item.status !== 'captcha_required') ||
+    item.prepared
+  ) {
+    throw new Error('BATCH_SKIP_UNAVAILABLE');
+  }
+
+  // completeCurrentItem deliberately operates only on a running batch. The
+  // transition is internal and immediately settles this exact paused item.
+  const running: BatchSnapshot = { ...batch, status: 'running' };
+  return completeCurrentItem(
+    running,
+    'failed',
+    item.status === 'login_required'
+      ? 'LOGIN_REQUIRED_SKIPPED'
+      : 'CAPTCHA_REQUIRED_SKIPPED',
+    at
+  );
+}
+
 const preservedStopStatuses = new Set<BatchItemStatus>([
   'click_dispatched',
   'verifying',
@@ -371,7 +452,16 @@ const preservedStopStatuses = new Set<BatchItemStatus>([
   'no_form',
   'validation_error',
   'failed',
+  'filtered',
   'stopped',
+]);
+
+const settledItemStatuses = new Set<BatchItemStatus>([
+  'submitted',
+  'no_form',
+  'validation_error',
+  'failed',
+  'filtered',
 ]);
 
 export function stopBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
@@ -391,6 +481,56 @@ export function stopBatch(batch: BatchSnapshot, at?: number): BatchSnapshot {
             updatedAt: now,
           }
     ),
+    updatedAt: now,
+  });
+}
+
+// Resumes every unresolved item from a manually stopped batch without
+// re-submitting a comment whose click was already dispatched. A stopped item
+// was never terminal; it is restarted from the queue. In contrast,
+// click_dispatched and verifying deliberately retain their state and prepared
+// submission payload so the runner can verify the original click instead of
+// clicking the form a second time.
+export function resumeStoppedBatch(
+  batch: BatchSnapshot,
+  at?: number
+): BatchSnapshot {
+  if (batch.status !== 'stopped') {
+    throw new Error('BATCH_RESUME_UNAVAILABLE');
+  }
+
+  const unresolvedIndices = batch.items.flatMap((item, index) =>
+    settledItemStatuses.has(item.status) ? [] : [index]
+  );
+  if (unresolvedIndices.length === 0) {
+    throw new Error('BATCH_NOT_RUNNABLE');
+  }
+
+  const now = timestamp(at);
+  const items = batch.items.map((item) => {
+    if (settledItemStatuses.has(item.status)) return item;
+    if (item.status === 'click_dispatched' || item.status === 'verifying') {
+      return item;
+    }
+    return {
+      ...item,
+      status: 'queued' as const,
+      analysis: null,
+      comment: null,
+      commentFingerprint: null,
+      prepared: null,
+      partialPageAllowed: false,
+      message: '',
+      events: appendStatusEvent(item, 'queued', 'BATCH_RESUME', now),
+      updatedAt: now,
+    };
+  });
+
+  return legalSnapshot({
+    ...batch,
+    status: 'running',
+    items,
+    currentIndex: Math.min(...unresolvedIndices),
     updatedAt: now,
   });
 }

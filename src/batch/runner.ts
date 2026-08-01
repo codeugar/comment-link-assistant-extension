@@ -21,6 +21,7 @@ import {
   verifyTabSubmission,
 } from '@/runtime/page-commands';
 import { getBatch, setBatch } from '@/storage/batch';
+import { isTargetFiltered } from '@/storage/filter-list';
 import { getProviderApiKeys } from '@/storage/settings';
 import type { ProviderApiKeys } from '@/types';
 import {
@@ -28,7 +29,7 @@ import {
   pauseCurrentItem,
   updateBatchProgress,
 } from './state';
-import type { BatchItem, BatchSnapshot } from './types';
+import type { BatchItem, BatchItemStatus, BatchSnapshot } from './types';
 
 const GENERATION_READY = 'COMMENT_GENERATION_READY';
 const GENERATION_REQUESTED = 'COMMENT_GENERATION_REQUESTED';
@@ -48,6 +49,14 @@ const VERIFY_RETRY_WINDOW_MS = 90_000;
 // we hand off to analysis on an on-target tab after this short settle instead of
 // dead-waiting the full TARGET_LOAD_GRACE_MS (which remains the hard cap).
 const ANALYZE_LOADING_SETTLE_MS = 750;
+
+const filterableItemStatuses = new Set<BatchItemStatus>([
+  'queued',
+  'opening',
+  'analyzing',
+  'generating',
+  'prepared',
+]);
 
 export interface WorkerTab {
   id: number;
@@ -91,6 +100,12 @@ export interface BatchRunnerDependencies {
     expectedUrl: string,
     batchId: string
   ): Promise<PageSubmissionResult>;
+  /**
+   * Checked immediately before a queued target is opened. Optional so callers
+   * with isolated runner dependencies remain backwards compatible; production
+   * uses the persisted filter list below.
+   */
+  isTargetFiltered?(url: string): Promise<boolean>;
   now(): number;
 }
 
@@ -146,6 +161,7 @@ const defaultDependencies: BatchRunnerDependencies = {
     await assertWorkerTabOwnership(batchId, tabId);
     return verifyTabSubmission(tabId, prepared, expectedUrl);
   },
+  isTargetFiltered,
   now: Date.now,
 };
 
@@ -374,6 +390,20 @@ async function saveFailure(
     batch,
     'failed',
     message,
+    dependencies.now()
+  );
+  await dependencies.setBatch(next);
+  return afterTerminal(next);
+}
+
+async function skipFilteredTarget(
+  batch: BatchSnapshot,
+  dependencies: BatchRunnerDependencies
+): Promise<BatchStepResult> {
+  const next = completeCurrentItem(
+    batch,
+    'filtered',
+    'FILTER_LIST_MATCHED',
     dependencies.now()
   );
   await dependencies.setBatch(next);
@@ -864,12 +894,9 @@ async function prepareGeneratedComment(
     comment: item.comment,
     displayName: batch.settings.displayName || undefined,
     email: batch.settings.email || undefined,
-    websiteUrl:
-      item.analysis.form.hasWebsiteField &&
-      (batch.settings.linkMode === 'prefer-website-field' ||
-        item.analysis.form.requiresWebsiteField)
-        ? batch.settings.websiteUrl
-        : '',
+    websiteUrl: item.analysis.form.hasWebsiteField
+      ? batch.settings.websiteUrl
+      : '',
   };
   const target: PageSubmissionExpectation = {
     url: item.analysis.page.url,
@@ -943,13 +970,9 @@ async function advanceGeneration(
     dependencies.now()
   );
   await dependencies.setBatch(requested);
-  const websiteFieldRequired = Boolean(item.analysis.form.requiresWebsiteField);
-  const effectiveLinkMode = websiteFieldRequired
+  const effectiveLinkMode = item.analysis.form.hasWebsiteField
     ? 'prefer-website-field'
-    : requested.settings.linkMode === 'prefer-website-field' &&
-        !item.analysis.form.hasWebsiteField
-      ? 'inline'
-      : requested.settings.linkMode;
+    : 'inline';
   try {
     const comment = await dependencies.generateComment(keys, {
       provider: requested.settings.provider,
@@ -1048,15 +1071,42 @@ async function dispatchPreparedComment(
   }
 }
 
+// A manual stop can preserve a post-click item so it is never submitted
+// twice. If its worker tab was closed in the meantime, reopen the target and
+// verify the existing attempt instead of retrying a command against a dead id.
+async function reopenVerificationTarget(
+  batch: BatchSnapshot,
+  dependencies: BatchRunnerDependencies
+): Promise<BatchStepResult> {
+  const next = updateBatchProgress(
+    batch,
+    {
+      workerTabId: null,
+      item: {
+        status: 'opening',
+        partialPageAllowed: false,
+        message: RESUME_VERIFICATION_REQUIRED,
+      },
+    },
+    dependencies.now()
+  );
+  await dependencies.setBatch(next);
+  return 'continue';
+}
+
 async function advanceDispatchedClick(
   batch: BatchSnapshot,
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
-  if (batch.workerTabId === undefined) {
+  if (!item.prepared) {
     return saveUnconfirmedSubmission(batch, dependencies);
   }
-  const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
+  const tab =
+    batch.workerTabId === undefined
+      ? null
+      : await dependencies.getWorkerTab(batch.workerTabId, batch.id);
+  if (!tab) return reopenVerificationTarget(batch, dependencies);
   if (
     tab?.status === 'loading' &&
     dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS
@@ -1119,16 +1169,20 @@ async function verifyDispatchedComment(
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
   const item = currentItem(batch);
-  if (batch.workerTabId === undefined || !item.prepared) {
+  if (!item.prepared) {
     return saveUnconfirmedSubmission(batch, dependencies);
   }
-  const tab = await dependencies.getWorkerTab(batch.workerTabId, batch.id);
+  const tab =
+    batch.workerTabId === undefined
+      ? null
+      : await dependencies.getWorkerTab(batch.workerTabId, batch.id);
+  if (!tab) return reopenVerificationTarget(batch, dependencies);
   if (tab?.status === 'loading' && item.message !== PARTIAL_PAGE_READY) {
     return 'wait';
   }
   try {
     const result = await dependencies.verifyTabSubmission(
-      batch.workerTabId,
+      tab.id,
       item.prepared,
       item.prepared.expected.url,
       batch.id
@@ -1157,7 +1211,19 @@ export async function advanceBatchStep(
   const batch = await dependencies.getBatch();
   if (!batch || batch.status !== 'running') return 'wait';
 
-  switch (currentItem(batch).status) {
+  const item = currentItem(batch);
+  // The list is checked before any submission click. That covers an item that
+  // was paused/stopped and resumed after a user added it to the filter list,
+  // while preserving click-dispatched/verifying items for idempotent result
+  // verification instead of changing a comment that may already be posted.
+  if (
+    filterableItemStatuses.has(item.status) &&
+    (await dependencies.isTargetFiltered?.(item.url))
+  ) {
+    return skipFilteredTarget(batch, dependencies);
+  }
+
+  switch (item.status) {
     case 'queued':
       return openWorkerTab(batch, dependencies);
     case 'opening':

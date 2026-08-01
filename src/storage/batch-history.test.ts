@@ -6,6 +6,7 @@ import {
   HISTORY_STORAGE_KEY,
   archiveBatch,
   getBatchHistory,
+  parseStoredBatchHistory,
 } from './batch-history';
 
 const settings = {
@@ -112,6 +113,10 @@ describe('batch history storage', () => {
       [HISTORY_STORAGE_KEY]: { not: 'an array' },
     });
     expect(await getBatchHistory()).toEqual([]);
+  });
+
+  it('exposes malformed raw history to the migration caller', () => {
+    expect(parseStoredBatchHistory({ not: 'an array' })).toBeNull();
   });
 
   it('preserves site provenance from a multi-site batch snapshot', async () => {

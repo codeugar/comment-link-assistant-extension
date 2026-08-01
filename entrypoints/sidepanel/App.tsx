@@ -12,6 +12,7 @@ import {
   getBatchHistory,
   isFailedHistoryStatus,
 } from '@/storage/batch-history';
+import { findMatchingFilterEntry, getFilterList } from '@/storage/filter-list';
 import { PLANS_STORAGE_KEY, type PlansMap, getPlans } from '@/storage/plans';
 import {
   DEFAULT_SETTINGS,
@@ -25,6 +26,7 @@ import {
 } from '@/storage/settings';
 import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
 import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
+import { ChartLineUp } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
 
 type BusyState =
@@ -33,6 +35,7 @@ type BusyState =
   | 'refreshing'
   | 'starting'
   | 'continuing'
+  | 'skipping'
   | 'stopping'
   | 'opening'
   | 'resetting'
@@ -96,6 +99,8 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusValidationError');
     case 'failed':
       return translate('batchStatusFailed');
+    case 'filtered':
+      return translate('batchStatusFiltered');
     case 'stopped':
       return translate('batchStatusStopped');
   }
@@ -129,16 +134,55 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'COMMENT_FORM_REVEAL_DISPATCHED') {
     return translate('commentFormRevealDispatched');
   }
+  if (message === 'LOGIN_REQUIRED_SKIPPED') {
+    return translate('batchSkippedLoginDescription');
+  }
+  if (message === 'CAPTCHA_REQUIRED_SKIPPED') {
+    return translate('batchSkippedCaptchaDescription');
+  }
   return null;
 }
 
-function batchItemDiagnostic(item: BatchItem): string {
-  return [
+type BatchDiagnosticItem = Pick<BatchItem, 'url' | 'status' | 'message'> & {
+  updatedAt?: number;
+};
+
+const failureDetailStatuses = new Set<BatchItemStatus>([
+  'failed',
+  'no_form',
+  'validation_error',
+  'login_required',
+  'captcha_required',
+]);
+
+function failureDetailFor(
+  item: Pick<BatchItem, 'status' | 'message'>
+): { message: string; friendly: string | null } | null {
+  if (!failureDetailStatuses.has(item.status)) return null;
+  const message = item.message.trim();
+  if (!message) return null;
+  return { message, friendly: batchItemMessageCopy(message) };
+}
+
+function batchItemDiagnostic(item: BatchDiagnosticItem): string {
+  const lines = [
     `URL: ${item.url}`,
     `Status: ${item.status}`,
     `Error: ${item.message}`,
-    `Updated: ${new Date(item.updatedAt).toISOString()}`,
-  ].join('\n');
+  ];
+  if (item.updatedAt !== undefined) {
+    lines.push(`Updated: ${new Date(item.updatedAt).toISOString()}`);
+  }
+  return lines.join('\n');
+}
+
+function friendlyRetryError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const code = raw.split(':', 1)[0] || 'UNKNOWN_ERROR';
+  // Retry failures originate in the batch state machine rather than comment
+  // submission. Keep the machine-readable code visible until locale-specific
+  // retry explanations are available.
+  return `${translate('batchRetryItem')}: ${code}`;
 }
 
 function pauseCopy(status?: BatchItemStatus): string {
@@ -226,8 +270,21 @@ function isTerminalItem(item: BatchItem): boolean {
     'no_form',
     'validation_error',
     'failed',
+    'filtered',
     'stopped',
   ].includes(item.status);
+}
+
+/**
+ * The background remains the source of truth and repeats this check at batch
+ * creation time. The sidepanel performs it first solely to avoid asking for
+ * permissions, a website profile, or provider credentials for links that will
+ * be skipped anyway.
+ */
+async function runnableTargetsFor(targetText: string): Promise<string[]> {
+  const targets = parseTargetUrls(targetText);
+  const filters = await getFilterList();
+  return targets.filter((target) => !findMatchingFilterEntry(target, filters));
 }
 
 export default function App() {
@@ -248,9 +305,6 @@ export default function App() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState<BatchHistoryEntry[]>([]);
   const [plans, setPlans] = useState<PlansMap>({});
-  const [planSiteId, setPlanSiteId] = useState('');
-  const [planTargetText, setPlanTargetText] = useState('');
-  const [planChunkSize, setPlanChunkSize] = useState(30);
   const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
     Set<string>
   >(() => new Set());
@@ -277,7 +331,6 @@ export default function App() {
         setBatch(storedBatch);
         setHistory(storedHistory);
         setPlans(storedPlans);
-        setPlanSiteId(storedSettings.activeSiteId);
         setLoaded(true);
       }
     );
@@ -316,16 +369,6 @@ export default function App() {
     }
   }, [targetText]);
 
-  const planUrlCount = useMemo(() => {
-    try {
-      return parseTargetUrls(planTargetText).length;
-    } catch {
-      return 0;
-    }
-  }, [planTargetText]);
-  const planBatchCount =
-    planChunkSize > 0 ? Math.ceil(planUrlCount / planChunkSize) : 0;
-
   const siteLabelById = (siteId: string): string => {
     const site = settings.sites.find((candidate) => candidate.id === siteId);
     if (!site) return siteId;
@@ -353,6 +396,11 @@ export default function App() {
     batch && batch.currentIndex < batch.items.length
       ? batch.items[batch.currentIndex]
       : null;
+  const canSkipCurrentManualGate =
+    currentItem !== null &&
+    currentItem.prepared === null &&
+    (currentItem.status === 'login_required' ||
+      currentItem.status === 'captcha_required');
   const currentPosition = batch
     ? batch.status === 'completed'
       ? batch.items.length
@@ -361,9 +409,13 @@ export default function App() {
   const completedBeforeCurrent = batch
     ? batch.status === 'completed' || batch.status === 'stopped'
       ? batch.items.filter((item) =>
-          ['submitted', 'no_form', 'validation_error', 'failed'].includes(
-            item.status
-          )
+          [
+            'submitted',
+            'no_form',
+            'validation_error',
+            'failed',
+            'filtered',
+          ].includes(item.status)
         ).length
       : batch.currentIndex
     : 0;
@@ -475,16 +527,29 @@ export default function App() {
   }
 
   async function prepareBatch() {
-    if (!configured) {
-      setSettingsOpen(true);
-      setError(translate('missingSettings'));
-      return;
-    }
     setBusy('preparing');
     setError('');
     setNotice('');
     try {
-      parseTargetUrls(targetText);
+      const runnableTargets = await runnableTargetsFor(targetText);
+      if (runnableTargets.length === 0) {
+        const response = await sendToBackground({
+          type: 'batch.start',
+          targetText,
+          siteId: settings.activeSiteId,
+        });
+        if (response.type !== 'batch.start') {
+          throw new Error('BATCH_START_FAILED');
+        }
+        setBatch(response.data);
+        setWebsiteProfile(null);
+        return;
+      }
+      if (!configured) {
+        setSettingsOpen(true);
+        setError(translate('missingSettings'));
+        return;
+      }
       const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
       const normalized = await persistConfiguration([normalizedWebsiteUrl]);
       const response = await sendToBackground({
@@ -529,19 +594,24 @@ export default function App() {
   }
 
   async function startBatch() {
-    if (!websiteProfile) return;
     setBusy('starting');
     setError('');
     setNotice('');
     try {
-      const parsedTargets = parseTargetUrls(targetText);
-      const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
-      await persistConfiguration([normalizedWebsiteUrl, ...parsedTargets]);
+      const runnableTargets = await runnableTargetsFor(targetText);
+      if (runnableTargets.length > 0 && !websiteProfile) return;
+
+      if (runnableTargets.length > 0) {
+        const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
+        await persistConfiguration([normalizedWebsiteUrl, ...runnableTargets]);
+      }
 
       const response = await sendToBackground({
         type: 'batch.start',
         targetText,
-        websiteProfile,
+        ...(runnableTargets.length > 0 && websiteProfile
+          ? { websiteProfile }
+          : {}),
         siteId: settings.activeSiteId,
       });
       if (response.type !== 'batch.start') {
@@ -564,6 +634,7 @@ export default function App() {
   async function runBatchCommand(
     type:
       | 'batch.continue'
+      | 'batch.skip-current'
       | 'batch.stop'
       | 'batch.reset'
       | 'batch.open-current',
@@ -602,7 +673,7 @@ export default function App() {
       }
       setBatch(response.data);
     } catch (caught) {
-      setError(friendlyError(caught));
+      setError(friendlyRetryError(caught));
     } finally {
       setBusy('idle');
     }
@@ -626,56 +697,7 @@ export default function App() {
       setWebsiteProfile(null);
       setTargetText('');
     } catch (caught) {
-      setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function createPlan() {
-    setBusy('planning');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground({
-        type: 'plan.create',
-        siteId: planSiteId,
-        targetText: planTargetText,
-        chunkSize: planChunkSize,
-      });
-      if (response.type !== 'plan.create')
-        throw new Error('PLAN_CREATE_FAILED');
-      setPlans((current) => ({
-        ...current,
-        [response.data.siteId]: response.data,
-      }));
-      setPlanTargetText('');
-      setNotice(translate('planCreated'));
-    } catch (caught) {
-      const raw = caught instanceof Error ? caught.message : String(caught);
-      if (raw.includes('PLAN_NO_URLS') || raw.includes('TARGET_URL_')) {
-        setError(translate('invalidTargetUrls'));
-      } else setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function deletePlan(siteId: string) {
-    setBusy('planning');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground({ type: 'plan.delete', siteId });
-      if (response.type !== 'plan.delete')
-        throw new Error('PLAN_DELETE_FAILED');
-      setPlans((current) => {
-        const next = { ...current };
-        delete next[siteId];
-        return next;
-      });
-    } catch (caught) {
-      setError(friendlyError(caught));
+      setError(friendlyRetryError(caught));
     } finally {
       setBusy('idle');
     }
@@ -713,7 +735,18 @@ export default function App() {
     }
   }
 
-  async function copyDiagnostics(item: BatchItem) {
+  async function openDashboard() {
+    setError('');
+    try {
+      await chrome.tabs.create({
+        url: chrome.runtime.getURL('dashboard.html'),
+      });
+    } catch {
+      setError(translate('dashboardOpenFailed'));
+    }
+  }
+
+  async function copyDiagnostics(item: BatchDiagnosticItem) {
     try {
       await navigator.clipboard.writeText(batchItemDiagnostic(item));
       setNotice(translate('diagnosticsCopied'));
@@ -738,13 +771,27 @@ export default function App() {
           <p className="eyebrow">{translate('workflowEyebrow')}</p>
           <h1>{translate('extensionName')}</h1>
         </div>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => setSettingsOpen((open) => !open)}
-        >
-          {translate(settingsOpen ? 'backToQueue' : 'openSettings')}
-        </button>
+        <div className="masthead-actions">
+          {!settingsOpen ? (
+            <button
+              type="button"
+              className="dashboard-link"
+              aria-label={translate('openDashboard')}
+              title={translate('openDashboard')}
+              onClick={openDashboard}
+            >
+              <ChartLineUp size={15} weight="bold" aria-hidden="true" />
+              {translate('openDashboard')}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            {translate(settingsOpen ? 'backToQueue' : 'openSettings')}
+          </button>
+        </div>
       </header>
 
       <div className="model-strip">
@@ -1123,6 +1170,18 @@ export default function App() {
                 >
                   {translate('openCurrentTarget')}
                 </button>
+                {canSkipCurrentManualGate ? (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy !== 'idle'}
+                    onClick={() =>
+                      runBatchCommand('batch.skip-current', 'skipping')
+                    }
+                  >
+                    {translate('skipCurrentTarget')}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="primary-button"
@@ -1209,6 +1268,7 @@ export default function App() {
               {batch.items.map((item) => {
                 const isCurrent = currentItem?.id === item.id;
                 const detail = batchItemMessageCopy(item.message);
+                const failureDetail = failureDetailFor(item);
                 return (
                   <details
                     key={item.id}
@@ -1231,9 +1291,16 @@ export default function App() {
                     <summary>
                       <span className="queue-index" aria-hidden="true" />
                       <span className="site-flow-summary-copy">
-                        <strong title={item.url}>
+                        <a
+                          className="site-flow-target-link"
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={item.url}
+                          onClick={(event) => event.stopPropagation()}
+                        >
                           {displayTarget(item.url)}
-                        </strong>
+                        </a>
                         <small>{batchItemStatusCopy(item.status)}</small>
                       </span>
                       <time dateTime={new Date(item.updatedAt).toISOString()}>
@@ -1280,12 +1347,11 @@ export default function App() {
                       <p className="site-result-detail">{detail}</p>
                     ) : null}
 
-                    {(item.status === 'failed' && item.message) ||
-                    canRetryItem(item) ? (
+                    {failureDetail || canRetryItem(item) ? (
                       <div className="site-diagnostics">
-                        {item.status === 'failed' && item.message ? (
+                        {failureDetail ? (
                           <>
-                            <code>{item.message}</code>
+                            <code>{failureDetail.message}</code>
                             <button
                               type="button"
                               className="text-button"
@@ -1330,118 +1396,6 @@ export default function App() {
           </section>
         </section>
       )}
-
-      {!settingsOpen ? (
-        <section className="panel plan-panel" aria-labelledby="plan-title">
-          <details className="plan-section">
-            <summary>
-              <h3 id="plan-title">{translate('planTitle')}</h3>
-            </summary>
-
-            <div className="plan-create">
-              <label className="field">
-                <span>{translate('siteSelectorLabel')}</span>
-                <select
-                  value={planSiteId}
-                  disabled={batchIsActive}
-                  onChange={(event) => setPlanSiteId(event.target.value)}
-                >
-                  {settings.sites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.label ||
-                        displayTarget(site.websiteUrl) ||
-                        translate('siteUnnamed')}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>{translate('targetUrlsLabel')}</span>
-                <textarea
-                  className="plan-target-editor"
-                  value={planTargetText}
-                  disabled={batchIsActive}
-                  onChange={(event) => setPlanTargetText(event.target.value)}
-                  placeholder={translate('targetUrlsPlaceholder')}
-                  rows={5}
-                />
-              </label>
-              <label className="field">
-                <span>{translate('planChunkSize')}</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={planChunkSize}
-                  disabled={batchIsActive}
-                  onChange={(event) =>
-                    setPlanChunkSize(
-                      Math.max(1, Math.floor(Number(event.target.value) || 1))
-                    )
-                  }
-                />
-              </label>
-              <p className="plan-preview">
-                {translate('planPreviewSummary', [
-                  String(planUrlCount),
-                  String(planBatchCount),
-                ])}
-              </p>
-              <button
-                type="button"
-                className="secondary-button full-width-button"
-                disabled={
-                  busy !== 'idle' || batchIsActive || planUrlCount === 0
-                }
-                onClick={createPlan}
-              >
-                {translate('planCreate')}
-              </button>
-            </div>
-
-            {planEntries.length === 0 ? (
-              <p className="plan-empty">{translate('planEmpty')}</p>
-            ) : (
-              <ul className="plan-list">
-                {planEntries.map((plan) => {
-                  const { done, total } = planProgress(plan);
-                  const chunk = nextPendingChunk(plan);
-                  return (
-                    <li key={plan.siteId} className="plan-entry">
-                      <div className="plan-entry-head">
-                        <strong>{siteLabelById(plan.siteId)}</strong>
-                        <small>
-                          {translate('planProgress', [
-                            String(done),
-                            String(total),
-                          ])}
-                        </small>
-                      </div>
-                      {chunk ? (
-                        <ul className="plan-next-peek">
-                          {chunk.urls.slice(0, 3).map((url) => (
-                            <li key={url} title={url}>
-                              {displayTarget(url)}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="text-button"
-                        disabled={busy !== 'idle'}
-                        onClick={() => deletePlan(plan.siteId)}
-                      >
-                        {translate('planDelete')}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </details>
-        </section>
-      ) : null}
 
       {!settingsOpen ? (
         <section
@@ -1491,23 +1445,51 @@ export default function App() {
                           </button>
                         ) : null}
                         <ul className="history-failed-list">
-                          {failedItems.map((item) => (
-                            <li key={item.url} className="history-failed-item">
-                              <span title={item.url}>
-                                {displayTarget(item.url)}
-                              </span>
-                              <button
-                                type="button"
-                                className="text-button"
-                                disabled={busy !== 'idle' || batchIsActive}
-                                onClick={() =>
-                                  retryFromHistory(entry.id, [item.url])
-                                }
+                          {failedItems.map((item) => {
+                            const failureDetail = failureDetailFor(item);
+                            return (
+                              <li
+                                key={item.url}
+                                className="history-failed-item"
                               >
-                                {translate('batchHistoryRetryUrl')}
-                              </button>
-                            </li>
-                          ))}
+                                <div className="history-failed-copy">
+                                  <span title={item.url}>
+                                    {displayTarget(item.url)}
+                                  </span>
+                                  <small>
+                                    {batchItemStatusCopy(item.status)}
+                                  </small>
+                                  {failureDetail?.friendly ? (
+                                    <p>{failureDetail.friendly}</p>
+                                  ) : null}
+                                  {failureDetail ? (
+                                    <code>{failureDetail.message}</code>
+                                  ) : null}
+                                </div>
+                                <div className="history-failed-actions">
+                                  {failureDetail ? (
+                                    <button
+                                      type="button"
+                                      className="text-button"
+                                      onClick={() => copyDiagnostics(item)}
+                                    >
+                                      {translate('copyDiagnostics')}
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="text-button"
+                                    disabled={busy !== 'idle' || batchIsActive}
+                                    onClick={() =>
+                                      retryFromHistory(entry.id, [item.url])
+                                    }
+                                  >
+                                    {translate('batchHistoryRetryUrl')}
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </details>
                     </li>

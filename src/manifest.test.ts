@@ -11,9 +11,10 @@ describe('extension surface', () => {
     const manifest = await manifestFactory({} as never);
 
     expect(manifest.permissions).toEqual(
-      expect.arrayContaining(['sidePanel', 'tabGroups'])
+      expect.arrayContaining(['sidePanel', 'tabGroups', 'unlimitedStorage'])
     );
     expect(manifest.side_panel).toEqual({ default_path: 'sidepanel.html' });
     expect(manifest.action).not.toHaveProperty('default_popup');
+    expect(manifest.permissions).not.toContain('tabs');
   });
 });

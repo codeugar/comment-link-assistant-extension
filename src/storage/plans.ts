@@ -52,10 +52,14 @@ const plansSchema = z
   .record(z.string(), sitePlanSchema)
   .refine((map) => Object.keys(map).length <= MAX_SITES_WITH_PLANS);
 
+export function parseStoredPlans(value: unknown): PlansMap | null {
+  const parsed = plansSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 export async function getPlans(): Promise<PlansMap> {
   const stored = await chrome.storage.local.get(PLANS_STORAGE_KEY);
-  const parsed = plansSchema.safeParse(stored[PLANS_STORAGE_KEY]);
-  return parsed.success ? parsed.data : {};
+  return parseStoredPlans(stored[PLANS_STORAGE_KEY]) ?? {};
 }
 
 export async function setPlans(plans: PlansMap): Promise<void> {

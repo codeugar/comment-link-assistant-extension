@@ -3,9 +3,12 @@ import {
   RETRYABLE_ITEM_STATUSES,
   completeCurrentItem,
   createBatch,
+  filterQueuedItems,
   pauseCurrentItem,
   resumeBatch,
+  resumeStoppedBatch,
   retryItems,
+  skipCurrentManualGate,
   stopBatch,
   updateBatchProgress,
 } from './state';
@@ -73,6 +76,40 @@ describe('batch state', () => {
         updatedAt: 1_000,
       },
     ]);
+  });
+
+  it('marks queued matches filtered and completes when none remain runnable', () => {
+    const partiallyFiltered = filterQueuedItems(
+      createTwoItemBatch(),
+      ['https://blog.example/post'],
+      'FILTER_LIST_MATCHED',
+      2_000
+    );
+
+    expect(partiallyFiltered).toMatchObject({
+      status: 'running',
+      currentIndex: 1,
+      items: [
+        {
+          status: 'filtered',
+          message: 'FILTER_LIST_MATCHED',
+          updatedAt: 2_000,
+        },
+        { status: 'queued' },
+      ],
+    });
+
+    const completed = filterQueuedItems(
+      createTwoItemBatch(),
+      ['https://blog.example/post', 'https://forum.example/thread'],
+      'FILTER_LIST_MATCHED',
+      2_000
+    );
+    expect(completed.status).toBe('completed');
+    expect(completed.currentIndex).toBe(2);
+    expect(completed.items.every((item) => item.status === 'filtered')).toBe(
+      true
+    );
   });
 
   it('stores batch and item progress without mutating the previous snapshot', () => {
@@ -247,6 +284,52 @@ describe('batch state', () => {
     }
   );
 
+  it.each([
+    ['login_required', 'LOGIN_REQUIRED_SKIPPED'],
+    ['captcha_required', 'CAPTCHA_REQUIRED_SKIPPED'],
+  ] as const)('skips a pre-submit %s gate and continues the queue', (status, message) => {
+    const paused = pauseCurrentItem(createTwoItemBatch(), status, 'MANUAL_GATE', 2_000);
+    const skipped = skipCurrentManualGate(paused, 3_000);
+
+    expect(skipped).toMatchObject({ status: 'running', currentIndex: 1 });
+    expect(skipped.items[0]).toMatchObject({
+      status: 'failed',
+      message,
+      updatedAt: 3_000,
+      prepared: null,
+    });
+    expect(skipped.items[0]?.events.at(-1)).toEqual({
+      status: 'failed',
+      message,
+      at: 3_000,
+    });
+    expect(skipped.items[1]?.status).toBe('queued');
+  });
+
+  it('does not skip a manual gate after a submit click may have occurred', () => {
+    let batch = updateBatchProgress(
+      createTwoItemBatch(),
+      { item: { status: 'prepared', prepared: {
+        fingerprint: 'fingerprint',
+        comment: 'Comment',
+        domToken: 'token',
+        baseline: { feedbackMessages: [], renderedComment: false },
+        expected: {
+          url: 'https://blog.example/post',
+          editorLabel: 'Comment',
+          submitLabel: 'Post',
+          hasWebsiteField: false,
+        },
+      } } },
+      2_000
+    );
+    batch = pauseCurrentItem(batch, 'login_required', 'LOGIN_REQUIRED', 3_000);
+
+    expect(() => skipCurrentManualGate(batch, 4_000)).toThrow(
+      'BATCH_SKIP_UNAVAILABLE'
+    );
+  });
+
   it('records a submitted result once and immediately advances', () => {
     const completed = completeCurrentItem(
       createTwoItemBatch(),
@@ -291,6 +374,50 @@ describe('batch state', () => {
       updatedAt: 3_000,
     });
   });
+  it.each(['click_dispatched', 'verifying'] as const)(
+    'resumes a stopped %s item by verifying it instead of requeueing it',
+    (inFlightStatus) => {
+      let batch = createThreeItemBatch();
+      batch = completeCurrentItem(
+        batch,
+        'submitted',
+        'COMMENT_SUBMITTED',
+        2_000
+      );
+      batch = updateBatchProgress(
+        batch,
+        { workerTabId: 42, item: { status: inFlightStatus } },
+        3_000
+      );
+      batch = stopBatch(batch, 4_000);
+
+      const resumed = resumeStoppedBatch(batch, 5_000);
+
+      expect(resumed).toMatchObject({
+        status: 'running',
+        currentIndex: 1,
+        workerTabId: 42,
+      });
+      expect(resumed.items[0]).toMatchObject({ status: 'submitted' });
+      expect(resumed.items[1]).toMatchObject({
+        status: inFlightStatus,
+        updatedAt: 3_000,
+      });
+      expect(resumed.items[2]).toMatchObject({
+        status: 'queued',
+        analysis: null,
+        comment: null,
+        prepared: null,
+        updatedAt: 5_000,
+      });
+      expect(resumed.items[2]?.events.at(-1)).toEqual({
+        status: 'queued',
+        message: 'BATCH_RESUME',
+        at: 5_000,
+      });
+      expect(() => batchSnapshotSchema.parse(resumed)).not.toThrow();
+    }
+  );
 });
 
 function createThreeItemBatch() {

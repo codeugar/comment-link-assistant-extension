@@ -14,6 +14,7 @@ export default defineConfig({
     },
     permissions: [
       'storage',
+      'unlimitedStorage',
       'activeTab',
       'scripting',
       'alarms',

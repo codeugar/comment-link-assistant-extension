@@ -1,10 +1,14 @@
 import {
   completeCurrentItem,
   createBatch,
+  filterQueuedItems,
+  pauseCurrentItem,
+  skipCurrentManualGate,
   updateBatchProgress,
 } from '@/batch/state';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import { HISTORY_STORAGE_KEY } from '@/storage/batch-history';
+import { FILTER_LIST_STORAGE_KEY } from '@/storage/filter-list';
 import { PLANS_STORAGE_KEY } from '@/storage/plans';
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
@@ -82,6 +86,76 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe('filter-list preflight', () => {
+  const filteredTarget = 'https://blocked.example/comment';
+
+  it('starts a fully filtered batch without configuration, profile, or an origin prompt', async () => {
+    const filteredBatch = filterQueuedItems(
+      createBatch({
+        id: 'filtered-batch',
+        targetText: filteredTarget,
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+        now: 1,
+      }),
+      [filteredTarget],
+      'FILTER_LIST_MATCHED',
+      2
+    );
+    await chrome.storage.local.set({
+      [FILTER_LIST_STORAGE_KEY]: [
+        {
+          id: 'filter-exact',
+          kind: 'url',
+          value: filteredTarget,
+          createdAt: 1,
+        },
+      ],
+    });
+    const requestPermissions = vi.spyOn(chrome.permissions, 'request');
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        const typed = message as { type: string };
+        if (typed.type !== 'batch.start') {
+          throw new Error('UNEXPECTED_MESSAGE');
+        }
+        return {
+          ok: true,
+          data: { type: 'batch.start', data: filteredBatch },
+        };
+      }) as never);
+
+    await renderSidePanel();
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, filteredTarget);
+    await clickButton('prepareBatch');
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'batch.start',
+        targetText: filteredTarget,
+      })
+    );
+    const startMessage = sendMessage.mock.calls[0]?.[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(startMessage).not.toHaveProperty('websiteProfile');
+    expect(requestPermissions).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('batchStatusFiltered');
+  });
+});
 describe('side panel navigation', () => {
   it('opens on the target queue and uses a separate settings page', async () => {
     await renderSidePanel();
@@ -96,6 +170,21 @@ describe('side panel navigation', () => {
     await clickButton('backToQueue');
     expect(container.textContent).toContain('batchSetupTitle');
     expect(container.textContent).not.toContain('settingsTitle');
+  });
+
+  it('opens the full dashboard in an extension tab', async () => {
+    const createTab = vi
+      .spyOn(chrome.tabs, 'create')
+      .mockImplementation(
+        (async () => ({ id: 42 }) as chrome.tabs.Tab) as never
+      );
+
+    await renderSidePanel();
+    await clickButton('openDashboard');
+
+    expect(createTab).toHaveBeenCalledWith({
+      url: chrome.runtime.getURL('dashboard.html'),
+    });
   });
 
   it('saves incomplete settings and stays on the settings page', async () => {
@@ -227,6 +316,185 @@ describe('side panel navigation', () => {
     expect(writeText).toHaveBeenCalledOnce();
     expect(writeText.mock.calls[0]?.[0]).toContain('FORM_PLAN_INVALID_SCHEMA');
     expect(writeText.mock.calls[0]?.[0]).toContain('learnalanguage.com');
+  });
+
+  it.each([
+    ['no_form', 'FORM_PLAN_NEEDS_REVIEW'],
+    [
+      'validation_error',
+      'Target rejected this comment because email is required',
+    ],
+  ] as const)(
+    'shows stored %s detail and diagnostic copy action',
+    async (status, message) => {
+      const completed = completeCurrentItem(
+        createBatch({
+          targetText: 'https://blog.example/post',
+          settings: {
+            provider: 'deepseek',
+            websiteUrl: 'https://product.example',
+            displayName: '',
+            email: '',
+            linkMode: 'prefer-website-field',
+          },
+        }),
+        status,
+        message
+      );
+      await chrome.storage.local.set({
+        [SETTINGS_STORAGE_KEY]: completed.settings,
+        [BATCH_STORAGE_KEY]: completed,
+      });
+
+      await renderSidePanel();
+
+      expect(container.textContent).toContain(message);
+      expect(container.textContent).toContain('copyDiagnostics');
+    }
+  );
+
+  it.each([
+    ['login_required', 'LOGIN_REQUIRED'],
+    ['captcha_required', 'CAPTCHA_REQUIRED'],
+  ] as const)(
+    'shows paused %s detail and diagnostic copy action',
+    async (status, message) => {
+      const paused = pauseCurrentItem(
+        createBatch({
+          targetText: 'https://blog.example/post',
+          settings: {
+            provider: 'deepseek',
+            websiteUrl: 'https://product.example',
+            displayName: '',
+            email: '',
+            linkMode: 'prefer-website-field',
+          },
+        }),
+        status,
+        message
+      );
+      await chrome.storage.local.set({
+        [SETTINGS_STORAGE_KEY]: paused.settings,
+        [BATCH_STORAGE_KEY]: paused,
+      });
+
+      await renderSidePanel();
+
+      expect(container.textContent).toContain(message);
+      expect(container.textContent).toContain('copyDiagnostics');
+    }
+  );
+
+  it('skips a paused pre-submit login target and continues the batch', async () => {
+    const paused = pauseCurrentItem(
+      createBatch({
+        id: 'batch-skip-gate',
+        targetText: 'https://blog.example/private\nhttps://forum.example/open',
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+        now: 1_000,
+      }),
+      'login_required',
+      'LOGIN_REQUIRED',
+      2_000
+    );
+    const skipped = skipCurrentManualGate(paused, 3_000);
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: paused.settings,
+      [BATCH_STORAGE_KEY]: paused,
+    });
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockResolvedValue({
+        ok: true,
+        data: { type: 'batch.skip-current', data: skipped },
+      } as never);
+
+    await renderSidePanel();
+    await clickButton('skipCurrentTarget');
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'batch.skip-current' });
+    expect(container.textContent).toContain('batchStatusFailed');
+    expect(container.textContent).toContain('batchSkippedLoginDescription');
+  });
+
+  it('does not offer skip when a prepared submission must be verified', async () => {
+    let batch = updateBatchProgress(
+      createBatch({
+        targetText: 'https://blog.example/post',
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+      }),
+      {
+        item: {
+          status: 'prepared',
+          prepared: {
+            fingerprint: 'fingerprint',
+            comment: 'Comment',
+            domToken: 'token',
+            baseline: { feedbackMessages: [], renderedComment: false },
+            expected: {
+              url: 'https://blog.example/post',
+              editorLabel: 'Comment',
+              submitLabel: 'Post',
+              hasWebsiteField: false,
+            },
+          },
+        },
+      }
+    );
+    batch = pauseCurrentItem(batch, 'login_required', 'LOGIN_REQUIRED');
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+
+    await renderSidePanel();
+
+    expect(
+      Array.from(container.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent?.trim() === 'skipCurrentTarget'
+      )
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ['LOGIN_REQUIRED_SKIPPED', 'batchSkippedLoginDescription'],
+    ['CAPTCHA_REQUIRED_SKIPPED', 'batchSkippedCaptchaDescription'],
+  ] as const)('explains skipped manual gate %s', async (message, copy) => {
+    const completed = completeCurrentItem(
+      createBatch({
+        targetText: 'https://blog.example/post',
+        settings: {
+          provider: 'deepseek',
+          websiteUrl: 'https://product.example',
+          displayName: '',
+          email: '',
+          linkMode: 'prefer-website-field',
+        },
+      }),
+      'failed',
+      message
+    );
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: completed.settings,
+      [BATCH_STORAGE_KEY]: completed,
+    });
+
+    await renderSidePanel();
+
+    expect(container.textContent).toContain(copy);
+    expect(container.textContent).toContain(message);
   });
 
   it('explains when a planned action is blocked as unsafe', async () => {
@@ -465,6 +733,24 @@ describe('batch item retry', () => {
     }) as never);
   }
 
+  it('opens each site-flow target URL in a separate tab', async () => {
+    const batch = twoItemBatch();
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+
+    await renderSidePanel();
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      '.site-flow-target-link'
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('href')).toBe('https://blog.example/one');
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toContain('noopener');
+  });
+
   it('offers a per-row retry on a failed item and sends its id', async () => {
     let batch = twoItemBatch();
     batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', 2_000);
@@ -507,6 +793,33 @@ describe('batch item retry', () => {
         itemIds: ['batch-retry:0', 'batch-retry:1'],
       })
     );
+  });
+
+  it('shows retry error code instead of generic comment submission failure', async () => {
+    let batch = twoItemBatch();
+    batch = completeCurrentItem(batch, 'no_form', 'NO_FORM', 2_000);
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 3_000);
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: batch.settings,
+      [BATCH_STORAGE_KEY]: batch,
+    });
+    vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async () => ({
+      ok: false,
+      error: {
+        code: 'BATCH_RETRY_UNAVAILABLE',
+        message: 'BATCH_RETRY_UNAVAILABLE',
+      },
+    })) as never);
+
+    await renderSidePanel();
+    await clickButton('batchRetryFailed');
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(
+        'batchRetryItem: BATCH_RETRY_UNAVAILABLE'
+      );
+    });
+    expect(container.textContent).not.toContain('commentFailed');
   });
 
   it('hides the batch-level retry when nothing failed', async () => {
@@ -595,8 +908,30 @@ describe('batch history', () => {
     expect(container.textContent).toContain('batchHistoryTitle');
     expect(container.textContent).toContain('product.example');
     expect(container.textContent).toContain('forum.example/three');
+    expect(container.textContent).toContain('batchStatusFailed');
+    expect(container.textContent).toContain('BOOM');
+    expect(findButton('copyDiagnostics')).toBeDefined();
     expect(findButton('batchHistoryRetryFailed')).toBeDefined();
     expect(findButton('batchHistoryRetryUrl')).toBeDefined();
+  });
+
+  it('copies diagnostic detail for an archived failed item', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>(
+      async () => undefined
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: [historyEntry] });
+
+    await renderSidePanel();
+    await clickButton('copyDiagnostics');
+
+    expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining('Error: BOOM')
+    );
+    expect(writeText.mock.calls[0]?.[0]).toContain('Status: failed');
   });
 
   it('shows an empty hint when there is no history', async () => {
@@ -909,53 +1244,6 @@ describe('site link plans', () => {
     }) as never);
   }
 
-  it('creates a plan for the selected site with the chosen chunk size', async () => {
-    await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: twoSiteSettings });
-    const sendMessage = mockPlanResponse('plan.create', {
-      siteId: 'seed',
-      chunkSize: 2,
-      chunks: [
-        {
-          id: 'c0',
-          urls: ['https://a.example/1', 'https://a.example/2'],
-          status: 'pending',
-        },
-      ],
-      createdAt: 1,
-      updatedAt: 1,
-    });
-
-    await renderSidePanel();
-
-    expect(findButton('planCreate')?.disabled).toBe(true);
-
-    const editor = container.querySelector<HTMLTextAreaElement>(
-      '.plan-target-editor'
-    );
-    if (!editor) throw new Error('PLAN_EDITOR_NOT_FOUND');
-    await enterTextareaValue(
-      editor,
-      'https://a.example/1\nhttps://a.example/2\nhttps://a.example/3'
-    );
-    const chunkInput = container.querySelector<HTMLInputElement>(
-      'input[type="number"]'
-    );
-    if (!chunkInput) throw new Error('CHUNK_INPUT_NOT_FOUND');
-    await enterInputValue(chunkInput, '2');
-
-    expect(findButton('planCreate')?.disabled).toBe(false);
-    await clickButton('planCreate');
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'plan.create',
-        siteId: 'seed',
-        chunkSize: 2,
-        targetText: expect.stringContaining('https://a.example/1'),
-      })
-    );
-  });
-
   it('shows a due banner and runs the next chunk', async () => {
     await chrome.storage.local.set({
       [SETTINGS_STORAGE_KEY]: twoSiteSettings,
@@ -1024,42 +1312,6 @@ describe('site link plans', () => {
 
     expect(container.textContent).toContain('planDoneToday');
     expect(container.textContent).not.toContain('planDueBanner');
-  });
-
-  it('lists a plan with progress and a peek, and deletes it', async () => {
-    await chrome.storage.local.set({
-      [SETTINGS_STORAGE_KEY]: twoSiteSettings,
-      [PLANS_STORAGE_KEY]: {
-        seed: {
-          siteId: 'seed',
-          chunkSize: 1,
-          chunks: [
-            {
-              id: 'c0',
-              urls: ['https://a.example/1'],
-              status: 'done',
-              batchId: 'b',
-              startedAt: Date.now(),
-              completedAt: Date.now(),
-            },
-            { id: 'c1', urls: ['https://a.example/2'], status: 'pending' },
-          ],
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      },
-    });
-    const sendMessage = mockPlanResponse('plan.delete', null);
-
-    await renderSidePanel();
-
-    expect(container.textContent).toContain('planProgress');
-    expect(container.textContent).toContain('a.example/2');
-    await clickButton('planDelete');
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'plan.delete', siteId: 'seed' })
-    );
   });
 
   it('hides the due banner while a batch is running', async () => {

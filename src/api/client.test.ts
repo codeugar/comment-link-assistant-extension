@@ -41,7 +41,7 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('A useful comment. https://product.example');
+    ).resolves.toBe('A useful comment.');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, request] = fetchMock.mock.calls[0] ?? [];
@@ -55,34 +55,6 @@ describe('direct comment generation', () => {
       stream: false,
       response_format: { type: 'json_object' },
     });
-  });
-
-  it('requires the promoted URL in the comment body even when a Website field exists', async () => {
-    const fetchMock = vi.fn<
-      (url: string, request?: RequestInit) => Promise<Response>
-    >(
-      async () =>
-        new Response(
-          JSON.stringify({
-            choices: [
-              { message: { content: '{"comment":"A useful comment."}' } },
-            ],
-          }),
-          { status: 200 }
-        )
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(
-      generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('A useful comment. https://product.example');
-
-    const request = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    const systemPrompt = request.messages[0].content as string;
-    expect(systemPrompt).toContain(
-      'Include the relevant website URL https://product.example naturally and exactly once in the comment body.'
-    );
-    expect(systemPrompt).not.toContain('dedicated website field');
   });
 
   it('calls the KIE Gemini Flash endpoint directly', async () => {
@@ -149,9 +121,7 @@ describe('direct comment generation', () => {
     );
     await vi.advanceTimersByTimeAsync(67_000);
 
-    await expect(request).resolves.toBe(
-      'A useful comment. https://product.example'
-    );
+    await expect(request).resolves.toBe('A useful comment.');
   });
 
   it('retries a request that times out on its first attempt', async () => {
@@ -186,9 +156,7 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(30_000); // per-attempt budget expires, aborting attempt 1
     await vi.advanceTimersByTimeAsync(250); // retry backoff before attempt 2
 
-    await expect(request).resolves.toBe(
-      'A useful comment. https://product.example'
-    );
+    await expect(request).resolves.toBe('A useful comment.');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -261,9 +229,7 @@ describe('direct comment generation', () => {
     // deadline measured from call start, but before attempt 2's own deadline.
     await vi.advanceTimersByTimeAsync(30_100);
 
-    await expect(request).resolves.toBe(
-      'A useful comment. https://product.example'
-    );
+    await expect(request).resolves.toBe('A useful comment.');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -273,7 +239,7 @@ describe('direct comment generation', () => {
     ).rejects.toThrow('DEEPSEEK_API_KEY_REQUIRED');
   });
 
-  it('allows the promoted URL when a Website field exists', async () => {
+  it('rejects a URL when the dedicated website field should be used', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -296,10 +262,10 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('Useful point. See https://product.example');
+    ).rejects.toThrow('COMMENT_URL_NOT_ALLOWED');
   });
 
-  it('requires exactly the promoted URL in the comment body', async () => {
+  it('requires exactly the promoted URL for inline-link mode', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -328,7 +294,7 @@ describe('direct comment generation', () => {
     ).rejects.toThrow('COMMENT_RELEVANT_URL_REQUIRED');
   });
 
-  it('adds the promoted URL when a comment omits every link', async () => {
+  it('adds the promoted HTML anchor when an inline comment omits every link', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -351,8 +317,43 @@ describe('direct comment generation', () => {
         { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
         { ...input, linkMode: 'inline' }
       )
-    ).resolves.toBe('A specific, useful observation. https://product.example');
+    ).resolves.toBe(
+      'A specific, useful observation. <a href="https://product.example">Product</a>'
+    );
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a natural inline anchor returned by the provider', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      comment:
+                        'See <a href="https://product.example">Explore Product</a> for details.',
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, linkMode: 'inline' }
+      )
+    ).resolves.toBe(
+      'See <a href="https://product.example">Explore Product</a> for details.'
+    );
   });
 
   it('retries a transient provider failure with a capped backoff', async () => {
@@ -373,7 +374,7 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('A useful comment. https://product.example');
+    ).resolves.toBe('A useful comment.');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -399,8 +400,6 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe(
-      'One detail stood out: the example. https://product.example'
-    );
+    ).resolves.toBe('One detail stood out: the example.');
   });
 });

@@ -45,6 +45,97 @@ describe('comment page DOM helpers', () => {
     });
   });
 
+  it.each([
+    [
+      'a wrapping Web label',
+      '<label>Web <input data-testid="web-control" type="text"></label>',
+      '[data-testid="web-control"]',
+    ],
+    [
+      'an associated Website label',
+      '<label for="opaque-field">Website</label><input id="opaque-field" name="field-17" type="text">',
+      '#opaque-field',
+    ],
+    [
+      'an aria-labelledby Web label',
+      '<span id="site-caption">Web</span><input data-testid="aria-control" type="text" aria-labelledby="site-caption">',
+      '[data-testid="aria-control"]',
+    ],
+    [
+      'the standard autocomplete=url semantic',
+      '<input data-testid="semantic-url" type="text" autocomplete="url">',
+      '[data-testid="semantic-url"]',
+    ],
+  ])(
+    'recognizes and fills a website field from %s',
+    async (_, markup, selector) => {
+      document.body.innerHTML = `
+      <article><p>Long-form article copy about useful comment forms.</p></article>
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        ${markup}
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+
+      expect((await analyzePageDocument(document)).form).toMatchObject({
+        readiness: 'ready',
+        hasWebsiteField: true,
+      });
+      const preparation = await prepareSubmissionDocument(document, {
+        comment: 'A useful comment about this article.',
+        websiteUrl: 'https://pixel77.com/typography-rules-technique/',
+      });
+      expect(preparation.ok).toBe(true);
+      expect((document.querySelector(selector) as HTMLInputElement).value).toBe(
+        'https://pixel77.com/typography-rules-technique/'
+      );
+      if (preparation.ok) {
+        await clickPreparedSubmissionDocument(
+          document,
+          preparation.prepared,
+          0
+        );
+      }
+    }
+  );
+
+  it('does not guess an anonymous text input or a checkbox as a website field', async () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy about useful comment forms.</p></article>
+      <form id="commentform">
+        <textarea name="comment"></textarea>
+        <label>Company <input data-testid="company" type="text" value="keep"></label>
+        <label>Show my website <input data-testid="website-checkbox" type="checkbox"></label>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+
+    expect((await analyzePageDocument(document)).form).toMatchObject({
+      readiness: 'ready',
+      hasWebsiteField: false,
+    });
+    const preparation = await prepareSubmissionDocument(document, {
+      comment: 'A useful comment about this article.',
+      websiteUrl: 'https://pixel77.com/typography-rules-technique/',
+    });
+    expect(preparation.ok).toBe(true);
+    expect(
+      (document.querySelector('[data-testid="company"]') as HTMLInputElement)
+        .value
+    ).toBe('keep');
+    expect(
+      (
+        document.querySelector(
+          '[data-testid="website-checkbox"]'
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(false);
+    if (preparation.ok) {
+      await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+    }
+  });
+
   it('skips an empty theme entry-content before the article body', async () => {
     document.body.innerHTML = `
       <header><div class="entry-content"></div></header>
