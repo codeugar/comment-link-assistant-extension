@@ -390,14 +390,11 @@ async function prepareComment(): Promise<PopupMessageResult> {
   }
 
   const websiteProfile = await loadWebsiteProfile(site.websiteUrl);
-  // The comment body always carries the promoted link; a dedicated Website
-  // field is filled as an additional, independent form value.
-  const effectiveLinkMode = 'inline';
   const comment = await generateComment(keys, {
     provider: settings.provider,
     websiteProfile,
     targetPage: analysis.page,
-    linkMode: effectiveLinkMode,
+    linkMode: site.linkMode,
   });
   return {
     type: 'comment.prepare',

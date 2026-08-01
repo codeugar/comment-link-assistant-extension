@@ -85,4 +85,22 @@ export interface PageSubmissionResult {
   message: string;
   fingerprint: string;
   clickOccurred: boolean;
+  linkFollow?: LinkFollowVerification;
+}
+
+export type LinkFollowStatus =
+  | 'dofollow'
+  | 'nofollow'
+  | 'ugc'
+  | 'link_stripped'
+  | 'pending_moderation'
+  | 'not_found';
+
+export type LinkFollowSurface = 'comment_body' | 'author_url' | 'unknown';
+
+export interface LinkFollowVerification {
+  status: LinkFollowStatus;
+  rel: string | null;
+  href: string | null;
+  surface: LinkFollowSurface;
 }

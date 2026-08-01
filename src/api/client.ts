@@ -343,7 +343,9 @@ function parseComment(
   }
   const parsed = commentSchema.safeParse(json);
   if (!parsed.success) throw new Error('COMMENT_PROVIDER_PAYLOAD_INVALID');
-  const comment = normalizeInlineLink(parsed.data.comment, websiteProfile);
+  const comment = ensureInlineAnchorBypass(
+    normalizeInlineLink(parsed.data.comment, websiteProfile)
+  );
   validateCommentMarkup(comment, websiteProfile.url);
   validateLinkPolicy(comment, websiteProfile.url);
   return comment;
@@ -377,7 +379,18 @@ function normalizeInlineLink(
 
 function makeInlineAnchor(websiteProfile: WebsiteProfile): string {
   const label = escapeHtml(inlineAnchorLabel(websiteProfile));
-  return `<a href="${escapeHtml(websiteProfile.url)}">${label}</a>`;
+  const href = `${escapeHtml(websiteProfile.url)}\n`;
+  return `<a href="${href}">${label}</a>`;
+}
+
+function ensureInlineAnchorBypass(comment: string): string {
+  return comment.replace(
+    /<a\s+href=(["'])([\s\S]*?)\1>/gi,
+    (match, quote: string, href: string) => {
+      if (href.endsWith('\n')) return match;
+      return `<a href=${quote}${href}\n${quote}>`;
+    }
+  );
 }
 
 function inlineAnchorLabel(websiteProfile: WebsiteProfile): string {
@@ -416,7 +429,7 @@ function validateCommentMarkup(comment: string, websiteUrl: string): void {
   ) {
     throw new Error('COMMENT_RELEVANT_URL_REQUIRED');
   }
-  if (normalizeUrl(href) !== normalizeUrl(websiteUrl)) {
+  if (normalizeUrl(sanitizeAnchorHref(href)) !== normalizeUrl(websiteUrl)) {
     throw new Error('COMMENT_RELEVANT_URL_REQUIRED');
   }
   validatePlainText(comment.replace(INLINE_ANCHOR, ''));
@@ -460,6 +473,10 @@ function validateLinkPolicy(comment: string, websiteUrl: string): void {
   if (urls.length !== 1 || normalizeUrl(urls[0]) !== normalizeUrl(websiteUrl)) {
     throw new Error('COMMENT_RELEVANT_URL_REQUIRED');
   }
+}
+
+function sanitizeAnchorHref(href: string): string {
+  return href.replace(/[\r\n\t ]+$/, '');
 }
 
 function normalizeUrl(value: string): string | null {
