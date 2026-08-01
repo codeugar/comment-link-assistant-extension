@@ -41,7 +41,9 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('A useful comment.');
+    ).resolves.toBe(
+      'A useful comment. <a href="https://product.example">Product</a>'
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, request] = fetchMock.mock.calls[0] ?? [];
@@ -121,7 +123,9 @@ describe('direct comment generation', () => {
     );
     await vi.advanceTimersByTimeAsync(67_000);
 
-    await expect(request).resolves.toBe('A useful comment.');
+    await expect(request).resolves.toBe(
+      'A useful comment. <a href="https://product.example">Product</a>'
+    );
   });
 
   it('retries a request that times out on its first attempt', async () => {
@@ -156,7 +160,9 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(30_000); // per-attempt budget expires, aborting attempt 1
     await vi.advanceTimersByTimeAsync(250); // retry backoff before attempt 2
 
-    await expect(request).resolves.toBe('A useful comment.');
+    await expect(request).resolves.toBe(
+      'A useful comment. <a href="https://product.example">Product</a>'
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -229,7 +235,9 @@ describe('direct comment generation', () => {
     // deadline measured from call start, but before attempt 2's own deadline.
     await vi.advanceTimersByTimeAsync(30_100);
 
-    await expect(request).resolves.toBe('A useful comment.');
+    await expect(request).resolves.toBe(
+      'A useful comment. <a href="https://product.example">Product</a>'
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -239,7 +247,7 @@ describe('direct comment generation', () => {
     ).rejects.toThrow('DEEPSEEK_API_KEY_REQUIRED');
   });
 
-  it('rejects a URL when the dedicated website field should be used', async () => {
+  it('keeps the promoted HTML anchor when a Website field exists', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -262,7 +270,9 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).rejects.toThrow('COMMENT_URL_NOT_ALLOWED');
+    ).resolves.toBe(
+      'Useful point. See <a href="https://product.example">Product</a>'
+    );
   });
 
   it('requires exactly the promoted URL for inline-link mode', async () => {
@@ -374,7 +384,9 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('A useful comment.');
+    ).resolves.toBe(
+      'A useful comment. <a href="https://product.example">Product</a>'
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -400,6 +412,8 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe('One detail stood out: the example.');
+    ).resolves.toBe(
+      'One detail stood out: the example. <a href="https://product.example">Product</a>'
+    );
   });
 });

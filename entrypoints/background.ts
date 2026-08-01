@@ -390,11 +390,9 @@ async function prepareComment(): Promise<PopupMessageResult> {
   }
 
   const websiteProfile = await loadWebsiteProfile(site.websiteUrl);
-  // A dedicated Website / Web / URL field is the canonical placement. Inline
-  // links are only a fallback when the target form does not expose one.
-  const effectiveLinkMode = analysis.form.hasWebsiteField
-    ? 'prefer-website-field'
-    : 'inline';
+  // The comment body always carries the promoted link; a dedicated Website
+  // field is filled as an additional, independent form value.
+  const effectiveLinkMode = 'inline';
   const comment = await generateComment(keys, {
     provider: settings.provider,
     websiteProfile,
@@ -1175,7 +1173,8 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   }
   if (message.type === 'batch.start') return startBatch(message);
   if (message.type === 'batch.continue') return continueBatch();
-  if (message.type === 'batch.skip-current') return skipCurrentBatchManualGate();
+  if (message.type === 'batch.skip-current')
+    return skipCurrentBatchManualGate();
   if (message.type === 'batch.stop') return stopCurrentBatch();
   if (message.type === 'batch.reset') return resetBatch();
   if (message.type === 'batch.retry-items') return retryBatchItems(message);

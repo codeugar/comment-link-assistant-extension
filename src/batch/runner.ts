@@ -970,9 +970,9 @@ async function advanceGeneration(
     dependencies.now()
   );
   await dependencies.setBatch(requested);
-  const effectiveLinkMode = item.analysis.form.hasWebsiteField
-    ? 'prefer-website-field'
-    : 'inline';
+  // Keep the promoted link in the generated comment even when the form also
+  // exposes a Website field.
+  const effectiveLinkMode = 'inline';
   try {
     const comment = await dependencies.generateComment(keys, {
       provider: requested.settings.provider,

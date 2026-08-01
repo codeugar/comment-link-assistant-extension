@@ -798,7 +798,7 @@ describe('batch runner', () => {
     expect(context.read()?.items[0]).toMatchObject({ status: 'no_form' });
   });
 
-  it('uses any detected website field even when inline placement was preferred', async () => {
+  it('keeps the inline comment link while filling any detected website field', async () => {
     const planned = analysis();
     planned.form.hasWebsiteField = true;
     planned.form.requiresWebsiteField = false;
@@ -826,7 +826,7 @@ describe('batch runner', () => {
 
     expect(context.deps.generateComment).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ linkMode: 'prefer-website-field' })
+      expect.objectContaining({ linkMode: 'inline' })
     );
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
@@ -865,7 +865,7 @@ describe('batch runner', () => {
 
     expect(context.deps.generateComment).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ linkMode: 'prefer-website-field' })
+      expect.objectContaining({ linkMode: 'inline' })
     );
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
