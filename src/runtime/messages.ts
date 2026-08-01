@@ -1,11 +1,63 @@
 import type { BatchSnapshot } from '@/batch/types';
 import type {
+  Attempt,
+  DashboardSummary,
+  Plan,
+  PlanDetail,
+  PlanTarget,
+  PlanTargetPage,
+} from '@/dashboard/model';
+import type {
   PageAnalysis,
   PageSubmissionResult,
   PageSubmissionTarget,
 } from '@/page/types';
+import type { FilterEntryKind, FilterListEntry } from '@/storage/filter-list';
+import type {
+  OutboundLinkLibraryEntry,
+  OutboundLinkTag,
+} from '@/storage/outbound-link-library';
 import type { SitePlan } from '@/storage/plans';
 import type { WebsiteProfile } from '@/website/profile';
+
+export interface DashboardActiveRun {
+  planId: string;
+  planName: string;
+  batchId: string;
+  batchSequence: number;
+  status: BatchSnapshot['status'];
+  currentTarget: (PlanTarget & { attempts: Attempt[] }) | null;
+  counts: {
+    total: number;
+    processed: number;
+    submitted: number;
+    failed: number;
+    remaining: number;
+  };
+}
+
+export interface DashboardSummaryView extends DashboardSummary {
+  activeRun: DashboardActiveRun | null;
+}
+
+export interface DashboardPlanTarget extends PlanTarget {
+  attempts: Attempt[];
+}
+
+export interface DashboardPlanTargetPage extends Omit<PlanTargetPage, 'items'> {
+  items: DashboardPlanTarget[];
+}
+
+export interface LegacyPlanCreateMessage {
+  type: 'plan.create';
+  siteId: string;
+  targetText: string;
+  chunkSize: number;
+}
+
+export interface DashboardPlanCreateMessage extends LegacyPlanCreateMessage {
+  name: string;
+}
 
 export type PopupMessage =
   | { type: 'page.analyze' }
@@ -14,23 +66,54 @@ export type PopupMessage =
   | {
       type: 'batch.start';
       targetText: string;
-      websiteProfile: WebsiteProfile;
+      websiteProfile?: WebsiteProfile;
       siteId?: string;
     }
   | { type: 'batch.continue' }
+  | { type: 'batch.skip-current' }
   | { type: 'batch.stop' }
   | { type: 'batch.reset' }
   | { type: 'batch.retry-items'; itemIds: string[] }
   | { type: 'batch.retry-from-history'; historyId: string; urls?: string[] }
   | { type: 'batch.open-current' }
-  | {
-      type: 'plan.create';
-      siteId: string;
-      targetText: string;
-      chunkSize: number;
-    }
+  | LegacyPlanCreateMessage
+  | DashboardPlanCreateMessage
   | { type: 'plan.delete'; siteId: string }
   | { type: 'plan.run-next'; siteId: string }
+  | { type: 'filter.list' }
+  | { type: 'filter.add'; value: string; kind?: FilterEntryKind }
+  | { type: 'filter.remove'; id: string }
+  | { type: 'link-library.list' }
+  | { type: 'link-library.add'; url: string; tags?: OutboundLinkTag[] }
+  | {
+      type: 'link-library.update';
+      id: string;
+      url?: string;
+      tags?: OutboundLinkTag[];
+    }
+  | { type: 'link-library.remove'; id: string }
+  | { type: 'dashboard.getSummary' }
+  | { type: 'plans.list'; includeArchived?: boolean }
+  | { type: 'plan.getDetail'; planId: string }
+  | {
+      type: 'plan.getTargets';
+      planId: string;
+      batchId?: string;
+      page?: number;
+      pageSize?: number;
+    }
+  | { type: 'plan.rename'; planId: string; name: string }
+  | { type: 'plan.archive'; planId: string }
+  | { type: 'plan.deletePermanently'; planId: string }
+  | {
+      type: 'plan.deleteTarget';
+      planId: string;
+      targetId: string;
+      addToFilter?: boolean;
+    }
+  | { type: 'plan.runNext'; planId: string }
+  | { type: 'plan.resume'; planId: string }
+  | { type: 'plan.retryTargets'; planId: string; targetIds: string[] }
   | {
       type: 'comment.submit';
       comment: string;
@@ -53,6 +136,7 @@ export type PopupMessageResult =
       type:
         | 'batch.start'
         | 'batch.continue'
+        | 'batch.skip-current'
         | 'batch.stop'
         | 'batch.reset'
         | 'batch.retry-items'
@@ -62,7 +146,27 @@ export type PopupMessageResult =
       data: BatchSnapshot | null;
     }
   | { type: 'plan.create'; data: SitePlan }
-  | { type: 'plan.delete'; data: null };
+  | { type: 'plan.create'; data: Plan }
+  | { type: 'plan.delete'; data: null }
+  | { type: 'filter.list'; data: FilterListEntry[] }
+  | { type: 'filter.add'; data: FilterListEntry }
+  | { type: 'filter.remove'; data: boolean }
+  | { type: 'link-library.list'; data: OutboundLinkLibraryEntry[] }
+  | { type: 'link-library.add'; data: OutboundLinkLibraryEntry }
+  | { type: 'link-library.update'; data: OutboundLinkLibraryEntry | null }
+  | { type: 'link-library.remove'; data: boolean }
+  | { type: 'dashboard.getSummary'; data: DashboardSummaryView }
+  | { type: 'plans.list'; data: { plans: Plan[] } }
+  | { type: 'plan.getDetail'; data: PlanDetail }
+  | { type: 'plan.getTargets'; data: DashboardPlanTargetPage }
+  | { type: 'plan.rename'; data: Plan }
+  | { type: 'plan.archive'; data: Plan }
+  | { type: 'plan.deletePermanently'; data: null }
+  | { type: 'plan.deleteTarget'; data: PlanTarget }
+  | {
+      type: 'plan.runNext' | 'plan.resume' | 'plan.retryTargets';
+      data: BatchSnapshot;
+    };
 
 export type BackgroundResponse =
   | { ok: true; data: PopupMessageResult }
@@ -77,13 +181,29 @@ function isBackgroundResponse(value: unknown): value is BackgroundResponse {
   );
 }
 
-export async function sendToBackground(
-  message: PopupMessage
-): Promise<PopupMessageResult> {
+type PopupMessageResultForType<T extends PopupMessage['type']> =
+  PopupMessageResult extends infer Result
+    ? Result extends { type: infer ResultType }
+      ? T extends ResultType
+        ? Result
+        : never
+      : never
+    : never;
+
+export type PopupMessageResultFor<M extends PopupMessage> =
+  M extends DashboardPlanCreateMessage
+    ? Extract<PopupMessageResult, { type: 'plan.create'; data: Plan }>
+    : M extends LegacyPlanCreateMessage
+      ? Extract<PopupMessageResult, { type: 'plan.create'; data: SitePlan }>
+      : PopupMessageResultForType<M['type']>;
+
+export async function sendToBackground<M extends PopupMessage>(
+  message: M
+): Promise<PopupMessageResultFor<M>> {
   const response = (await chrome.runtime.sendMessage(message)) as unknown;
   if (!isBackgroundResponse(response))
     throw new Error('BACKGROUND_RESPONSE_INVALID');
   if (!response.ok)
     throw new Error(`${response.error.code}:${response.error.message}`);
-  return response.data;
+  return response.data as PopupMessageResultFor<M>;
 }

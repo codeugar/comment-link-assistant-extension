@@ -122,6 +122,12 @@
   "missingKieApiKey": {
     "message": "请填写所选 KIE 模型的 API Key。"
   },
+  "openDashboard": {
+    "message": "\u6253\u5f00\u770b\u677f"
+  },
+  "dashboardOpenFailed": {
+    "message": "\u65e0\u6cd5\u6253\u5f00\u770b\u677f"
+  },
   "openSettings": {
     "message": "打开设置"
   },
@@ -242,6 +248,9 @@
   "continueBatch": {
     "message": "继续批次"
   },
+  "skipCurrentTarget": {
+    "message": "跳过此目标并继续"
+  },
   "stopBatch": {
     "message": "停止批次"
   },
@@ -252,10 +261,16 @@
     "message": "打开当前目标"
   },
   "batchPausedLoginDescription": {
-    "message": "批次已暂停。请先在打开的目标页面手动登录，然后点击继续。"
+    "message": "批次已暂停。请先在打开的目标页面手动登录，然后点击继续；也可跳过此目标。"
   },
   "batchPausedCaptchaDescription": {
-    "message": "批次已暂停。请先在打开的目标页面完成 CAPTCHA，然后点击继续。"
+    "message": "批次已暂停。请先在打开的目标页面完成 CAPTCHA，然后点击继续；也可跳过此目标。"
+  },
+  "batchSkippedLoginDescription": {
+    "message": "此目标需要登录，已跳过。"
+  },
+  "batchSkippedCaptchaDescription": {
+    "message": "此目标需要 CAPTCHA，已跳过。"
   },
   "batchCompletedTitle": {
     "message": "批次已完成"
@@ -343,6 +358,9 @@
   },
   "batchStatusFailed": {
     "message": "失败"
+  },
+  "batchStatusFiltered": {
+    "message": "\u5df2\u8fc7\u6ee4"
   },
   "batchStatusStopped": {
     "message": "已停止"

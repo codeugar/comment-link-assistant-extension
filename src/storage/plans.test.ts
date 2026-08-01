@@ -5,6 +5,7 @@ import {
   type SitePlan,
   deletePlan,
   getPlans,
+  parseStoredPlans,
   savePlan,
 } from './plans';
 
@@ -59,6 +60,10 @@ describe('plans storage', () => {
   it('treats invalid stored data as an empty map', async () => {
     await chrome.storage.local.set({ [PLANS_STORAGE_KEY]: [1, 2, 3] });
     expect(await getPlans()).toEqual({});
+  });
+
+  it('exposes malformed raw storage to the migration caller', () => {
+    expect(parseStoredPlans([1, 2, 3])).toBeNull();
   });
 
   it('rejects an out-of-range chunk size on save', async () => {

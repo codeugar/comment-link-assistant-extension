@@ -3,3 +3,9 @@ node_modules/
 .wxt/
 *.log
 .DS_Store
+# Local analysis, dependency, and generated-report artifacts
+.codex-work/
+.pnpm-store/
+.tools/
+outputs/
+workbook-previews/

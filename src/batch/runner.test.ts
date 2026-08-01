@@ -172,6 +172,44 @@ describe('batch runner', () => {
     });
   });
 
+  it('skips a filtered target before opening, generating, or submitting it', async () => {
+    const context = dependencies(initialBatch(), {
+      isTargetFiltered: vi.fn(async () => true),
+    });
+
+    expect(await advanceBatchStep(context.deps)).toBe('wait');
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      currentIndex: 1,
+      items: [{ status: 'filtered', message: 'FILTER_LIST_MATCHED' }],
+    });
+    expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
+    expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+    expect(context.deps.generateComment).not.toHaveBeenCalled();
+    expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
+  });
+
+  it('re-checks a target added to the filter list before a paused batch resumes', async () => {
+    const paused = pauseCurrentItem(
+      initialBatch(),
+      'login_required',
+      'LOGIN_REQUIRED',
+      3
+    );
+    const resumed = resumeBatch(paused, 4);
+    const context = dependencies(resumed, {
+      isTargetFiltered: vi.fn(async () => true),
+    });
+
+    expect(await advanceBatchStep(context.deps)).toBe('wait');
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'filtered', message: 'FILTER_LIST_MATCHED' }],
+    });
+    expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
+    expect(context.deps.getWorkerTab).not.toHaveBeenCalled();
+  });
+
   it('analyzes a still-loading on-target tab without waiting for full load', async () => {
     const batch = updateBatchProgress(
       initialBatch(),
@@ -760,10 +798,10 @@ describe('batch runner', () => {
     expect(context.read()?.items[0]).toMatchObject({ status: 'no_form' });
   });
 
-  it('uses a required website field even when inline placement was preferred', async () => {
+  it('uses any detected website field even when inline placement was preferred', async () => {
     const planned = analysis();
     planned.form.hasWebsiteField = true;
-    planned.form.requiresWebsiteField = true;
+    planned.form.requiresWebsiteField = false;
     let batch = initialBatch();
     batch = {
       ...batch,
@@ -1271,6 +1309,58 @@ describe('batch runner', () => {
     expect(context.deps.analyzeTab).not.toHaveBeenCalled();
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
   });
+
+  it.each(['click_dispatched', 'verifying'] as const)(
+    'reopens a closed worker tab to verify a %s item without submitting again',
+    async (status) => {
+      const batch = updateBatchProgress(
+        initialBatch(),
+        {
+          workerTabId: 7,
+          item: { status, prepared },
+        },
+        3
+      );
+      const createWorkerTab = vi.fn(async (url: string) => ({
+        id: 8,
+        url,
+        status: 'loading',
+      }));
+      const context = dependencies(batch, {
+        getWorkerTab: vi.fn(async () => null),
+        createWorkerTab,
+      });
+
+      await expect(advanceBatchStep(context.deps)).resolves.toBe('continue');
+      expect(context.read()).toMatchObject({
+        status: 'running',
+        items: [
+          {
+            status: 'opening',
+            message: 'BATCH_RESUME_VERIFICATION_REQUIRED',
+          },
+        ],
+      });
+      expect(context.read()?.workerTabId).toBeUndefined();
+
+      await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
+      expect(createWorkerTab).toHaveBeenCalledWith(
+        'https://blog.example/post',
+        'batch-1'
+      );
+      expect(context.read()).toMatchObject({
+        workerTabId: 8,
+        items: [
+          {
+            status: 'opening',
+            message: 'BATCH_VERIFICATION_NAVIGATION_PENDING',
+          },
+        ],
+      });
+      expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
+      expect(context.deps.verifyTabSubmission).not.toHaveBeenCalled();
+    }
+  );
 
   it('pauses when a post-submit custom same-origin redirect renders a login gate', async () => {
     const batch = updateBatchProgress(

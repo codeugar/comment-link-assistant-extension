@@ -680,9 +680,93 @@ function isConfidentCommentForm(
 
 type InputKind = 'name' | 'email' | 'website';
 
+const WEBSITE_ACCESSIBLE_LABEL =
+  /\b(?:website|web(?:[\s_-]?site)?|homepage|url)\b/i;
+
+function associatedInputLabelText(input: HTMLInputElement): string {
+  const labels = new Set<Element>();
+  for (const label of Array.from(input.labels ?? [])) labels.add(label);
+  const wrappingLabel = input.closest('label');
+  if (wrappingLabel) labels.add(wrappingLabel);
+  if (input.id) {
+    for (const label of Array.from(
+      input.ownerDocument.querySelectorAll('label[for]')
+    )) {
+      if (label.getAttribute('for') === input.id) labels.add(label);
+    }
+  }
+  const precedingLabel = input.previousElementSibling;
+  if (precedingLabel?.tagName === 'LABEL') labels.add(precedingLabel);
+
+  const labelledBy = input.getAttribute('aria-labelledby') ?? '';
+  const referencedText = labelledBy
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => input.ownerDocument.getElementById(id))
+    .filter((element): element is HTMLElement => element !== null)
+    .map((element) => visibleTextContent(element));
+
+  return normalizeWhitespace(
+    [...labels]
+      .map((label) => visibleTextContent(label))
+      .concat(referencedText)
+      .join(' ')
+  ).slice(0, 500);
+}
+
+function inputSemanticDescriptor(input: HTMLInputElement): string {
+  return normalizeWhitespace(
+    [
+      input.getAttribute('autocomplete'),
+      input.getAttribute('inputmode'),
+      input.getAttribute('title'),
+      input.getAttribute('aria-label'),
+      associatedInputLabelText(input),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  ).slice(0, 500);
+}
+
+function hasAutocompleteToken(input: HTMLInputElement, token: string): boolean {
+  return (input.getAttribute('autocomplete') ?? '')
+    .toLowerCase()
+    .split(/\s+/)
+    .includes(token);
+}
+
+function acceptsWebsiteValue(input: HTMLInputElement): boolean {
+  return ![
+    'button',
+    'checkbox',
+    'color',
+    'date',
+    'datetime-local',
+    'email',
+    'file',
+    'hidden',
+    'image',
+    'month',
+    'number',
+    'password',
+    'radio',
+    'range',
+    'reset',
+    'search',
+    'submit',
+    'tel',
+    'time',
+    'week',
+  ].includes(input.type.toLowerCase());
+}
 function scoreInput(input: HTMLInputElement, kind: InputKind): number {
   if (!isVisible(input) || input.disabled) return Number.NEGATIVE_INFINITY;
-  const descriptor = elementDescriptor(input);
+  if (kind === 'website' && !acceptsWebsiteValue(input)) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const semanticDescriptor = inputSemanticDescriptor(input);
+  const descriptor = `${elementDescriptor(input)} ${semanticDescriptor}`;
   const patterns: Record<InputKind, RegExp> = {
     name: /author|display.?name|your.?name|\bname\b|nickname|姓名|昵称|暱稱/i,
     email: /e-?mail|邮箱|郵箱|电子邮件|電子郵件/i,
@@ -690,7 +774,15 @@ function scoreInput(input: HTMLInputElement, kind: InputKind): number {
   };
   let score = patterns[kind].test(descriptor) ? 8 : 0;
   if (kind === 'email' && input.type === 'email') score += 8;
-  if (kind === 'website' && input.type === 'url') score += 8;
+  if (kind === 'website') {
+    // HTML URL semantics and accessible labels are language-independent (or
+    // explicitly associated with this exact control), unlike a broad class/id
+    // substring. The nearby comment form still provides the safety boundary.
+    if (input.type === 'url') score += 12;
+    if (hasAutocompleteToken(input, 'url')) score += 14;
+    if (input.inputMode === 'url') score += 4;
+    if (WEBSITE_ACCESSIBLE_LABEL.test(semanticDescriptor)) score += 12;
+  }
   if (kind === 'name' && /user.?name|login/i.test(descriptor)) score -= 10;
   return score;
 }

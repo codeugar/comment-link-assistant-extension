@@ -17,6 +17,7 @@ export const BATCH_ITEM_STATUSES = [
   'no_form',
   'validation_error',
   'failed',
+  'filtered',
   'stopped',
 ] as const;
 
@@ -213,6 +214,7 @@ const completedItemStatuses = new Set<BatchItemStatus>([
   'no_form',
   'validation_error',
   'failed',
+  'filtered',
   'stopped',
 ]);
 
