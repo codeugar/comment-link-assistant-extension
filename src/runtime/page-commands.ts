@@ -4,11 +4,12 @@ import {
   type PageCommandResult,
 } from '@/page/command';
 import {
-  hasWordPressSubmitReceipt,
+  getWordPressSubmitReceipt,
   matchesWordPressCommentPathname,
 } from '@/page/receipts';
 import type {
   CommentFrameReference,
+  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionExpectation,
   PageSubmissionInput,
@@ -19,7 +20,10 @@ import type {
 } from '@/page/types';
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
-const PAGE_COMMAND_TIMEOUT_MS = 10_000;
+// Ad-heavy recipe pages can keep the content-script message channel busy well
+// past 10 seconds even after the form is visibly filled. Give prepare/click/
+// verify enough headroom to return instead of recording a transient failure.
+const PAGE_COMMAND_TIMEOUT_MS = 120_000;
 const JETPACK_COMMENT_FRAME_HOST = 'jetpack.wordpress.com';
 const JETPACK_COMMENT_FRAME_PATH = '/jetpack-comment';
 // A promoted Jetpack frame commits asynchronously after analyze sets its src, so
@@ -28,8 +32,8 @@ const JETPACK_FRAME_RESOLVE_TIMEOUT_MS = 8_000;
 const JETPACK_FRAME_POLL_INTERVAL_MS = 250;
 // A read-only analyze now self-settles heavy pages (bounded DOMContentLoaded +
 // mutation waits) and has no double-submit risk, so it gets generous headroom.
-// Mutating commands (submit.prepare / submit.click / verify) keep
-// the tight 10s bound.
+// Mutating commands (submit.prepare / submit.click / verify) use the bounded
+// 2-minute window above.
 const ANALYZE_COMMAND_TIMEOUT_MS = 30_000;
 const activeSubmissionTabs = new Set<number>();
 
@@ -227,6 +231,13 @@ function readSubmission(result: PageCommandResult): PageSubmissionResult {
   );
 }
 
+function readModerationCheck(result: PageCommandResult): ModerationCheckResult {
+  if (result.type === 'moderation-check') return result.result;
+  throw new Error(
+    result.type === 'error' ? result.message : 'PAGE_MODERATION_CHECK_FAILED'
+  );
+}
+
 function readPreparation(result: PageCommandResult): PageSubmissionPreparation {
   if (result.type === 'preparation') return result.preparation;
   throw new Error(
@@ -401,33 +412,55 @@ async function clickPreparedJetpackSubmission(
 
 export async function verifyTabSubmission(
   tabId: number,
-  prepared: Pick<PreparedPageSubmission, 'fingerprint' | 'baseline'>,
+  prepared: Pick<
+    PreparedPageSubmission,
+    'fingerprint' | 'baseline' | 'websiteUrl'
+  >,
   expectedUrl: string
 ): Promise<PageSubmissionResult> {
   const current = await chrome.tabs.get(tabId).catch(() => null);
-  // The WordPress redirect receipt on the tab URL is authoritative and needs
-  // no content script — the page may still be loading and stay unreachable
-  // long past the command timeout.
-  if (current && hasWordPressSubmitReceipt(current.url ?? '', expectedUrl)) {
-    return {
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: true,
-    };
-  }
+  // A WordPress moderation receipt is authoritative. A bare #comment-ID is
+  // only an acceptance receipt, so public display still requires a DOM URL.
+  const receipt = current
+    ? getWordPressSubmitReceipt(current.url ?? '', expectedUrl)
+    : null;
   if (
     !current ||
     !isAllowedSubmissionReturnUrl(current.url ?? '', expectedUrl)
   ) {
     throw new Error('PAGE_CHANGED_SINCE_SUBMISSION');
   }
-  return readSubmission(
+  try {
+    const result = readSubmission(
+      await executePageCommand(tabId, {
+        type: 'verify',
+        fingerprint: prepared.fingerprint,
+        baseline: prepared.baseline,
+        expectedUrl,
+        targetWebsiteUrl: prepared.websiteUrl ?? '',
+      })
+    );
+    if (receipt === 'pending_moderation' && result.status !== 'published') {
+      return pendingModerationSubmission(prepared.fingerprint);
+    }
+    return result;
+  } catch (error) {
+    if (receipt !== 'pending_moderation') throw error;
+    return pendingModerationSubmission(prepared.fingerprint);
+  }
+}
+
+/** Executes the dedicated read-only follow-up command; it never submits. */
+export async function checkTabForPublishedComment(
+  tabId: number,
+  fingerprint: string,
+  targetWebsiteUrl?: string
+): Promise<ModerationCheckResult> {
+  return readModerationCheck(
     await executePageCommand(tabId, {
-      type: 'verify',
-      fingerprint: prepared.fingerprint,
-      baseline: prepared.baseline,
-      expectedUrl,
+      type: 'moderation.check',
+      ...(fingerprint ? { fingerprint } : {}),
+      ...(targetWebsiteUrl ? { targetWebsiteUrl } : {}),
     })
   );
 }
@@ -486,20 +519,35 @@ export async function submitCurrentPage(
     } catch {
       await waitForTabLoad(tabId);
       const current = await chrome.tabs.get(tabId).catch(() => null);
+      const receipt = current
+        ? getWordPressSubmitReceipt(current.url ?? '', target.url)
+        : null;
       if (
         !current ||
         !isAllowedSubmissionReturnUrl(current.url ?? '', target.url)
       ) {
         return unconfirmedSubmission(preparation.prepared.fingerprint);
       }
-      return readSubmission(
-        await executePageCommand(tabId, {
-          type: 'verify',
-          fingerprint: preparation.prepared.fingerprint,
-          baseline: preparation.prepared.baseline,
-          expectedUrl: target.url,
-        })
-      );
+      try {
+        const result = readSubmission(
+          await executePageCommand(tabId, {
+            type: 'verify',
+            fingerprint: preparation.prepared.fingerprint,
+            baseline: preparation.prepared.baseline,
+            expectedUrl: target.url,
+            targetWebsiteUrl: input.websiteUrl,
+          })
+        );
+        if (receipt === 'pending_moderation' && result.status !== 'published') {
+          return pendingModerationSubmission(preparation.prepared.fingerprint);
+        }
+        return result;
+      } catch {
+        if (receipt === 'pending_moderation') {
+          return pendingModerationSubmission(preparation.prepared.fingerprint);
+        }
+        return unconfirmedSubmission(preparation.prepared.fingerprint);
+      }
     }
   } finally {
     activeSubmissionTabs.delete(tabId);
@@ -546,8 +594,19 @@ function isAllowedSubmissionReturnUrl(
 
 function unconfirmedSubmission(fingerprint: string): PageSubmissionResult {
   return {
-    status: 'submitted',
-    message: 'COMMENT_SUBMITTED',
+    status: 'unconfirmed',
+    message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+    fingerprint,
+    clickOccurred: true,
+  };
+}
+
+function pendingModerationSubmission(
+  fingerprint: string
+): PageSubmissionResult {
+  return {
+    status: 'pending_moderation',
+    message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
     fingerprint,
     clickOccurred: true,
   };

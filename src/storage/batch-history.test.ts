@@ -24,7 +24,12 @@ function terminalBatch(id: string, now = 1_000): BatchSnapshot {
     settings,
     now,
   });
-  batch = completeCurrentItem(batch, 'submitted', 'COMMENT_SUBMITTED', now + 1);
+  batch = completeCurrentItem(
+    batch,
+    'published',
+    'COMMENT_PUBLISHED_COMMENT_ANCHOR',
+    now + 1
+  );
   batch = completeCurrentItem(batch, 'failed', 'BOOM', now + 2);
   return batch;
 }
@@ -48,12 +53,18 @@ describe('batch history storage', () => {
       settings,
       createdAt: 1_000,
       archivedAt: 5_000,
-      counts: { submitted: 1, failed: 1, total: 2 },
+      counts: {
+        published: 1,
+        pendingModeration: 0,
+        unconfirmed: 0,
+        failed: 1,
+        total: 2,
+      },
       items: [
         {
           url: 'https://blog.example/one',
-          status: 'submitted',
-          message: 'COMMENT_SUBMITTED',
+          status: 'published',
+          message: 'COMMENT_PUBLISHED_COMMENT_ANCHOR',
         },
         { url: 'https://forum.example/two', status: 'failed', message: 'BOOM' },
       ],
@@ -70,11 +81,13 @@ describe('batch history storage', () => {
     });
     batch = completeCurrentItem(batch, 'no_form', 'NF', 1_100);
     batch = completeCurrentItem(batch, 'validation_error', 'VE', 1_200);
-    batch = completeCurrentItem(batch, 'submitted', 'OK', 1_300);
+    batch = completeCurrentItem(batch, 'unconfirmed', 'OK', 1_300);
     await archiveBatch(batch, 2_000);
 
     expect((await getBatchHistory())[0]?.counts).toEqual({
-      submitted: 1,
+      published: 0,
+      pendingModeration: 0,
+      unconfirmed: 1,
       failed: 2,
       total: 3,
     });
@@ -126,12 +139,51 @@ describe('batch history storage', () => {
       settings: { ...settings, siteId: 'site-9', siteLabel: 'Museimage' },
       now: 1_000,
     });
-    batch = completeCurrentItem(batch, 'submitted', 'OK', 1_100);
+    batch = completeCurrentItem(batch, 'published', 'OK', 1_100);
     await archiveBatch(batch, 2_000);
 
     expect((await getBatchHistory())[0]?.settings).toMatchObject({
       siteId: 'site-9',
       siteLabel: 'Museimage',
     });
+  });
+
+  it('migrates ambiguous submitted history into the unconfirmed bucket', async () => {
+    await chrome.storage.local.set({
+      [HISTORY_STORAGE_KEY]: [
+        {
+          id: 'legacy-history',
+          settings,
+          createdAt: 1_000,
+          archivedAt: 2_000,
+          counts: { submitted: 1, failed: 0, total: 1 },
+          items: [
+            {
+              url: 'https://blog.example/legacy',
+              status: 'submitted',
+              message: 'COMMENT_SUBMITTED',
+            },
+          ],
+        },
+      ],
+    });
+
+    await expect(getBatchHistory()).resolves.toMatchObject([
+      {
+        counts: {
+          published: 0,
+          pendingModeration: 0,
+          unconfirmed: 1,
+          failed: 0,
+          total: 1,
+        },
+        items: [
+          {
+            status: 'unconfirmed',
+            message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+          },
+        ],
+      },
+    ]);
   });
 });

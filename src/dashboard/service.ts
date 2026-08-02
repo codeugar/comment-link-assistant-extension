@@ -8,19 +8,23 @@ import {
   type DashboardBatchReference,
   DashboardDataError,
   type DashboardRepository,
+  type ModerationPublishedTransition,
+  type PendingModerationCheck,
+  type RecordModerationCheckInput,
   type DashboardStandaloneRunReference as StoredStandaloneRunReference,
   createDashboardRepository,
   normalizePlanUrls,
 } from './db';
 import type {
+  Attempt,
   BatchRunStart,
   CreatePlanInput,
   DashboardRunKind,
   Plan,
   PlanBatch,
   PlanDetail,
-  Run,
   PlanTarget,
+  Run,
 } from './model';
 import { parseDashboardTargetRows } from './target-import';
 
@@ -90,6 +94,8 @@ type RepositoryPort = Pick<
   | 'getBatchTargets'
   | 'getDashboardSummary'
   | 'getNextRunnableBatch'
+  | 'getPendingModerationChecks'
+  | 'getRecentModerationTransitions'
   | 'getPlanDetail'
   | 'getRun'
   | 'getTarget'
@@ -97,6 +103,7 @@ type RepositoryPort = Pick<
   | 'listPlans'
   | 'prepareRetry'
   | 'renamePlan'
+  | 'recordModerationCheck'
   | 'resumeBatchRun'
   | 'startBatchRun'
   | 'startStandaloneBatchRun'
@@ -186,14 +193,18 @@ function activeReference(value: unknown): DashboardActiveRunReference | null {
 
 function snapshotCounts(snapshot: BatchSnapshot) {
   let submitted = 0;
+  let unconfirmed = 0;
   let failed = 0;
   let filtered = 0;
   for (const item of snapshot.items) {
-    if (item.status === 'submitted') submitted += 1;
-    else if (failedBatchStatuses.has(item.status)) failed += 1;
+    if (item.status === 'published' || item.status === 'pending_moderation') {
+      submitted += 1;
+    } else if (item.status === 'unconfirmed' || item.status === 'submitted') {
+      unconfirmed += 1;
+    } else if (failedBatchStatuses.has(item.status)) failed += 1;
     else if (item.status === 'filtered') filtered += 1;
   }
-  const processed = submitted + failed + filtered;
+  const processed = submitted + unconfirmed + failed + filtered;
   return {
     total: snapshot.items.length,
     processed,
@@ -357,6 +368,37 @@ export class DashboardService {
   async getTarget(planId: string, targetId: string): Promise<PlanTarget> {
     const target = await this.repository.getTarget(planId, targetId);
     if (!target) throw new DashboardDataError('PLAN_TARGET_NOT_FOUND');
+    return target;
+  }
+
+  getPendingModerationChecks(
+    limit?: number
+  ): Promise<PendingModerationCheck[]> {
+    return this.repository.getPendingModerationChecks(limit);
+  }
+
+  async getTargetWithAttempts(
+    planId: string,
+    targetId: string
+  ): Promise<PlanTarget & { attempts: Attempt[] }> {
+    const target = await this.getTarget(planId, targetId);
+    return {
+      ...target,
+      attempts: await this.repository.getAttempts(target.id),
+    };
+  }
+
+  getRecentModerationTransitions(
+    limit?: number
+  ): Promise<ModerationPublishedTransition[]> {
+    return this.repository.getRecentModerationTransitions(limit);
+  }
+
+  async recordModerationCheck(
+    input: RecordModerationCheckInput
+  ): Promise<PlanTarget | null> {
+    const target = await this.repository.recordModerationCheck(input);
+    if (target) await this.bumpRevision();
     return target;
   }
 

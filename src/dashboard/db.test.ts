@@ -82,10 +82,16 @@ async function completedFirstBatch(
   });
   snapshot = completeCurrentItem(
     snapshot,
-    'submitted',
+    'published',
     'COMMENT_SUBMITTED',
     at + 1
   );
+  snapshot = {
+    ...snapshot,
+    items: snapshot.items.map((item, index) =>
+      index === 0 ? { ...item, comment: 'A helpful generated comment.' } : item
+    ),
+  };
   snapshot = completeCurrentItem(snapshot, 'failed', 'NETWORK', at + 2);
   await repo.syncBatchSnapshot(detail.plan.id, batch.id, snapshot, {
     runId: start.run.id,
@@ -163,34 +169,24 @@ describe('DashboardRepository schema and plans', () => {
     ).rejects.toMatchObject({ code: 'TARGET_PAGE_INVALID' });
   });
 
-  it('allows only one unarchived plan per promoting website', async () => {
+  it('allows multiple plans for the same promoting website', async () => {
     const { repo } = repository();
     const first = await repo.createPlan(planInput());
-    await expect(
-      repo.createPlan(
-        planInput({
-          name: 'Second',
-          promotingSiteId: 'site-2',
-          promotingSiteLabel: 'Same website, another profile',
-          promotingWebsiteUrl: 'HTTPS://PRODUCT.EXAMPLE/#dashboard',
-          now: 11_000,
-        })
-      )
-    ).rejects.toMatchObject({ code: 'PLAN_SITE_CONFLICT' });
-
-    await repo.archivePlan(first.plan.id, 12_000);
     const second = await repo.createPlan(
       planInput({
         name: 'Second',
         promotingSiteId: 'site-2',
         promotingSiteLabel: 'Same website, another profile',
         promotingWebsiteUrl: 'HTTPS://PRODUCT.EXAMPLE/#dashboard',
-        now: 13_000,
+        now: 11_000,
       })
     );
     expect(second.plan.status).toBe('active');
-    expect(await repo.listPlans()).toHaveLength(1);
-    expect(await repo.listPlans({ includeArchived: true })).toHaveLength(2);
+    expect(await repo.listPlans()).toHaveLength(2);
+    expect((await repo.listPlans()).map((plan) => plan.id)).toEqual([
+      second.plan.id,
+      first.plan.id,
+    ]);
   });
 
   it('renames an active plan without changing batches or targets', async () => {
@@ -328,7 +324,7 @@ describe('DashboardRepository execution semantics', () => {
       batchId: detail.batches[0]?.id,
     });
     expect(firstPage.items.map((target) => target.status)).toEqual([
-      'submitted',
+      'published',
       'failed',
     ]);
     expect(firstPage.items[1]?.lastError).toMatchObject({
@@ -337,6 +333,13 @@ describe('DashboardRepository execution semantics', () => {
     });
     expect(await repo.getAttempts(firstPage.items[1]!.id)).toMatchObject([
       { attemptNumber: 1, status: 'failed' },
+    ]);
+    expect(await repo.getAttempts(firstPage.items[0]!.id)).toMatchObject([
+      {
+        attemptNumber: 1,
+        status: 'published',
+        comment: 'A helpful generated comment.',
+      },
     ]);
 
     const summary = await repo.getDashboardSummary({ now: 20_003 });
@@ -394,7 +397,7 @@ describe('DashboardRepository execution semantics', () => {
     );
     snapshot = completeCurrentItem(
       snapshot,
-      'submitted',
+      'published',
       'COMMENT_SUBMITTED',
       20_002
     );
@@ -447,7 +450,7 @@ describe('DashboardRepository execution semantics', () => {
     stale = updateBatchProgress(stale, { item: { status: 'opening' } }, 20_001);
     const submitted = completeCurrentItem(
       stale,
-      'submitted',
+      'published',
       'COMMENT_SUBMITTED',
       20_001
     );
@@ -460,7 +463,7 @@ describe('DashboardRepository execution semantics', () => {
     });
 
     expect((await repo.getTargets(detail.plan.id)).items[0]).toMatchObject({
-      status: 'submitted',
+      status: 'published',
       latestMessage: 'COMMENT_SUBMITTED',
     });
     expect(
@@ -506,7 +509,7 @@ describe('DashboardRepository execution semantics', () => {
     );
     snapshot = completeCurrentItem(
       snapshot,
-      'submitted',
+      'published',
       'COMMENT_SUBMITTED',
       20_002
     );
@@ -518,12 +521,12 @@ describe('DashboardRepository execution semantics', () => {
     const target = (await repo.getTargets(detail.plan.id)).items[0]!;
     expect(target).toMatchObject({
       url: 'https://blog.example/one',
-      status: 'submitted',
+      status: 'published',
     });
     expect(await repo.getAttempts(target.id)).toMatchObject([
       {
         url: 'https://blog.example/one',
-        status: 'submitted',
+        status: 'published',
       },
     ]);
   });
@@ -547,7 +550,7 @@ describe('DashboardRepository execution semantics', () => {
       settings,
       now: morning,
     });
-    snapshot = completeCurrentItem(snapshot, 'submitted', 'OK', morning + 1);
+    snapshot = completeCurrentItem(snapshot, 'published', 'OK', morning + 1);
     await repo.syncBatchSnapshot(detail.plan.id, first.id, snapshot, {
       runId: start.run.id,
     });
@@ -579,7 +582,7 @@ describe('DashboardRepository execution semantics', () => {
       settings,
       now: 20_000,
     });
-    snapshot = completeCurrentItem(snapshot, 'submitted', 'OK', 20_001);
+    snapshot = completeCurrentItem(snapshot, 'published', 'OK', 20_001);
     snapshot = stopBatch(snapshot, 20_002);
     await repo.syncBatchSnapshot(detail.plan.id, batch.id, snapshot, {
       runId: start.run.id,
@@ -626,7 +629,7 @@ describe('DashboardRepository execution semantics', () => {
     );
     retriedSnapshot = completeCurrentItem(
       retriedSnapshot,
-      'submitted',
+      'published',
       'OK_AFTER_RETRY',
       30_001
     );
@@ -651,7 +654,7 @@ describe('DashboardRepository execution semantics', () => {
     expect(await repo.getAttempts(failed.id)).toHaveLength(2);
   });
 
-  it('keeps a completed plan unique until it is archived', async () => {
+  it('keeps completed plans while allowing another plan for the same website', async () => {
     const { repo } = repository();
     const detail = await repo.createPlan(
       planInput({ urls: ['https://one.example/post'], chunkSize: 1 })
@@ -667,7 +670,7 @@ describe('DashboardRepository execution semantics', () => {
       settings,
       now: 20_000,
     });
-    snapshot = completeCurrentItem(snapshot, 'submitted', 'OK', 20_001);
+    snapshot = completeCurrentItem(snapshot, 'published', 'OK', 20_001);
     await repo.syncBatchSnapshot(detail.plan.id, batch.id, snapshot, {
       runId: start.run.id,
     });
@@ -675,8 +678,10 @@ describe('DashboardRepository execution semantics', () => {
     expect((await repo.getPlanDetail(detail.plan.id))?.plan.status).toBe(
       'completed'
     );
-    await expect(
-      repo.createPlan(planInput({ name: 'Still conflicts', now: 30_000 }))
-    ).rejects.toBeInstanceOf(DashboardDataError);
+    const next = await repo.createPlan(
+      planInput({ name: 'Next plan', now: 30_000 })
+    );
+    expect(next.plan.status).toBe('active');
+    expect(await repo.listPlans()).toHaveLength(2);
   });
 });

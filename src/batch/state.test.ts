@@ -34,6 +34,35 @@ function createTwoItemBatch() {
 }
 
 describe('batch state', () => {
+  it('accepts the canonical Website value in a prepared item', () => {
+    const batch = createTwoItemBatch();
+    const preparedBatch = {
+      ...batch,
+      items: [
+        {
+          ...batch.items[0],
+          status: 'prepared' as const,
+          prepared: {
+            fingerprint: 'comment-fingerprint',
+            comment: 'A useful comment',
+            websiteUrl: 'https://product.example',
+            domToken: 'dom-token',
+            baseline: { feedbackMessages: [], renderedComment: false },
+            expected: {
+              url: 'https://blog.example/post',
+              editorLabel: 'Comment',
+              submitLabel: 'Post comment',
+              hasWebsiteField: true,
+            },
+          },
+        },
+        ...batch.items.slice(1),
+      ],
+    };
+
+    expect(() => batchSnapshotSchema.parse(preparedBatch)).not.toThrow();
+  });
+
   it('creates a normalized queue with a key-free settings snapshot', () => {
     const batch = createTwoItemBatch();
 
@@ -287,40 +316,53 @@ describe('batch state', () => {
   it.each([
     ['login_required', 'LOGIN_REQUIRED_SKIPPED'],
     ['captcha_required', 'CAPTCHA_REQUIRED_SKIPPED'],
-  ] as const)('skips a pre-submit %s gate and continues the queue', (status, message) => {
-    const paused = pauseCurrentItem(createTwoItemBatch(), status, 'MANUAL_GATE', 2_000);
-    const skipped = skipCurrentManualGate(paused, 3_000);
+  ] as const)(
+    'skips a pre-submit %s gate and continues the queue',
+    (status, message) => {
+      const paused = pauseCurrentItem(
+        createTwoItemBatch(),
+        status,
+        'MANUAL_GATE',
+        2_000
+      );
+      const skipped = skipCurrentManualGate(paused, 3_000);
 
-    expect(skipped).toMatchObject({ status: 'running', currentIndex: 1 });
-    expect(skipped.items[0]).toMatchObject({
-      status: 'failed',
-      message,
-      updatedAt: 3_000,
-      prepared: null,
-    });
-    expect(skipped.items[0]?.events.at(-1)).toEqual({
-      status: 'failed',
-      message,
-      at: 3_000,
-    });
-    expect(skipped.items[1]?.status).toBe('queued');
-  });
+      expect(skipped).toMatchObject({ status: 'running', currentIndex: 1 });
+      expect(skipped.items[0]).toMatchObject({
+        status: 'failed',
+        message,
+        updatedAt: 3_000,
+        prepared: null,
+      });
+      expect(skipped.items[0]?.events.at(-1)).toEqual({
+        status: 'failed',
+        message,
+        at: 3_000,
+      });
+      expect(skipped.items[1]?.status).toBe('queued');
+    }
+  );
 
   it('does not skip a manual gate after a submit click may have occurred', () => {
     let batch = updateBatchProgress(
       createTwoItemBatch(),
-      { item: { status: 'prepared', prepared: {
-        fingerprint: 'fingerprint',
-        comment: 'Comment',
-        domToken: 'token',
-        baseline: { feedbackMessages: [], renderedComment: false },
-        expected: {
-          url: 'https://blog.example/post',
-          editorLabel: 'Comment',
-          submitLabel: 'Post',
-          hasWebsiteField: false,
+      {
+        item: {
+          status: 'prepared',
+          prepared: {
+            fingerprint: 'fingerprint',
+            comment: 'Comment',
+            domToken: 'token',
+            baseline: { feedbackMessages: [], renderedComment: false },
+            expected: {
+              url: 'https://blog.example/post',
+              editorLabel: 'Comment',
+              submitLabel: 'Post',
+              hasWebsiteField: false,
+            },
+          },
         },
-      } } },
+      },
       2_000
     );
     batch = pauseCurrentItem(batch, 'login_required', 'LOGIN_REQUIRED', 3_000);

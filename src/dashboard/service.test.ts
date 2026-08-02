@@ -204,7 +204,7 @@ describe('dashboard service', () => {
     await service.resumeBatchRun(detail.plan.id, planBatch.id, snapshot);
     snapshot = completeCurrentItem(
       snapshot,
-      'submitted',
+      'published',
       'COMMENT_SUBMITTED',
       13_000
     );

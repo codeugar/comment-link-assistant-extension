@@ -23,6 +23,10 @@ export const PLAN_TARGET_STATUSES = [
   'blocked',
   'interrupted',
   'filtered',
+  'published',
+  'pending_moderation',
+  'unconfirmed',
+  // Legacy rows that collapsed every click result into a generic success.
   'submitted',
   'no_form',
   'validation_error',
@@ -106,6 +110,9 @@ export interface PlanTarget {
   status: PlanTargetStatus;
   attemptCount: number;
   latestMessage: string;
+  /** Most recent read-only check while a submitted comment awaits moderation. */
+  lastModerationCheckAt?: number;
+  lastModerationCheckMessage?: string;
   lastError?: AttemptError;
   createdAt: number;
   updatedAt: number;
@@ -142,6 +149,13 @@ export interface Attempt {
   attemptNumber: number;
   status: PlanTargetStatus;
   timeline: AttemptEvent[];
+  /**
+   * Generated comment content retained from the worker snapshot. Keeping it
+   * with the attempt lets plan history mirror the side panel after a run ends.
+   */
+  comment?: string;
+  /** Normalized comment prefix used for read-only public-render checks. */
+  commentFingerprint?: string;
   error?: AttemptError;
   createdAt: number;
   updatedAt: number;
@@ -291,6 +305,9 @@ export function isFailedTargetStatus(
 
 export function isProcessedTargetStatus(status: PlanTargetStatus): boolean {
   return (
+    status === 'published' ||
+    status === 'pending_moderation' ||
+    status === 'unconfirmed' ||
     status === 'submitted' ||
     status === 'filtered' ||
     isFailedTargetStatus(status)
@@ -316,14 +333,24 @@ export function countTargetStatuses(
   for (const target of targets) {
     counts.total += 1;
     if (isProcessedTargetStatus(target.status)) counts.processed += 1;
-    if (target.status === 'submitted') counts.submitted += 1;
-    else if (isFailedTargetStatus(target.status)) counts.failed += 1;
+    if (
+      target.status === 'published' ||
+      target.status === 'pending_moderation'
+    ) {
+      counts.submitted += 1;
+    } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
     else if (target.status === 'pending') counts.pending += 1;
     else if (target.status === 'running') counts.running += 1;
     else if (target.status === 'blocked') counts.blocked += 1;
     else if (target.status === 'interrupted') counts.interrupted += 1;
     else if (target.status === 'filtered') counts.filtered += 1;
-    else if (target.status === 'unknown') counts.unknown += 1;
+    else if (
+      target.status === 'unknown' ||
+      target.status === 'unconfirmed' ||
+      target.status === 'submitted'
+    ) {
+      counts.unknown += 1;
+    }
   }
 
   return counts;

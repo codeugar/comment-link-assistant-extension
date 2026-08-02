@@ -583,8 +583,14 @@ textarea:focus {
   background: rgba(211, 75, 44, 0.045);
 }
 
+.site-flow-card.status-published,
+.site-flow-card.status-pending_moderation,
 .site-flow-card.status-submitted {
   border-left-color: var(--green);
+}
+
+.site-flow-card.status-unconfirmed {
+  border-left-color: var(--yellow);
 }
 
 .site-flow-card.status-filtered {
@@ -842,8 +848,14 @@ textarea:focus {
   line-height: 1.35;
 }
 
+.status-published .queue-index,
+.status-pending_moderation .queue-index,
 .status-submitted .queue-index {
   background: var(--green);
+}
+
+.status-unconfirmed .queue-index {
+  background: var(--yellow);
 }
 
 .status-filtered .queue-index {

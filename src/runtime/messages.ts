@@ -8,6 +8,12 @@ import type {
   PlanTargetPage,
 } from '@/dashboard/model';
 import type {
+  ModerationRecheckDashboardData,
+  ModerationRecheckLastRun,
+  ModerationRecheckSettings,
+} from '@/dashboard/moderation-recheck';
+import type {
+  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionResult,
   PageSubmissionTarget,
@@ -93,6 +99,23 @@ export type PopupMessage =
     }
   | { type: 'link-library.remove'; id: string }
   | { type: 'dashboard.getSummary' }
+  | { type: 'moderation.getDashboard' }
+  | { type: 'moderation.runNow' }
+  | {
+      type: 'moderation.addManual';
+      pageUrl: string;
+      targetWebsiteUrl: string;
+    }
+  | { type: 'moderation.recheckManual'; entryId: string }
+  | {
+      type: 'moderation.recheckTarget';
+      planId: string;
+      targetId: string;
+    }
+  | {
+      type: 'moderation.updateSettings';
+      settings: ModerationRecheckSettings;
+    }
   | { type: 'plans.list'; includeArchived?: boolean }
   | { type: 'plan.getDetail'; planId: string }
   | {
@@ -156,6 +179,15 @@ export type PopupMessageResult =
   | { type: 'link-library.update'; data: OutboundLinkLibraryEntry | null }
   | { type: 'link-library.remove'; data: boolean }
   | { type: 'dashboard.getSummary'; data: DashboardSummaryView }
+  | { type: 'moderation.getDashboard'; data: ModerationRecheckDashboardData }
+  | { type: 'moderation.runNow'; data: ModerationRecheckLastRun }
+  | { type: 'moderation.addManual'; data: ModerationRecheckDashboardData }
+  | { type: 'moderation.recheckManual'; data: ModerationRecheckDashboardData }
+  | { type: 'moderation.recheckTarget'; data: ModerationCheckResult }
+  | {
+      type: 'moderation.updateSettings';
+      data: ModerationRecheckDashboardData;
+    }
   | { type: 'plans.list'; data: { plans: Plan[] } }
   | { type: 'plan.getDetail'; data: PlanDetail }
   | { type: 'plan.getTargets'; data: DashboardPlanTargetPage }

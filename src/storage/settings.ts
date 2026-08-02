@@ -20,7 +20,7 @@ function createDefaultSite(): SiteProfile {
     websiteUrl: '',
     displayName: '',
     email: '',
-    linkMode: 'prefer-website-field',
+    linkMode: 'a-tag-newline',
   };
 }
 
@@ -75,7 +75,12 @@ const siteProfileSchema = z
     websiteUrl: optionalHttpUrlSchema,
     displayName: z.string().trim().max(200),
     email: optionalEmailSchema,
-    linkMode: z.enum(['prefer-website-field', 'inline']),
+    linkMode: z.enum([
+      'a-tag-newline',
+      'prefer-website-field',
+      'comment-only',
+      'inline',
+    ]),
   })
   .strict();
 
@@ -103,6 +108,18 @@ function hostnameLabel(websiteUrl: string): string {
   } catch {
     return '';
   }
+}
+
+function normalizeLegacyLinkModes(
+  settings: ExtensionSettings
+): ExtensionSettings {
+  let changed = false;
+  const sites = settings.sites.map((site) => {
+    if (site.linkMode !== 'inline') return site;
+    changed = true;
+    return { ...site, linkMode: 'a-tag-newline' as const };
+  });
+  return changed ? { ...settings, sites } : settings;
 }
 
 // Turns the pre-multi-site flat settings shape ({provider, websiteUrl, ...})
@@ -175,16 +192,23 @@ export async function getSettings(): Promise<ExtensionSettings> {
   const stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY);
   const value = stored[SETTINGS_STORAGE_KEY];
   const parsed = extensionSettingsSchema.safeParse(value);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    const normalized = normalizeLegacyLinkModes(parsed.data);
+    if (normalized !== parsed.data) {
+      await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: normalized });
+    }
+    return normalized;
+  }
 
   const migrated = migrateLegacySettings(value);
   if (migrated !== value) {
     const remigrated = extensionSettingsSchema.safeParse(migrated);
     if (remigrated.success) {
+      const normalized = normalizeLegacyLinkModes(remigrated.data);
       await chrome.storage.local.set({
-        [SETTINGS_STORAGE_KEY]: remigrated.data,
+        [SETTINGS_STORAGE_KEY]: normalized,
       });
-      return remigrated.data;
+      return normalized;
     }
   }
   return createDefaultSettings();
@@ -194,8 +218,9 @@ export async function setSettings(
   settings: ExtensionSettings
 ): Promise<ExtensionSettings> {
   const parsed = extensionSettingsSchema.parse(settings);
-  await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: parsed });
-  return parsed;
+  const normalized = normalizeLegacyLinkModes(parsed);
+  await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: normalized });
+  return normalized;
 }
 
 export async function getProviderApiKeys(): Promise<ProviderApiKeys> {

@@ -65,6 +65,41 @@ describe('batch storage', () => {
     ).toHaveProperty('items.0.events');
   });
 
+  it('migrates an ambiguous submitted item and event to unconfirmed', async () => {
+    const legacy = makeBatch();
+    legacy.items[0] = {
+      ...legacy.items[0],
+      status: 'submitted',
+      message: 'COMMENT_SUBMITTED',
+      events: [
+        {
+          status: 'submitted',
+          message: 'COMMENT_SUBMITTED',
+          at: 1_000,
+        },
+      ],
+    };
+    legacy.status = 'completed';
+    legacy.currentIndex = 1;
+    await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: legacy });
+
+    await expect(getBatch()).resolves.toMatchObject({
+      status: 'completed',
+      items: [
+        {
+          status: 'unconfirmed',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+          events: [
+            {
+              status: 'unconfirmed',
+              message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it('rejects an invalid snapshot instead of persisting it', async () => {
     const invalid = {
       ...makeBatch(),

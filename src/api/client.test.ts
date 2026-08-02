@@ -16,7 +16,7 @@ const input = {
     language: 'en',
     hasWebsiteField: true,
   },
-  linkMode: 'prefer-website-field' as const,
+  linkMode: 'a-tag-newline' as const,
 };
 
 afterEach(() => {
@@ -52,11 +52,14 @@ describe('direct comment generation', () => {
       Authorization: 'Bearer deepseek-key',
       'Content-Type': 'application/json',
     });
-    expect(JSON.parse(String(request?.body))).toMatchObject({
+    const requestBody = JSON.parse(String(request?.body));
+    expect(requestBody).toMatchObject({
       model: 'deepseek-v4-flash',
       stream: false,
       response_format: { type: 'json_object' },
     });
+    expect(requestBody.messages[0].content).toContain('{LINK}');
+    expect(requestBody.messages[0].content).not.toContain('<a href=');
   });
 
   it('calls the KIE Gemini Flash endpoint directly', async () => {
@@ -247,7 +250,7 @@ describe('direct comment generation', () => {
     ).rejects.toThrow('DEEPSEEK_API_KEY_REQUIRED');
   });
 
-  it('keeps the promoted HTML anchor when a Website field exists', async () => {
+  it('keeps the promoted HTML anchor in a-tag-newline mode', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -333,7 +336,70 @@ describe('direct comment generation', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it('keeps a natural inline anchor returned by the provider', async () => {
+  it('materializes one generated link placeholder into a standard HTML anchor', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      comment:
+                        'The resting tip is useful; {LINK} explains the related workflow clearly.',
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, linkMode: 'inline' }
+      )
+    ).resolves.toBe(
+      'The resting tip is useful; <a href="https://product.example\n">Product</a> explains the related workflow clearly.'
+    );
+  });
+
+  it('keeps only the intended href line break, not one between the tag name and attribute', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      comment: 'A useful point with {LINK} in the body.',
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    const result = await generateComment(
+      { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+      { ...input, linkMode: 'inline' }
+    );
+    expect(result).toContain('<a href="https://product.example\n">Product</a>');
+    expect(result).not.toContain('<a\nhref=');
+  });
+
+  it('normalizes a legacy provider anchor through the deterministic placeholder path', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -362,7 +428,7 @@ describe('direct comment generation', () => {
         { ...input, linkMode: 'inline' }
       )
     ).resolves.toBe(
-      'See <a href="https://product.example\n">Explore Product</a> for details.'
+      'See <a href="https://product.example\n">Product</a> for details.'
     );
   });
 
@@ -416,4 +482,40 @@ describe('direct comment generation', () => {
       'One detail stood out: the example. <a href="https://product.example\n">Product</a>'
     );
   });
+
+  it.each(['prefer-website-field', 'comment-only'] as const)(
+    'returns plain comment text for %s mode',
+    async (linkMode) => {
+      const fetchMock = vi.fn<
+        (url: string, request?: RequestInit) => Promise<Response>
+      >(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content:
+                      '{"comment":"The example makes the trade-off clear."}',
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        generateComment(
+          { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+          { ...input, linkMode }
+        )
+      ).resolves.toBe('The example makes the trade-off clear.');
+
+      const request = fetchMock.mock.calls[0]?.[1];
+      const body = JSON.parse(String(request?.body));
+      expect(body.messages[0].content).not.toContain('{LINK}');
+    }
+  );
 });

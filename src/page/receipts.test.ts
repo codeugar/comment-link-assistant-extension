@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { hasWordPressSubmitReceipt } from './receipts';
+import {
+  getWordPressSubmitReceipt,
+  hasWordPressSubmitReceipt,
+} from './receipts';
 
 describe('WordPress submit receipts', () => {
   it('accepts a newly added comment anchor on the permalink', () => {
+    expect(
+      getWordPressSubmitReceipt(
+        'https://blog.example/article#comment-88',
+        'https://blog.example/article'
+      )
+    ).toBe('published');
     expect(
       hasWordPressSubmitReceipt(
         'https://blog.example/article#comment-88',
@@ -12,6 +21,12 @@ describe('WordPress submit receipts', () => {
   });
 
   it('accepts the moderation receipt query on the permalink', () => {
+    expect(
+      getWordPressSubmitReceipt(
+        'https://blog.example/article?unapproved=42&moderation-hash=abc',
+        'https://blog.example/article'
+      )
+    ).toBe('pending_moderation');
     expect(
       hasWordPressSubmitReceipt(
         'https://blog.example/article?unapproved=42&moderation-hash=abc',
@@ -66,6 +81,12 @@ describe('WordPress submit receipts', () => {
   });
 
   it('rejects a bare permalink without any receipt', () => {
+    expect(
+      getWordPressSubmitReceipt(
+        'https://blog.example/article',
+        'https://blog.example/article'
+      )
+    ).toBeNull();
     expect(
       hasWordPressSubmitReceipt(
         'https://blog.example/article',

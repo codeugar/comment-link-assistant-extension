@@ -51,10 +51,7 @@
     "message": "Link placement"
   },
   "linkModePreferWebsiteField": {
-    "message": "Prefer the website field"
-  },
-  "linkModeInline": {
-    "message": "Allow a natural inline link"
+    "message": "Prefer website URL field"
   },
   "saveSettings": {
     "message": "Save settings"
@@ -279,7 +276,7 @@
     "message": "Batch stopped"
   },
   "batchSummary": {
-    "message": "$1 submitted · $2 failed"
+    "message": "$1 displayed · $2 awaiting moderation · $3 unconfirmed · $4 failed"
   },
   "startNewBatch": {
     "message": "Start a new batch"
@@ -354,7 +351,7 @@
     "message": "No comment form"
   },
   "batchStatusValidationError": {
-    "message": "Submission failed"
+    "message": "Pre-submit validation failed"
   },
   "batchStatusFailed": {
     "message": "Failed"
@@ -382,6 +379,9 @@
   },
   "websiteRequiredForTarget": {
     "message": "This form requires a website URL. Nothing was submitted."
+  },
+  "commentBodyLinkRequired": {
+    "message": "Pre-submit link validation failed: the promoted link is missing from the comment body or does not match the configured website URL. Check the protocol, host, and path."
   },
   "unsafeSubmitBlocked": {
     "message": "The selected action was blocked because it was not a safe comment submission. Nothing was submitted."
@@ -487,5 +487,32 @@
   },
   "planEmpty": {
     "message": "No plans yet"
+  },
+  "batchStatusPublished": {
+    "message": "Displayed publicly"
+  },
+  "batchStatusPendingModeration": {
+    "message": "Submitted — awaiting moderation"
+  },
+  "batchStatusUnconfirmed": {
+    "message": "Submission result unconfirmed"
+  },
+  "commentPublishedByAnchor": {
+    "message": "Verified from the new comment link on the page."
+  },
+  "commentPublishedByFingerprint": {
+    "message": "Verified from the rendered comment text on the page."
+  },
+  "commentPendingWordPressModeration": {
+    "message": "The site accepted the comment and marked it for moderation."
+  },
+  "commentPendingModerationFeedback": {
+    "message": "The page reports that the comment is awaiting moderation."
+  },
+  "linkModeATagNewline": {
+    "message": "A tag + line break"
+  },
+  "linkModeCommentOnly": {
+    "message": "Comment only"
   }
 }

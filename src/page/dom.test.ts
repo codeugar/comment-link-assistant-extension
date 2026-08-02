@@ -45,6 +45,67 @@ describe('comment page DOM helpers', () => {
     });
   });
 
+  it('requires one materialized body anchor before a batch comment can be prepared', async () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <form id="commentform">
+        <textarea id="comment" name="comment"></textarea>
+        <input type="url" name="url">
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+    const comment =
+      'A useful observation with <a href="https://product.example\n">Product</a> in the body.';
+
+    const preparation = await prepareSubmissionDocument(document, {
+      comment,
+      websiteUrl: 'https://product.example',
+      requireInlineAnchor: true,
+    });
+
+    expect(preparation).toMatchObject({ ok: true });
+    expect(
+      (document.querySelector('#comment') as HTMLTextAreaElement).value
+    ).toBe(comment);
+    if (preparation.ok) {
+      await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+    }
+  });
+
+  it.each([
+    ['an unresolved placeholder', 'A useful observation. {LINK}'],
+    [
+      'a mismatched body anchor',
+      'A useful observation. <a href="https://other.example">Other</a>',
+    ],
+  ])('blocks %s before writing or clicking the form', async (_, comment) => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <form id="commentform">
+        <textarea id="comment" name="comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+    `;
+
+    const preparation = await prepareSubmissionDocument(document, {
+      comment,
+      websiteUrl: 'https://product.example',
+      requireInlineAnchor: true,
+    });
+
+    expect(preparation).toMatchObject({
+      ok: false,
+      result: {
+        status: 'validation_error',
+        message: 'COMMENT_BODY_LINK_REQUIRED',
+        clickOccurred: false,
+      },
+    });
+    expect(
+      (document.querySelector('#comment') as HTMLTextAreaElement).value
+    ).toBe('');
+  });
+
   it.each([
     [
       'a wrapping Web label',
@@ -284,7 +345,7 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'submitted' });
+    ).resolves.toMatchObject({ status: 'unconfirmed' });
   });
 
   it('does not select a comment form inside a hidden iframe', async () => {
@@ -569,7 +630,7 @@ describe('comment page DOM helpers', () => {
         },
         0
       )
-    ).resolves.toMatchObject({ status: 'submitted' });
+    ).resolves.toMatchObject({ status: 'unconfirmed' });
   });
 
   it('marks an accepted comment as not visible when the page only shows a success message', async () => {
@@ -603,8 +664,8 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     });
     expect(
       (document.querySelector('textarea') as HTMLTextAreaElement).value
@@ -618,8 +679,9 @@ describe('comment page DOM helpers', () => {
     ).toBe('https://example.com');
   });
 
-  it('marks a comment as immediately published only when it is rendered on the page', async () => {
-    const comment = 'The state-machine example makes the tradeoff clear.';
+  it('marks a comment as immediately published when its promoted URL is rendered', async () => {
+    const websiteUrl = 'https://product.example';
+    const comment = `The state-machine example makes the tradeoff clear. <a href="${websiteUrl}">Product</a>`;
     document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment"></textarea>
@@ -632,7 +694,7 @@ describe('comment page DOM helpers', () => {
       if (editor instanceof HTMLTextAreaElement) editor.value = '';
       const rendered = document.createElement('article');
       rendered.className = 'comment-body';
-      rendered.textContent = comment;
+      rendered.innerHTML = comment;
       document.body.append(rendered);
       const notice = document.createElement('p');
       notice.setAttribute('role', 'alert');
@@ -641,10 +703,10 @@ describe('comment page DOM helpers', () => {
     });
 
     await expect(
-      fillAndSubmitDocument(document, { comment, websiteUrl: '' }, 0)
+      fillAndSubmitDocument(document, { comment, websiteUrl }, 0)
     ).resolves.toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
     });
   });
 
@@ -677,7 +739,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
     expect(destructiveClicks).toBe(0);
     expect(postClicks).toBe(1);
   });
@@ -713,7 +775,7 @@ describe('comment page DOM helpers', () => {
         0
       );
 
-      expect(result.status).toBe('submitted');
+      expect(result.status).toBe('unconfirmed');
       expect(socialClicks).toBe(0);
       expect(postClicks).toBe(1);
     }
@@ -802,7 +864,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
     expect(
       (document.querySelector('input[name="author"]') as HTMLInputElement).value
     ).toBe('');
@@ -892,7 +954,7 @@ describe('comment page DOM helpers', () => {
     expect(submitted).toBe(false);
   });
 
-  it('rejects identity values changed after preparation', async () => {
+  it('submits when only identity values changed after preparation', async () => {
     document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment"></textarea>
@@ -926,11 +988,8 @@ describe('comment page DOM helpers', () => {
 
     await expect(
       clickPreparedSubmissionDocument(document, preparation.prepared, 0)
-    ).resolves.toMatchObject({
-      status: 'validation_error',
-      message: 'PAGE_CHANGED_SINCE_GENERATION',
-    });
-    expect(submitted).toBe(false);
+    ).resolves.toMatchObject({ status: 'unconfirmed' });
+    expect(submitted).toBe(true);
   });
 
   it('keeps the website field empty when the generated comment uses an inline link', async () => {
@@ -958,7 +1017,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
     expect(
       (document.querySelector('input[name="website"]') as HTMLInputElement)
         .value
@@ -1181,7 +1240,10 @@ describe('comment page DOM helpers', () => {
       }
     );
 
-    expect(result).toMatchObject({ status: 'submitted', clickOccurred: true });
+    expect(result).toMatchObject({
+      status: 'unconfirmed',
+      clickOccurred: true,
+    });
     expect(submitted).toBe(true);
   });
 
@@ -1218,7 +1280,7 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted',
+      status: 'unconfirmed',
       clickOccurred: true,
     });
   });
@@ -1245,7 +1307,7 @@ describe('comment page DOM helpers', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'submitted',
+      status: 'unconfirmed',
       clickOccurred: true,
     });
     expect(result).not.toHaveProperty('verificationObservation');
@@ -1272,7 +1334,7 @@ describe('comment page DOM helpers', () => {
         0
       )
     ).resolves.toMatchObject({
-      status: 'submitted',
+      status: 'unconfirmed',
       clickOccurred: true,
     });
   });
@@ -1298,7 +1360,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not treat hidden success feedback as publication evidence', async () => {
@@ -1329,7 +1391,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not treat a hidden rendered comment as publication evidence', async () => {
@@ -1363,7 +1425,7 @@ describe('comment page DOM helpers', () => {
       0
     );
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('rejects a same-looking form that replaces the prepared DOM nodes', async () => {
@@ -1404,7 +1466,7 @@ describe('comment page DOM helpers', () => {
     expect(submitted).toBe(false);
   });
 
-  it('rejects a cloned replacement that copies the prepared DOM markers', async () => {
+  it('accepts a cloned replacement when the expected content is preserved', async () => {
     document.body.innerHTML = `
       <form id="commentform">
         <textarea name="comment"></textarea>
@@ -1432,14 +1494,48 @@ describe('comment page DOM helpers', () => {
       preparation.prepared,
       0
     );
-    expect(result).toMatchObject({
-      status: 'validation_error',
-      message: 'PAGE_CHANGED_SINCE_GENERATION',
-    });
-    expect(submitted).toBe(false);
+    expect(result).toMatchObject({ status: 'unconfirmed' });
+    expect(submitted).toBe(true);
   });
 
-  it('rejects prepared controls that are moved into another form', async () => {
+  it('accepts an expired preparation lease when the semantic form content is unchanged', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      document.body.innerHTML = `
+        <form id="commentform">
+          <textarea name="comment"></textarea>
+          <input name="url" type="url">
+          <button type="submit">Post comment</button>
+        </form>
+      `;
+      const preparation = await prepareSubmissionDocument(document, {
+        comment: 'The prepared comment.',
+        websiteUrl: 'https://example.com',
+      });
+      expect(preparation.ok).toBe(true);
+      if (!preparation.ok) return;
+
+      let submitted = false;
+      document.querySelector('form')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitted = true;
+      });
+
+      now.mockReturnValue(122_000);
+      const result = await clickPreparedSubmissionDocument(
+        document,
+        preparation.prepared,
+        0
+      );
+
+      expect(result).toMatchObject({ status: 'unconfirmed' });
+      expect(submitted).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('accepts controls moved into a rerendered form when content is preserved', async () => {
     document.body.innerHTML = `
       <form id="commentform" action="/comments">
         <textarea name="comment"></textarea>
@@ -1470,11 +1566,8 @@ describe('comment page DOM helpers', () => {
       preparation.prepared,
       0
     );
-    expect(result).toMatchObject({
-      status: 'validation_error',
-      message: 'PAGE_CHANGED_SINCE_GENERATION',
-    });
-    expect(submitted).toBe(false);
+    expect(result).toMatchObject({ status: 'unconfirmed' });
+    expect(submitted).toBe(true);
   });
 
   it('allows only one in-flight submission for a document', async () => {
@@ -1567,7 +1660,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not confuse an input-generated comment preview with publication', async () => {
@@ -1598,7 +1691,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not treat a delayed nested preview as a published comment', async () => {
@@ -1630,7 +1723,7 @@ describe('comment page DOM helpers', () => {
       },
       150
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not treat draft markup inside the comment form as publication', async () => {
@@ -1659,7 +1752,7 @@ describe('comment page DOM helpers', () => {
       },
       0
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('waits past unrelated mutations when an old success message exists', async () => {
@@ -1693,7 +1786,7 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('detects success text appended to an existing live region', async () => {
@@ -1720,19 +1813,19 @@ describe('comment page DOM helpers', () => {
       },
       250
     );
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('distinguishes moderation from an unconfirmed result', () => {
     document.body.innerHTML =
       '<p class="comment-awaiting-moderation">Your comment is awaiting moderation.</p>';
     const submitted = verifySubmissionDocument(document, 'A useful point');
-    expect(submitted.status).toBe('submitted');
+    expect(submitted.status).toBe('pending_moderation');
     expect(submitted).not.toHaveProperty('verificationObservation');
 
     document.body.innerHTML = '<p>No status message here.</p>';
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
-      'submitted'
+      'unconfirmed'
     );
 
     document.body.innerHTML = `
@@ -1742,7 +1835,7 @@ describe('comment page DOM helpers', () => {
       </section>
     `;
     expect(verifySubmissionDocument(document, 'A useful point').status).toBe(
-      'submitted'
+      'unconfirmed'
     );
   });
 
@@ -1752,8 +1845,8 @@ describe('comment page DOM helpers', () => {
 
     const result = verifySubmissionDocument(document, 'A useful point');
     expect(result).toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     });
     expect(result).not.toHaveProperty('verificationObservation');
   });
@@ -1862,8 +1955,8 @@ describe('comment page DOM helpers', () => {
     });
 
     expect(result).toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     });
   });
 
@@ -1884,7 +1977,7 @@ describe('comment page DOM helpers', () => {
     ).toBe(false);
   });
 
-  it('finds a visible comment when hidden metadata separates fingerprint words', () => {
+  it('does not publish visible fingerprint words without the promoted URL', () => {
     document.body.innerHTML = `
       <div class="comment">A useful <span hidden>metadata</span> point</div>
     `;
@@ -1894,7 +1987,7 @@ describe('comment page DOM helpers', () => {
       renderedComment: false,
     });
 
-    expect(result.status).toBe('submitted');
+    expect(result.status).toBe('unconfirmed');
   });
 
   it('does not verify a submission on a different page URL', async () => {
@@ -1910,8 +2003,8 @@ describe('comment page DOM helpers', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'submitted',
-        message: 'COMMENT_SUBMITTED',
+        status: 'unconfirmed',
+        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       },
     });
   });
@@ -1935,7 +2028,7 @@ describe('comment page DOM helpers', () => {
 
     expect(result).toMatchObject({
       type: 'submission',
-      result: { status: 'submitted' },
+      result: { status: 'pending_moderation' },
     });
     document.defaultView?.history.replaceState({}, '', '/');
   });

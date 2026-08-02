@@ -11,6 +11,12 @@ export const BATCH_ITEM_STATUSES = [
   'prepared',
   'click_dispatched',
   'verifying',
+  'published',
+  'pending_moderation',
+  'unconfirmed',
+  // Persisted by versions before result verification was split. It is accepted
+  // for migration only; newly completed items use one of the three states
+  // above.
   'submitted',
   'login_required',
   'captcha_required',
@@ -103,7 +109,12 @@ export const batchSettingsSnapshotSchema: z.ZodType<BatchSettingsSnapshot> = z
     websiteUrl: httpUrlSchema,
     displayName: z.string().max(200),
     email: optionalEmailSchema,
-    linkMode: z.enum(['prefer-website-field', 'inline']),
+    linkMode: z.enum([
+      'a-tag-newline',
+      'prefer-website-field',
+      'comment-only',
+      'inline',
+    ]),
     siteId: z.string().min(1).max(200).optional(),
     siteLabel: z.string().max(100).optional(),
   })
@@ -161,6 +172,9 @@ const preparedPageSubmissionSchema: z.ZodType<PreparedPageSubmission> = z
   .object({
     fingerprint: z.string().max(80),
     comment: z.string().max(2_000),
+    // Persist the canonical Website field value used during preparation so
+    // click-time checks compare against the same URL after a rerender.
+    websiteUrl: httpUrlSchema.optional(),
     domToken: z.string().max(128),
     baseline: z
       .object({
@@ -210,6 +224,9 @@ const pausedItemStatuses = new Set<BatchItemStatus>([
 ]);
 
 const completedItemStatuses = new Set<BatchItemStatus>([
+  'published',
+  'pending_moderation',
+  'unconfirmed',
   'submitted',
   'no_form',
   'validation_error',

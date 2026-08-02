@@ -54,7 +54,13 @@ export function normalizeWebsiteUrl(value: string): string {
   }
   if (url.username || url.password) throw new Error('WEBSITE_URL_INVALID');
   url.hash = '';
-  return url.toString();
+  const normalized = url.toString();
+  // Keep the canonical promoted-site URL stable. URL#toString() adds `/` to a
+  // bare origin, while generated anchors and saved settings are easier to
+  // compare when `https://example.com` has one representation.
+  return url.pathname === '/' && !url.search
+    ? normalized.replace(/\/$/, '')
+    : normalized;
 }
 
 export function originPermissionPattern(value: string): string {

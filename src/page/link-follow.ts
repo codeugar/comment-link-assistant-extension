@@ -17,6 +17,10 @@ const COMMENT_CONTAINER_SELECTOR = [
   '[id*="comment"]',
   '[class*="reply"]',
   '[id*="reply"]',
+  '[itemprop="comment"]',
+  '[itemtype*="Comment"]',
+  '[data-comment-id]',
+  '[data-comment-key]',
 ].join(', ');
 const AUTHOR_SURFACE_SELECTOR = [
   '.comment-author',
@@ -29,6 +33,8 @@ const BODY_SURFACE_SELECTOR = [
   '.comment-body',
   '.comment-text',
   '.comment-content-wrap',
+  '[itemprop="comment"]',
+  '[itemtype*="Comment"]',
 ].join(', ');
 
 export function extractPromotedUrl(comment: string): string | null {
@@ -141,7 +147,12 @@ function comparableHostname(hostname: string): string {
 }
 
 function linkSurface(anchor: Element): LinkFollowSurface {
-  if (anchor.closest(BODY_SURFACE_SELECTOR)) return 'comment_body';
+  if (
+    anchor.closest(BODY_SURFACE_SELECTOR) ||
+    anchor.closest('#comments, [id*="comment"], [class*="reply"]')
+  ) {
+    return 'comment_body';
+  }
   if (anchor.closest(AUTHOR_SURFACE_SELECTOR)) return 'author_url';
   return 'unknown';
 }
@@ -157,17 +168,19 @@ function findCommentContainer(
   }
 
   if (!fingerprint.trim()) return null;
-  for (const candidate of document.querySelectorAll(
-    COMMENT_CONTAINER_SELECTOR
-  )) {
+  const candidates = [
+    ...Array.from(document.querySelectorAll(COMMENT_CONTAINER_SELECTOR)),
+    ...Array.from(document.querySelectorAll('article, li, section, div, p')),
+  ];
+  for (const candidate of candidates) {
     if (
       candidate.matches('form, textarea, input, [contenteditable="true"]') ||
       candidate.querySelector('form, textarea, input, [contenteditable="true"]')
     ) {
       continue;
     }
-    const text = normalizeWhitespace(candidate.textContent ?? '');
-    if (text.includes(normalizeWhitespace(fingerprint))) {
+    const text = normalizeFingerprintText(candidate.textContent ?? '');
+    if (containsFingerprint(text, fingerprint)) {
       return candidate;
     }
   }
@@ -178,13 +191,44 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeFingerprintText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\u200B|\u200C|\u200D|\uFEFF/g, '')
+    .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function containsFingerprint(text: string, fingerprint: string): boolean {
+  const needle = normalizeFingerprintText(fingerprint);
+  if (!needle) return false;
+  if (text.includes(needle)) return true;
+  let offset = 0;
+  for (const word of needle.split(/\s+/)) {
+    const index = text.indexOf(word, offset);
+    if (index < 0) return false;
+    offset = index + word.length;
+  }
+  return true;
+}
+
 function attachLinkFollow(
   result: PageSubmissionResult,
   document: Document,
   targetUrl?: string,
   fingerprint?: string
 ): PageSubmissionResult {
-  if (result.status !== 'submitted' || !targetUrl || !fingerprint) {
+  if (
+    (result.status !== 'published' && result.status !== 'pending_moderation') ||
+    !targetUrl ||
+    !fingerprint
+  ) {
     return result;
   }
   return {

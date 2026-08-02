@@ -11,6 +11,8 @@
 const COMMENT_ANCHOR = /^#comment-\d+$/i;
 const COMMENT_PAGE_SUFFIX = /^\/comment-page-\d+$/i;
 
+export type WordPressSubmitReceipt = 'published' | 'pending_moderation';
+
 function comparablePathname(pathname: string): string {
   return pathname === '/' ? pathname : pathname.replace(/\/+$/, '');
 }
@@ -47,6 +49,30 @@ export function hasNewWordPressCommentAnchor(
   );
 }
 
+// Identifies the specific result proved by a WordPress redirect. Keeping the
+// receipt type instead of reducing it to a boolean lets callers distinguish a
+// publicly rendered comment from one the site accepted for moderation.
+export function getWordPressSubmitReceipt(
+  currentValue: string,
+  expectedValue: string
+): WordPressSubmitReceipt | null {
+  let current: URL;
+  let expected: URL;
+  try {
+    current = new URL(currentValue);
+    expected = new URL(expectedValue);
+  } catch {
+    return null;
+  }
+  if (current.origin !== expected.origin) return null;
+  if (!matchesWordPressCommentPathname(current.pathname, expected.pathname)) {
+    return null;
+  }
+  if (hasWordPressModerationReceipt(current)) return 'pending_moderation';
+  if (hasNewWordPressCommentAnchor(current, expected)) return 'published';
+  return null;
+}
+
 // True when the current URL alone proves the comment was accepted: same origin,
 // on the expected permalink (or its comment-page variant), carrying either the
 // moderation receipt or a newly added `#comment-<id>` anchor.
@@ -54,20 +80,5 @@ export function hasWordPressSubmitReceipt(
   currentValue: string,
   expectedValue: string
 ): boolean {
-  let current: URL;
-  let expected: URL;
-  try {
-    current = new URL(currentValue);
-    expected = new URL(expectedValue);
-  } catch {
-    return false;
-  }
-  if (current.origin !== expected.origin) return false;
-  if (!matchesWordPressCommentPathname(current.pathname, expected.pathname)) {
-    return false;
-  }
-  return (
-    hasWordPressModerationReceipt(current) ||
-    hasNewWordPressCommentAnchor(current, expected)
-  );
+  return getWordPressSubmitReceipt(currentValue, expectedValue) !== null;
 }

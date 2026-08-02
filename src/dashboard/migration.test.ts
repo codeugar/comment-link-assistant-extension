@@ -155,7 +155,7 @@ describe('legacy dashboard migration', () => {
       attemptCount: 0,
     });
     expect(byUrl.get('https://success.example/post')).toMatchObject({
-      status: 'submitted',
+      status: 'unconfirmed',
       attemptCount: 1,
     });
     expect(byUrl.get('https://unknown.example/post')).toMatchObject({
@@ -179,8 +179,8 @@ describe('legacy dashboard migration', () => {
       status: 'active',
       targetCount: 4,
       processedCount: 1,
-      submittedCount: 1,
-      unknownCount: 1,
+      submittedCount: 0,
+      unknownCount: 2,
     });
     const current = first.batches.find(
       (batch) => batch.externalBatchId === 'current-linked'
@@ -266,9 +266,9 @@ describe('legacy dashboard migration', () => {
     expect(summary.counts).toMatchObject({
       total: 5,
       processed: 1,
-      submitted: 1,
+      submitted: 0,
       failed: 0,
-      unknown: 1,
+      unknown: 2,
       interrupted: 1,
       blocked: 1,
       pending: 1,
@@ -342,7 +342,7 @@ describe('legacy dashboard migration', () => {
     );
     expect(targets.map((target) => target.status)).toEqual([
       'validation_error',
-      'submitted',
+      'unconfirmed',
     ]);
     expect(
       targets.find((target) => target.status === 'validation_error')?.lastError

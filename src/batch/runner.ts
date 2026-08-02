@@ -23,7 +23,8 @@ import {
 import { getBatch, setBatch } from '@/storage/batch';
 import { isTargetFiltered } from '@/storage/filter-list';
 import { getProviderApiKeys } from '@/storage/settings';
-import type { ProviderApiKeys } from '@/types';
+import { type ProviderApiKeys, usesInlineAnchor } from '@/types';
+import { normalizeWebsiteUrl } from '@/website/profile';
 import {
   completeCurrentItem,
   pauseCurrentItem,
@@ -175,6 +176,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR';
 }
 
+function promotedWebsiteUrl(batch: BatchSnapshot): string {
+  return normalizeWebsiteUrl(
+    batch.websiteProfile?.url || batch.settings.websiteUrl
+  );
+}
+
 export function commentFingerprint(value: string): string {
   const normalized = value.replace(/\s+/g, ' ').trim().toLowerCase();
   let first = 0x811c9dc5;
@@ -317,7 +324,9 @@ function hasAttemptedCanonicalTarget(
   return batch.items.some(
     (item) =>
       item.id !== currentId &&
-      item.status === 'submitted' &&
+      (item.status === 'published' ||
+        item.status === 'pending_moderation' ||
+        item.status === 'submitted') &&
       canonicalTargetKey(item.url) === key
   );
 }
@@ -415,7 +424,14 @@ async function saveUnconfirmedSubmission(
   dependencies: BatchRunnerDependencies,
   message = 'COMMENT_SUBMISSION_UNCONFIRMED'
 ): Promise<BatchStepResult> {
-  return saveFailure(batch, message, dependencies);
+  const next = completeCurrentItem(
+    batch,
+    'unconfirmed',
+    message,
+    dependencies.now()
+  );
+  await dependencies.setBatch(next);
+  return afterTerminal(next);
 }
 
 async function savePause(
@@ -493,14 +509,17 @@ async function saveSubmissionResult(
     await dependencies.setBatch(next);
     return afterTerminal(next);
   }
-  // The submit click was dispatched and the page showed no explicit error:
-  // an accepted / reset / "awaiting moderation" / otherwise-ambiguous outcome
-  // all count as `submitted`. No proof-of-publish re-fetch, no AI classifier.
-  if (result.clickOccurred) {
+  const confirmedStatus =
+    result.status === 'published' || result.status === 'pending_moderation'
+      ? result.status
+      : result.status === 'unconfirmed' || result.status === 'submitted'
+        ? 'unconfirmed'
+        : null;
+  if (confirmedStatus && result.clickOccurred) {
     const next = completeCurrentItem(
       batch,
-      'submitted',
-      'COMMENT_SUBMITTED',
+      confirmedStatus,
+      result.message,
       dependencies.now()
     );
     await dependencies.setBatch(next);
@@ -894,9 +913,13 @@ async function prepareGeneratedComment(
     comment: item.comment,
     displayName: batch.settings.displayName || undefined,
     email: batch.settings.email || undefined,
-    websiteUrl: item.analysis.form.hasWebsiteField
-      ? batch.settings.websiteUrl
-      : '',
+    // The mode determines whether the URL belongs in the body, Website field,
+    // or neither surface.
+    websiteUrl:
+      batch.settings.linkMode === 'comment-only'
+        ? ''
+        : promotedWebsiteUrl(batch),
+    requireInlineAnchor: usesInlineAnchor(batch.settings.linkMode),
   };
   const target: PageSubmissionExpectation = {
     url: item.analysis.page.url,
@@ -973,9 +996,12 @@ async function advanceGeneration(
   try {
     const comment = await dependencies.generateComment(keys, {
       provider: requested.settings.provider,
-      websiteProfile: requested.websiteProfile as NonNullable<
-        BatchSnapshot['websiteProfile']
-      >,
+      websiteProfile: {
+        ...(requested.websiteProfile as NonNullable<
+          BatchSnapshot['websiteProfile']
+        >),
+        url: promotedWebsiteUrl(requested),
+      },
       targetPage: item.analysis.page,
       linkMode: requested.settings.linkMode,
     });

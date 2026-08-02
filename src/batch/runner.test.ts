@@ -90,8 +90,8 @@ function dependencies(
   let stored: BatchSnapshot | null = initial;
   let now = 10;
   const submitted: PageSubmissionResult = {
-    status: 'submitted',
-    message: 'COMMENT_SUBMITTED',
+    status: 'unconfirmed',
+    message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     fingerprint: prepared.fingerprint,
     clickOccurred: true,
   };
@@ -168,7 +168,7 @@ describe('batch runner', () => {
     expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledOnce();
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted' }],
+      items: [{ status: 'unconfirmed' }],
     });
   });
 
@@ -243,7 +243,7 @@ describe('batch runner', () => {
     expect(currentNow).toBeLessThan(30_000);
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted' }],
+      items: [{ status: 'unconfirmed' }],
     });
   });
 
@@ -710,7 +710,7 @@ describe('batch runner', () => {
     expect(context.read()).toMatchObject({
       status: 'completed',
       currentIndex: 1,
-      items: [{ status: 'submitted' }],
+      items: [{ status: 'unconfirmed' }],
     });
     expect(context.deps.generateComment).toHaveBeenCalledTimes(1);
     expect(context.deps.clickPreparedTabSubmission).toHaveBeenCalledTimes(1);
@@ -724,9 +724,44 @@ describe('batch runner', () => {
       'prepared',
       'click_dispatched',
       'verifying',
-      'submitted',
+      'unconfirmed',
     ]);
   });
+
+  it.each([
+    ['published', 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT'],
+    ['pending_moderation', 'COMMENT_PENDING_WORDPRESS_MODERATION'],
+  ] as const)(
+    'persists the generated comment for a %s receipt',
+    async (status, message) => {
+      const context = dependencies(initialBatch(), {
+        clickPreparedTabSubmission: vi.fn(async () => ({
+          status,
+          message,
+          fingerprint: prepared.fingerprint,
+          clickOccurred: true,
+        })),
+      });
+
+      for (let step = 0; step < 12; step += 1) {
+        await advanceBatchStep(context.deps);
+        if (context.read()?.status === 'completed') break;
+      }
+
+      expect(context.read()).toMatchObject({
+        status: 'completed',
+        items: [
+          {
+            status,
+            message,
+            // Dashboard synchronization receives this snapshot before history
+            // pruning, so the generated comment remains available to persist.
+            comment: 'A useful comment',
+          },
+        ],
+      });
+    }
+  );
 
   it('threads a Jetpack frame reference into prepare and click', async () => {
     const jetpack = analysis();
@@ -745,7 +780,7 @@ describe('batch runner', () => {
 
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted' }],
+      items: [{ status: 'unconfirmed' }],
     });
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
@@ -830,8 +865,55 @@ describe('batch runner', () => {
     );
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
-      expect.objectContaining({ websiteUrl: 'https://product.example' }),
+      expect.objectContaining({
+        websiteUrl: 'https://product.example',
+        requireInlineAnchor: true,
+      }),
       expect.objectContaining({ hasWebsiteField: true }),
+      'batch-1',
+      undefined
+    );
+  });
+
+  it('uses the canonical profile URL without a trailing slash for generation and validation', async () => {
+    let batch = initialBatch();
+    batch = {
+      ...batch,
+      settings: { ...batch.settings, websiteUrl: 'http://product.example/' },
+      websiteProfile: {
+        ...batch.websiteProfile!,
+        url: 'https://product.example/',
+      },
+    };
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: analysis(),
+          message: 'COMMENT_GENERATION_READY',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch);
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.generateComment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        websiteProfile: expect.objectContaining({
+          url: 'https://product.example',
+        }),
+      })
+    );
+    expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ websiteUrl: 'https://product.example' }),
+      expect.anything(),
       'batch-1',
       undefined
     );
@@ -869,7 +951,10 @@ describe('batch runner', () => {
     );
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
-      expect.objectContaining({ websiteUrl: 'https://product.example' }),
+      expect.objectContaining({
+        websiteUrl: 'https://product.example',
+        requireInlineAnchor: true,
+      }),
       expect.anything(),
       'batch-1',
       undefined
@@ -1028,8 +1113,8 @@ describe('batch runner', () => {
       3
     );
     const submitted: PageSubmissionResult = {
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
@@ -1045,7 +1130,9 @@ describe('batch runner', () => {
     expect(context.read()).toMatchObject({
       status: 'completed',
       workerTabId: 7,
-      items: [{ status: 'submitted', message: 'COMMENT_SUBMITTED' }],
+      items: [
+        { status: 'unconfirmed', message: 'COMMENT_SUBMISSION_UNCONFIRMED' },
+      ],
     });
   });
 
@@ -1072,7 +1159,7 @@ describe('batch runner', () => {
 
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.deps.verifyTabSubmission).toHaveBeenCalledOnce();
-    expect(context.read()?.items[0]).toMatchObject({ status: 'submitted' });
+    expect(context.read()?.items[0]).toMatchObject({ status: 'unconfirmed' });
   });
 
   it('records an unconfirmed click error once and continues without retrying', async () => {
@@ -1102,7 +1189,7 @@ describe('batch runner', () => {
       status: 'completed',
       items: [
         {
-          status: 'failed',
+          status: 'unconfirmed',
           message: 'COMMENT_SUBMISSION_UNCONFIRMED',
         },
       ],
@@ -1156,7 +1243,7 @@ describe('batch runner', () => {
       status: 'completed',
       items: [
         {
-          status: 'failed',
+          status: 'unconfirmed',
           message: 'COMMENT_SUBMISSION_UNCONFIRMED',
         },
       ],
@@ -1186,17 +1273,17 @@ describe('batch runner', () => {
       status: 'completed',
       items: [
         {
-          status: 'failed',
+          status: 'unconfirmed',
           message: 'COMMENT_SUBMISSION_UNCONFIRMED',
         },
       ],
     });
   });
 
-  it('treats a clicked but unconfirmed result as submitted without any re-fetch', async () => {
+  it('records a clicked but unconfirmed result without any re-fetch', async () => {
     const unconfirmed: PageSubmissionResult = {
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
@@ -1217,7 +1304,9 @@ describe('batch runner', () => {
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
     expect(context.read()).toMatchObject({
       status: 'completed',
-      items: [{ status: 'submitted', message: 'COMMENT_SUBMITTED' }],
+      items: [
+        { status: 'unconfirmed', message: 'COMMENT_SUBMISSION_UNCONFIRMED' },
+      ],
     });
   });
 

@@ -23,6 +23,9 @@ const pauseStatuses = [
 ] as const satisfies readonly BatchItemStatus[];
 
 const completionStatuses = [
+  'published',
+  'pending_moderation',
+  'unconfirmed',
   'submitted',
   'no_form',
   'validation_error',
@@ -42,6 +45,9 @@ const retryableItemStatuses = new Set<BatchItemStatus>(RETRYABLE_ITEM_STATUSES);
 // Terminal states the cursor skips over: an item already settled here (either
 // this run or a prior one that a retry left behind) never runs again.
 const terminalItemStatuses = new Set<BatchItemStatus>([
+  'published',
+  'pending_moderation',
+  'unconfirmed',
   'submitted',
   'no_form',
   'validation_error',
@@ -448,6 +454,9 @@ export function skipCurrentManualGate(
 const preservedStopStatuses = new Set<BatchItemStatus>([
   'click_dispatched',
   'verifying',
+  'published',
+  'pending_moderation',
+  'unconfirmed',
   'submitted',
   'no_form',
   'validation_error',
@@ -457,6 +466,9 @@ const preservedStopStatuses = new Set<BatchItemStatus>([
 ]);
 
 const settledItemStatuses = new Set<BatchItemStatus>([
+  'published',
+  'pending_moderation',
+  'unconfirmed',
   'submitted',
   'no_form',
   'validation_error',

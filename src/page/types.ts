@@ -43,6 +43,8 @@ export interface PageSubmissionInput {
   displayName?: string;
   email?: string;
   websiteUrl: string;
+  /** Refuse the click unless the body contains exactly one anchor to websiteUrl. */
+  requireInlineAnchor?: boolean;
 }
 
 export interface PageSubmissionExpectation {
@@ -65,6 +67,8 @@ export interface PageSubmissionBaseline {
 export interface PreparedPageSubmission {
   fingerprint: string;
   comment: string;
+  /** Canonical Website field value to re-check after dynamic form rerenders. */
+  websiteUrl?: string;
   domToken: string;
   baseline: PageSubmissionBaseline;
   expected: PageSubmissionExpectation;
@@ -75,6 +79,11 @@ export type PageSubmissionPreparation =
   | { ok: false; result: PageSubmissionResult };
 
 export type SubmissionStatus =
+  | 'published'
+  | 'pending_moderation'
+  | 'unconfirmed'
+  // Kept only to decode result messages produced by an older content script
+  // during an extension update. New code never emits this ambiguous status.
   | 'submitted'
   | 'login_required'
   | 'captcha_required'
@@ -86,6 +95,17 @@ export interface PageSubmissionResult {
   fingerprint: string;
   clickOccurred: boolean;
   linkFollow?: LinkFollowVerification;
+}
+
+/** Result of a read-only follow-up check for an already submitted comment. */
+export interface ModerationCheckResult {
+  status:
+    | 'published'
+    | 'pending_moderation'
+    | 'login_required'
+    | 'captcha_required';
+  message: string;
+  fingerprint: string;
 }
 
 export type LinkFollowStatus =
