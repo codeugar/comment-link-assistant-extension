@@ -87,8 +87,14 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusSubmitting');
     case 'verifying':
       return translate('batchStatusVerifying');
+    case 'published':
+      return translate('batchStatusPublished');
+    case 'pending_moderation':
+      return translate('batchStatusPendingModeration');
+    case 'unconfirmed':
+      return translate('batchStatusUnconfirmed');
     case 'submitted':
-      return translate('batchStatusSubmitted');
+      return translate('batchStatusUnconfirmed');
     case 'login_required':
       return translate('batchStatusLoginRequired');
     case 'captcha_required':
@@ -125,6 +131,9 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'WEBSITE_REQUIRED') {
     return translate('websiteRequiredForTarget');
   }
+  if (message === 'COMMENT_BODY_LINK_REQUIRED') {
+    return translate('commentBodyLinkRequired');
+  }
   if (message === 'FORM_PLAN_UNSAFE_SUBMIT') {
     return translate('unsafeSubmitBlocked');
   }
@@ -139,6 +148,21 @@ function batchItemMessageCopy(message: string): string | null {
   }
   if (message === 'CAPTCHA_REQUIRED_SKIPPED') {
     return translate('batchSkippedCaptchaDescription');
+  }
+  if (message === 'COMMENT_PUBLISHED_COMMENT_ANCHOR') {
+    return translate('commentPublishedByAnchor');
+  }
+  if (message === 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT') {
+    return translate('commentPublishedByFingerprint');
+  }
+  if (message === 'COMMENT_PENDING_WORDPRESS_MODERATION') {
+    return translate('commentPendingWordPressModeration');
+  }
+  if (message === 'COMMENT_PENDING_MODERATION_FEEDBACK') {
+    return translate('commentPendingModerationFeedback');
+  }
+  if (message === 'COMMENT_SUBMISSION_UNCONFIRMED') {
+    return translate('submissionUnconfirmed');
   }
   return null;
 }
@@ -201,13 +225,18 @@ function displayTarget(url: string): string {
   }
 }
 
-function batchSummary(batch: BatchSnapshot): [string, string] {
-  let submitted = 0;
+function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
+  let published = 0;
+  let pendingModeration = 0;
+  let unconfirmed = 0;
   let failed = 0;
 
   for (const item of batch.items) {
-    if (item.status === 'submitted') submitted += 1;
-    else if (
+    if (item.status === 'published') published += 1;
+    else if (item.status === 'pending_moderation') pendingModeration += 1;
+    else if (item.status === 'unconfirmed' || item.status === 'submitted') {
+      unconfirmed += 1;
+    } else if (
       item.status === 'no_form' ||
       item.status === 'validation_error' ||
       item.status === 'failed'
@@ -216,7 +245,12 @@ function batchSummary(batch: BatchSnapshot): [string, string] {
     }
   }
 
-  return [String(submitted), String(failed)];
+  return [
+    String(published),
+    String(pendingModeration),
+    String(unconfirmed),
+    String(failed),
+  ];
 }
 
 function formatEventTime(timestamp: number): string {
@@ -267,6 +301,9 @@ function activityCopy(status: BatchItemStatus): string[] {
 function isTerminalItem(item: BatchItem): boolean {
   return [
     'submitted',
+    'published',
+    'pending_moderation',
+    'unconfirmed',
     'no_form',
     'validation_error',
     'failed',
@@ -411,6 +448,9 @@ export default function App() {
       ? batch.items.filter((item) =>
           [
             'submitted',
+            'published',
+            'pending_moderation',
+            'unconfirmed',
             'no_form',
             'validation_error',
             'failed',
@@ -445,7 +485,7 @@ export default function App() {
         websiteUrl: '',
         displayName: '',
         email: '',
-        linkMode: 'prefer-website-field',
+        linkMode: 'a-tag-newline',
       };
       return {
         ...current,
@@ -970,10 +1010,15 @@ export default function App() {
                   )
                 }
               >
+                <option value="a-tag-newline">
+                  {translate('linkModeATagNewline')}
+                </option>
                 <option value="prefer-website-field">
                   {translate('linkModePreferWebsiteField')}
                 </option>
-                <option value="inline">{translate('linkModeInline')}</option>
+                <option value="comment-only">
+                  {translate('linkModeCommentOnly')}
+                </option>
               </select>
             </label>
             <label className="field">
@@ -1424,7 +1469,13 @@ export default function App() {
                           </span>
                           <small>
                             {translate('batchSummary', [
-                              String(entry.counts.submitted),
+                              String(entry.counts.published ?? 0),
+                              String(entry.counts.pendingModeration ?? 0),
+                              String(
+                                entry.counts.unconfirmed ??
+                                  entry.counts.submitted ??
+                                  0
+                              ),
                               String(entry.counts.failed),
                             ])}
                           </small>

@@ -148,6 +148,39 @@ export interface SyncBatchSnapshotOptions {
   at?: number;
 }
 
+/** A durable, read-only verification job for a comment awaiting moderation. */
+export interface PendingModerationCheck {
+  targetId: string;
+  attemptId: string;
+  planId: string;
+  url: string;
+  targetWebsiteUrl: string;
+  fingerprint: string;
+  checkCount: number;
+  lastCheckAt?: number;
+  lastCheckMessage?: string;
+}
+
+export interface ModerationPublishedTransition {
+  targetId: string;
+  planId: string;
+  url: string;
+  fingerprint: string;
+  checkCount: number;
+  publishedAt: number;
+  message: string;
+}
+
+export interface RecordModerationCheckInput {
+  targetId: string;
+  attemptId: string;
+  status: 'pending_moderation' | 'published';
+  message: string;
+  at?: number;
+  /** Used by an explicit history-row check: keep the old status when absent. */
+  preserveCurrentStatus?: boolean;
+}
+
 export interface RetryRunInput {
   runId?: string;
   externalBatchId?: string;
@@ -364,6 +397,10 @@ function attemptId(runIdentifier: string, targetIdentifier: string): string {
   return `${runIdentifier}:${targetIdentifier}`;
 }
 
+function commentFingerprint(comment: string): string {
+  return comment.replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
 function sortPlans(plans: Plan[]): Plan[] {
   const rank: Record<Plan['status'], number> = {
     active: 0,
@@ -447,6 +484,9 @@ export function mapBatchItemStatus(status: BatchItemStatus): PlanTargetStatus {
     return 'blocked';
   }
   if (status === 'stopped') return 'interrupted';
+  // Older content scripts reported a click with no receipt as `submitted`.
+  // Preserve the row while preventing it from becoming a confirmed success.
+  if (status === 'submitted') return 'unconfirmed';
   return status;
 }
 
@@ -601,14 +641,21 @@ function addTargetToCounts(
 ): void {
   counts.total += 1;
   if (isProcessedTargetStatus(target.status)) counts.processed += 1;
-  if (target.status === 'submitted') counts.submitted += 1;
-  else if (isFailedTargetStatus(target.status)) counts.failed += 1;
+  if (target.status === 'published' || target.status === 'pending_moderation') {
+    counts.submitted += 1;
+  } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
   else if (target.status === 'pending') counts.pending += 1;
   else if (target.status === 'running') counts.running += 1;
   else if (target.status === 'blocked') counts.blocked += 1;
   else if (target.status === 'interrupted') counts.interrupted += 1;
   else if (target.status === 'filtered') counts.filtered += 1;
-  else if (target.status === 'unknown') counts.unknown += 1;
+  else if (
+    target.status === 'unknown' ||
+    target.status === 'unconfirmed' ||
+    target.status === 'submitted'
+  ) {
+    counts.unknown += 1;
+  }
 }
 
 function assertUniqueIds<T extends { id: string }>(
@@ -804,20 +851,6 @@ export class DashboardRepository {
         if (await requestResult(planStore.get(id))) {
           throw new DashboardDataError('PLAN_ID_CONFLICT');
         }
-        const existingPlans = (await requestResult(
-          planStore.getAll()
-        )) as Plan[];
-        if (
-          existingPlans.some(
-            (existing) =>
-              (existing.status === 'active' ||
-                existing.status === 'completed') &&
-              existing.promotingWebsiteUrl === promotingWebsiteUrl
-          )
-        ) {
-          throw new DashboardDataError('PLAN_SITE_CONFLICT');
-        }
-
         planStore.add(plan);
         const batchStore = transaction.objectStore(
           DASHBOARD_STORE_NAMES.planBatches
@@ -1055,6 +1088,270 @@ export class DashboardRepository {
             right.attemptNumber - left.attemptNumber ||
             right.updatedAt - left.updatedAt
         );
+      }
+    );
+  }
+
+  async getPendingModerationChecks(
+    limit = 12
+  ): Promise<PendingModerationCheck[]> {
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    return this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planTargets,
+        DASHBOARD_STORE_NAMES.attempts,
+      ],
+      'readonly',
+      async (transaction) => {
+        const targetStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planTargets
+        );
+        const planStore = transaction.objectStore(DASHBOARD_STORE_NAMES.plans);
+        const attemptStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.attempts
+        );
+        const targets = (
+          await Promise.all(
+            ['pending_moderation', 'unconfirmed'].map((status) =>
+              allFromIndex<PlanTarget>(
+                targetStore,
+                INDEXES.targets.status,
+                status
+              )
+            )
+          )
+        ).flat();
+        const checks: PendingModerationCheck[] = [];
+        for (const target of targets.sort(
+          (left, right) =>
+            (left.lastModerationCheckAt ?? 0) -
+              (right.lastModerationCheckAt ?? 0) ||
+            left.updatedAt - right.updatedAt ||
+            left.sequence - right.sequence
+        )) {
+          if (checks.length >= boundedLimit) break;
+          const attempts = await allFromIndex<Attempt>(
+            attemptStore,
+            INDEXES.attempts.target,
+            target.id
+          );
+          const attempt = attempts
+            .filter((candidate) => candidate.status === target.status)
+            .sort(
+              (left, right) =>
+                right.attemptNumber - left.attemptNumber ||
+                right.updatedAt - left.updatedAt
+            )[0];
+          const fingerprint =
+            attempt?.commentFingerprint ??
+            (attempt?.comment ? commentFingerprint(attempt.comment) : '');
+          if (!attempt || !fingerprint) continue;
+          const plan = (await requestResult(planStore.get(target.planId))) as
+            | Plan
+            | undefined;
+          if (!plan?.promotingWebsiteUrl) continue;
+          checks.push({
+            targetId: target.id,
+            attemptId: attempt.id,
+            planId: target.planId,
+            url: target.url,
+            targetWebsiteUrl: plan.promotingWebsiteUrl,
+            fingerprint,
+            checkCount: attempt.timeline.filter(
+              (event) => event.stage === 'moderation_recheck'
+            ).length,
+            ...(target.lastModerationCheckAt
+              ? { lastCheckAt: target.lastModerationCheckAt }
+              : {}),
+            ...(target.lastModerationCheckMessage
+              ? { lastCheckMessage: target.lastModerationCheckMessage }
+              : {}),
+          });
+        }
+        return checks;
+      }
+    );
+  }
+
+  async getRecentModerationTransitions(
+    limit = 50
+  ): Promise<ModerationPublishedTransition[]> {
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    return this.transaction(
+      [DASHBOARD_STORE_NAMES.planTargets, DASHBOARD_STORE_NAMES.attempts],
+      'readonly',
+      async (transaction) => {
+        const targetStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planTargets
+        );
+        const attemptStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.attempts
+        );
+        const targets = (await requestResult(
+          targetStore.getAll()
+        )) as PlanTarget[];
+        const targetById = new Map(
+          targets.map((target) => [target.id, target])
+        );
+        const attempts = (await requestResult(
+          attemptStore.getAll()
+        )) as Attempt[];
+        const transitions: ModerationPublishedTransition[] = [];
+        for (const attempt of attempts) {
+          const published = [...attempt.timeline]
+            .reverse()
+            .find(
+              (event) =>
+                event.stage === 'moderation_recheck' &&
+                event.status === 'published'
+            );
+          const target = attempt.targetId
+            ? targetById.get(attempt.targetId)
+            : undefined;
+          if (!published || !target || !attempt.targetId) continue;
+          transitions.push({
+            targetId: attempt.targetId,
+            planId: target.planId,
+            url: target.url,
+            fingerprint:
+              attempt.commentFingerprint ??
+              (attempt.comment ? commentFingerprint(attempt.comment) : ''),
+            checkCount: attempt.timeline.filter(
+              (event) => event.stage === 'moderation_recheck'
+            ).length,
+            publishedAt: published.at,
+            message: published.message,
+          });
+        }
+        return transitions
+          .sort((left, right) => right.publishedAt - left.publishedAt)
+          .slice(0, boundedLimit);
+      }
+    );
+  }
+
+  async recordModerationCheck(
+    input: RecordModerationCheckInput
+  ): Promise<PlanTarget | null> {
+    const at = input.at ?? this.clock();
+    return this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planBatches,
+        DASHBOARD_STORE_NAMES.planTargets,
+        DASHBOARD_STORE_NAMES.attempts,
+      ],
+      'readwrite',
+      async (transaction) => {
+        const planStore = transaction.objectStore(DASHBOARD_STORE_NAMES.plans);
+        const batchStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planBatches
+        );
+        const targetStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planTargets
+        );
+        const attemptStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.attempts
+        );
+        const originalTarget = (await requestResult(
+          targetStore.get(input.targetId)
+        )) as PlanTarget | undefined;
+        // A user retry or a late batch sync may have moved it on since this
+        // read-only check was selected. Never overwrite that newer result.
+        if (
+          !originalTarget ||
+          (!input.preserveCurrentStatus &&
+            originalTarget.status !== 'pending_moderation' &&
+            originalTarget.status !== 'unconfirmed')
+        ) {
+          return null;
+        }
+        const originalAttempt = (await requestResult(
+          attemptStore.get(input.attemptId)
+        )) as Attempt | undefined;
+        if (
+          !originalAttempt ||
+          originalAttempt.targetId !== originalTarget.id ||
+          (!input.preserveCurrentStatus &&
+            originalAttempt.status !== 'pending_moderation' &&
+            originalAttempt.status !== 'unconfirmed')
+        ) {
+          return null;
+        }
+        const plan = (await requestResult(
+          planStore.get(originalTarget.planId)
+        )) as Plan | undefined;
+        const originalBatch = (await requestResult(
+          batchStore.get(originalTarget.batchId)
+        )) as PlanBatch | undefined;
+        if (!plan || !originalBatch || originalBatch.planId !== plan.id) {
+          return null;
+        }
+
+        const targetStatus =
+          input.status === 'published' ? 'published' : originalTarget.status;
+        const target: PlanTarget = {
+          ...originalTarget,
+          status:
+            input.status === 'published' ? 'published' : originalTarget.status,
+          ...(targetStatus === 'published'
+            ? { latestMessage: input.message }
+            : {}),
+          lastModerationCheckAt: at,
+          lastModerationCheckMessage: input.message,
+          updatedAt: at,
+        };
+        if (targetStatus === 'published') {
+          Reflect.deleteProperty(target, 'lastError');
+        }
+        const attempt: Attempt = {
+          ...originalAttempt,
+          status: targetStatus,
+          timeline: [
+            ...originalAttempt.timeline,
+            {
+              stage: 'moderation_recheck',
+              status: input.status,
+              message: input.message,
+              at,
+            },
+          ].slice(-100),
+          updatedAt: at,
+          ...(targetStatus === 'published' ? { completedAt: at } : {}),
+        };
+        targetStore.put(target);
+        attemptStore.put(attempt);
+
+        const planTargets = await allFromIndex<PlanTarget>(
+          targetStore,
+          INDEXES.targets.plan,
+          plan.id
+        );
+        const updatedPlanTargets = planTargets.map((candidate) =>
+          candidate.id === target.id ? target : candidate
+        );
+        const batchTargets = updatedPlanTargets.filter(
+          (candidate) => candidate.batchId === originalBatch.id
+        );
+        const updatedBatch = applyCountsToBatch(
+          { ...originalBatch, updatedAt: at },
+          batchTargets
+        );
+        batchStore.put(updatedBatch);
+        const allBatches = (
+          await allFromIndex<PlanBatch>(
+            batchStore,
+            INDEXES.batches.plan,
+            plan.id
+          )
+        ).map((candidate) =>
+          candidate.id === updatedBatch.id ? updatedBatch : candidate
+        );
+        planStore.put(
+          applyCountsToPlan(plan, updatedPlanTargets, allBatches, at)
+        );
+        return target;
       }
     );
   }
@@ -1648,6 +1945,11 @@ export class DashboardRepository {
           if (item.status === 'queued' && !existing) continue;
           const status = mapBatchItemStatus(item.status);
           const error = friendlyError(status, item.message, item.updatedAt);
+          const comment =
+            item.prepared?.comment ?? item.comment ?? existing?.comment;
+          const fingerprint = comment
+            ? commentFingerprint(comment)
+            : existing?.commentFingerprint;
           const attempt: Attempt = {
             id: identifier,
             runId: run.id,
@@ -1660,6 +1962,8 @@ export class DashboardRepository {
               message: event.message,
               at: event.at,
             })),
+            ...(comment ? { comment } : {}),
+            ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
             ...(error ? { error } : {}),
             createdAt:
               existing?.createdAt ?? item.events[0]?.at ?? item.createdAt,
@@ -1821,7 +2125,11 @@ export class DashboardRepository {
             ...(error ? { lastError: error } : {}),
             updatedAt: item.updatedAt,
           };
-          if (status === 'submitted') {
+          if (
+            status === 'published' ||
+            status === 'pending_moderation' ||
+            status === 'unconfirmed'
+          ) {
             Reflect.deleteProperty(updated, 'lastError');
           }
 
@@ -1832,6 +2140,13 @@ export class DashboardRepository {
           ) {
             const attemptNumber =
               existingAttempt?.attemptNumber ?? target.attemptCount + 1;
+            const comment =
+              item.prepared?.comment ??
+              item.comment ??
+              existingAttempt?.comment;
+            const fingerprint = comment
+              ? commentFingerprint(comment)
+              : existingAttempt?.commentFingerprint;
             const attempt: Attempt = {
               id: existingAttempt?.id ?? attemptId(run.id, target.id),
               runId: run.id,
@@ -1847,6 +2162,8 @@ export class DashboardRepository {
                 message: event.message,
                 at: event.at,
               })),
+              ...(comment ? { comment } : {}),
+              ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
               ...(error ? { error } : {}),
               createdAt:
                 existingAttempt?.createdAt ??

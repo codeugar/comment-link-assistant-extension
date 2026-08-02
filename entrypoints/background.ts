@@ -10,8 +10,8 @@ import {
   filterQueuedItems,
   resumeBatch,
   resumeStoppedBatch,
-  skipCurrentManualGate,
   retryItems,
+  skipCurrentManualGate,
   stopBatch,
   updateBatchProgress,
 } from '@/batch/state';
@@ -25,6 +25,22 @@ import { createDashboardRepository } from '@/dashboard/db';
 import { processLegacyDashboardStorage } from '@/dashboard/legacy-bootstrap';
 import { migrateLegacyDashboardData } from '@/dashboard/migration';
 import type { Plan, PlanBatch, PlanTarget } from '@/dashboard/model';
+import {
+  type ModerationRecheckDashboardData,
+  type ModerationRecheckLastRun,
+  PENDING_MODERATION_RECHECK_ALARM,
+  PendingModerationRecheckCoordinator,
+  addManualModerationEntry,
+  armPendingModerationRecheckAlarm,
+  createChromeModerationVerificationTabPort,
+  loadManualModerationEntries,
+  loadModerationRecheckLastRun,
+  loadModerationRecheckSettings,
+  recheckManualModerationEntry,
+  runManualModerationRechecks,
+  saveModerationRecheckLastRun,
+  saveModerationRecheckSettings,
+} from '@/dashboard/moderation-recheck';
 import { buildPlanBatchSettingsSnapshot } from '@/dashboard/plan-settings';
 import {
   type DashboardActiveRunReference,
@@ -45,6 +61,7 @@ import {
 import {
   analyzeActivePage,
   analyzeCurrentPage,
+  type checkTabForPublishedComment,
   submitCurrentPage,
 } from '@/runtime/page-commands';
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
@@ -98,6 +115,8 @@ let localWakeTimer: number | undefined;
 let stopRequested = false;
 let dashboardPlanOperationTail: Promise<void> = Promise.resolve();
 let batchRetryOperationTail: Promise<void> = Promise.resolve();
+let pendingModerationRecheckPromise: Promise<ModerationRecheckLastRun> | null =
+  null;
 
 function serializeBatchRetryOperation<T>(
   operation: () => Promise<T>
@@ -314,6 +333,159 @@ async function updateDueBadge(
   await updateBatchBadge(batch);
 }
 
+function requestPendingModerationRecheck(): Promise<ModerationRecheckLastRun> {
+  if (pendingModerationRecheckPromise) return pendingModerationRecheckPromise;
+  const startedAt = Date.now();
+  pendingModerationRecheckPromise = ensureDashboardReady()
+    .then(async () => {
+      const settings = await loadModerationRecheckSettings();
+      const coordinator = new PendingModerationRecheckCoordinator(
+        dashboardService,
+        createChromeModerationVerificationTabPort(),
+        settings.maxChecksPerRun
+      );
+      const storedResult = await coordinator.run();
+      const manualResult = await runManualModerationRechecks(
+        createChromeModerationVerificationTabPort(),
+        settings.maxChecksPerRun - storedResult.selected
+      );
+      const result = {
+        selected: storedResult.selected + manualResult.selected,
+        checked: storedResult.checked + manualResult.checked,
+        published: storedResult.published + manualResult.published,
+        stillPending: storedResult.stillPending + manualResult.stillPending,
+      };
+      const lastRun: ModerationRecheckLastRun = {
+        ...result,
+        startedAt,
+        completedAt: Date.now(),
+      };
+      await saveModerationRecheckLastRun(lastRun);
+      return lastRun;
+    })
+    .finally(() => {
+      pendingModerationRecheckPromise = null;
+    });
+  return pendingModerationRecheckPromise;
+}
+
+async function armConfiguredModerationRecheckAlarm(): Promise<void> {
+  await armPendingModerationRecheckAlarm(
+    chrome.alarms,
+    await loadModerationRecheckSettings()
+  );
+}
+
+async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboardData> {
+  const [settings, lastRun, pending, published, manual, alarm] =
+    await Promise.all([
+      loadModerationRecheckSettings(),
+      loadModerationRecheckLastRun(),
+      dashboardService.getPendingModerationChecks(100),
+      dashboardService.getRecentModerationTransitions(50),
+      loadManualModerationEntries(),
+      chrome.alarms.get(PENDING_MODERATION_RECHECK_ALARM),
+    ]);
+  return {
+    settings,
+    running: pendingModerationRecheckPromise !== null,
+    pending: [
+      ...pending.map((item) => ({
+        id: `plan:${item.targetId}`,
+        source: 'plan' as const,
+        ...item,
+      })),
+      ...manual
+        .filter((entry) => entry.status === 'pending_moderation')
+        .map((entry) => ({
+          id: entry.id,
+          source: 'manual' as const,
+          url: entry.pageUrl,
+          fingerprint: entry.targetWebsiteUrl,
+          targetWebsiteUrl: entry.targetWebsiteUrl,
+          checkCount: entry.checkCount,
+          ...(entry.lastCheckAt ? { lastCheckAt: entry.lastCheckAt } : {}),
+          ...(entry.lastCheckMessage
+            ? { lastCheckMessage: entry.lastCheckMessage }
+            : {}),
+        })),
+    ],
+    published: [
+      ...published.map((item) => ({
+        id: `plan:${item.targetId}:${item.publishedAt}`,
+        source: 'plan' as const,
+        ...item,
+      })),
+      ...manual
+        .filter((entry) => entry.status === 'published' && entry.publishedAt)
+        .map((entry) => ({
+          id: entry.id,
+          source: 'manual' as const,
+          url: entry.pageUrl,
+          fingerprint: entry.targetWebsiteUrl,
+          targetWebsiteUrl: entry.targetWebsiteUrl,
+          checkCount: entry.checkCount,
+          publishedAt: entry.publishedAt as number,
+          message:
+            entry.lastCheckMessage ?? 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
+        })),
+    ].sort((left, right) => right.publishedAt - left.publishedAt),
+    ...(lastRun ? { lastRun } : {}),
+    ...(alarm?.scheduledTime ? { nextRunAt: alarm.scheduledTime } : {}),
+  };
+}
+
+async function recheckDashboardTarget(
+  planId: string,
+  targetId: string
+): Promise<Awaited<ReturnType<typeof checkTabForPublishedComment>>> {
+  const [target, planDetail] = await Promise.all([
+    dashboardService.getTargetWithAttempts(planId, targetId),
+    dashboardService.getPlanDetail(planId),
+  ]);
+  const attempt = [...target.attempts]
+    .sort(
+      (left, right) =>
+        right.attemptNumber - left.attemptNumber ||
+        right.updatedAt - left.updatedAt
+    )
+    .find((candidate) => candidate.commentFingerprint || candidate.comment);
+  const fingerprint =
+    attempt?.commentFingerprint ??
+    attempt?.comment?.trim().replace(/\s+/g, ' ').slice(0, 80) ??
+    '';
+  if (!attempt || !fingerprint) {
+    throw new Error('COMMENT_FINGERPRINT_MISSING');
+  }
+  const tabs = createChromeModerationVerificationTabPort();
+  let tabId: number | null = null;
+  let result: Awaited<ReturnType<typeof checkTabForPublishedComment>>;
+  try {
+    tabId = await tabs.create(target.url);
+    result = await tabs.check(
+      tabId,
+      fingerprint,
+      planDetail.plan.promotingWebsiteUrl
+    );
+  } catch {
+    result = {
+      status: 'pending_moderation',
+      message: 'COMMENT_PENDING_MODERATION_RECHECK_UNAVAILABLE',
+      fingerprint,
+    };
+  } finally {
+    if (tabId !== null) await tabs.close(tabId).catch(() => undefined);
+  }
+  await dashboardService.recordModerationCheck({
+    targetId: target.id,
+    attemptId: attempt.id,
+    status: result.status === 'published' ? 'published' : 'pending_moderation',
+    message: result.message,
+    preserveCurrentStatus: true,
+  });
+  return result;
+}
+
 function scheduleLocalWake(delayMs: number): void {
   if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
   localWakeTimer = self.setTimeout(() => {
@@ -408,7 +580,8 @@ async function prepareComment(): Promise<PopupMessageResult> {
         editorLabel: analysis.form.editorLabel,
         submitLabel: analysis.form.submitLabel,
         hasWebsiteField: analysis.form.hasWebsiteField,
-        fillWebsiteField: analysis.form.hasWebsiteField,
+        fillWebsiteField:
+          site.linkMode !== 'comment-only' && analysis.form.hasWebsiteField,
       },
     },
   };
@@ -935,6 +1108,9 @@ async function resumeDashboardPlan(
     const urls = current.items
       .filter(
         (item) =>
+          item.status !== 'published' &&
+          item.status !== 'pending_moderation' &&
+          item.status !== 'unconfirmed' &&
           item.status !== 'submitted' &&
           item.status !== 'no_form' &&
           item.status !== 'validation_error' &&
@@ -953,6 +1129,9 @@ async function resumeDashboardPlan(
   if (matchesCurrent && current.status === 'stopped') {
     const resumable = current.items.filter(
       (item) =>
+        item.status !== 'published' &&
+        item.status !== 'pending_moderation' &&
+        item.status !== 'unconfirmed' &&
         item.status !== 'submitted' &&
         item.status !== 'no_form' &&
         item.status !== 'validation_error' &&
@@ -1227,6 +1406,52 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
       data: await dashboardService.getSummary(await getBatch()),
     };
   }
+  if (message.type === 'moderation.getDashboard') {
+    return {
+      type: message.type,
+      data: await getModerationRecheckDashboard(),
+    };
+  }
+  if (message.type === 'moderation.runNow') {
+    return {
+      type: message.type,
+      data: await requestPendingModerationRecheck(),
+    };
+  }
+  if (message.type === 'moderation.addManual') {
+    await addManualModerationEntry({
+      pageUrl: message.pageUrl,
+      targetWebsiteUrl: message.targetWebsiteUrl,
+    });
+    return {
+      type: message.type,
+      data: await getModerationRecheckDashboard(),
+    };
+  }
+  if (message.type === 'moderation.recheckManual') {
+    await recheckManualModerationEntry(
+      message.entryId,
+      createChromeModerationVerificationTabPort()
+    );
+    return {
+      type: message.type,
+      data: await getModerationRecheckDashboard(),
+    };
+  }
+  if (message.type === 'moderation.recheckTarget') {
+    return {
+      type: message.type,
+      data: await recheckDashboardTarget(message.planId, message.targetId),
+    };
+  }
+  if (message.type === 'moderation.updateSettings') {
+    const settings = await saveModerationRecheckSettings(message.settings);
+    await armPendingModerationRecheckAlarm(chrome.alarms, settings);
+    return {
+      type: message.type,
+      data: await getModerationRecheckDashboard(),
+    };
+  }
   if (message.type === 'plans.list') {
     return {
       type: message.type,
@@ -1297,7 +1522,12 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
         comment: message.comment,
         displayName: site.displayName || undefined,
         email: site.email || undefined,
-        websiteUrl: message.target.fillWebsiteField ? site.websiteUrl : '',
+        websiteUrl:
+          site.linkMode === 'comment-only' || !message.target.fillWebsiteField
+            ? ''
+            : site.websiteUrl,
+        requireInlineAnchor:
+          site.linkMode === 'a-tag-newline' || site.linkMode === 'inline',
       },
       message.target
     );
@@ -1339,6 +1569,11 @@ export default defineBackground({
 
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name === BATCH_RECOVERY_ALARM) requestBatchWake();
+      if (alarm.name === PENDING_MODERATION_RECHECK_ALARM) {
+        void requestPendingModerationRecheck().catch(() => {
+          // Durable pending records remain queued for the next scheduled run.
+        });
+      }
     });
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (changeInfo.status !== 'complete') return;
@@ -1349,12 +1584,19 @@ export default defineBackground({
     chrome.tabs.onRemoved.addListener((tabId) => {
       void handleWorkerTabRemoved(tabId);
     });
-    chrome.runtime.onStartup.addListener(requestBatchWake);
-    chrome.runtime.onInstalled.addListener(requestBatchWake);
+    chrome.runtime.onStartup.addListener(() => {
+      requestBatchWake();
+      void armConfiguredModerationRecheckAlarm();
+    });
+    chrome.runtime.onInstalled.addListener(() => {
+      requestBatchWake();
+      void armConfiguredModerationRecheckAlarm();
+    });
 
     void storageReady
       .then(async () => {
         await ensureDashboardReady();
+        await armConfiguredModerationRecheckAlarm();
         requestBatchWake();
         await updateBatchBadge();
         await updateDueBadge();

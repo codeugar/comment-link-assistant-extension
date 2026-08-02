@@ -41,7 +41,7 @@ describe('website profile extraction', () => {
       'https://example.com/path'
     );
     expect(normalizeWebsiteUrl('https:seed-audio1.com')).toBe(
-      'https://seed-audio1.com/'
+      'https://seed-audio1.com'
     );
     expect(originPermissionPattern('https://example.com/path')).toBe(
       'https://example.com/*'
@@ -69,7 +69,7 @@ describe('website profile extraction', () => {
       description: 'Fetched description',
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/',
+      'https://example.com',
       expect.objectContaining({ method: 'GET', redirect: 'follow' })
     );
   });

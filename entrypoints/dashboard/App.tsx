@@ -42,6 +42,7 @@ import {
   ClockCountdown,
   Copy,
   Database,
+  Eye,
   FileText,
   FunnelSimple,
   GearSix,
@@ -73,6 +74,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { ModerationRecheckPage } from './ModerationRecheckPage';
 import {
   DASHBOARD_REVISION_KEY,
   dashboardRequest,
@@ -90,7 +92,10 @@ import type {
   PlanTargetsPage,
 } from './native-types';
 
-type Route = { page: 'dashboard' } | { page: 'plans'; planId?: string };
+type Route =
+  | { page: 'dashboard' }
+  | { page: 'moderation' }
+  | { page: 'plans'; planId?: string };
 
 type IconComponent = PhosphorIcon;
 
@@ -136,16 +141,19 @@ function readRoute(): Route {
   if (parts[0] === 'plans') {
     return { page: 'plans', planId: parts[1] };
   }
+  if (parts[0] === 'moderation') return { page: 'moderation' };
   return { page: 'dashboard' };
 }
 
 function navigate(route: Route) {
-  globalThis.location.hash =
-    route.page === 'dashboard'
-      ? '#/dashboard'
-      : route.planId
-        ? `#/plans/${encodeURIComponent(route.planId)}`
-        : '#/plans';
+  if (route.page === 'dashboard') globalThis.location.hash = '#/dashboard';
+  else if (route.page === 'moderation') {
+    globalThis.location.hash = '#/moderation';
+  } else {
+    globalThis.location.hash = route.planId
+      ? `#/plans/${encodeURIComponent(route.planId)}`
+      : '#/plans';
+  }
 }
 
 function useRoute(): Route {
@@ -250,8 +258,14 @@ function batchStatusCopy(status: PlanBatch['status']): string {
 
 function targetStatusCopy(status: string): string {
   switch (status) {
+    case 'published':
+      return t('publishedStatus');
+    case 'pending_moderation':
+      return t('pendingModerationStatus');
+    case 'unconfirmed':
+      return t('unconfirmedStatus');
     case 'submitted':
-      return t('submittedStatus');
+      return t('unconfirmedStatus');
     case 'failed':
       return t('failedStatus');
     case 'filtered':
@@ -293,6 +307,10 @@ function targetStatusCopy(status: string): string {
 }
 
 function friendlyReason(target: PlanTargetWithAttempts): string {
+  const errorCode = target.lastError?.code || target.latestMessage;
+  if (errorCode === 'COMMENT_BODY_LINK_REQUIRED') {
+    return t('commentBodyLinkRequiredReason');
+  }
   if (target.lastError?.friendlyMessage) {
     return target.lastError.friendlyMessage;
   }
@@ -341,12 +359,16 @@ function batchCounts(batch: BatchSnapshot | null) {
     return { total: 0, processed: 0, submitted: 0, failed: 0, remaining: 0 };
   }
   let submitted = 0;
+  let unconfirmed = 0;
   let failed = 0;
   for (const item of batch.items) {
-    if (item.status === 'submitted') submitted += 1;
-    else if (isFailedTarget(item.status)) failed += 1;
+    if (item.status === 'published' || item.status === 'pending_moderation') {
+      submitted += 1;
+    } else if (item.status === 'unconfirmed' || item.status === 'submitted') {
+      unconfirmed += 1;
+    } else if (isFailedTarget(item.status)) failed += 1;
   }
-  const processed = submitted + failed;
+  const processed = submitted + unconfirmed + failed;
   return {
     total: batch.items.length,
     processed,
@@ -363,14 +385,6 @@ function planMatchesBatch(plan: Plan | undefined, batch: BatchSnapshot | null) {
     batch.settings.websiteUrl.replace(/\/+$/, '') ===
       plan.promotingWebsiteUrl.replace(/\/+$/, '')
   );
-}
-
-function samePromotingWebsite(left: string, right: string): boolean {
-  try {
-    return normalizeWebsiteUrl(left) === normalizeWebsiteUrl(right);
-  } catch {
-    return left.trim().replace(/\/+$/, '') === right.trim().replace(/\/+$/, '');
-  }
 }
 
 function currentBatchItem(batch: BatchSnapshot | null): BatchItem | undefined {
@@ -564,6 +578,18 @@ function Sidebar({
             weight={route.page === 'plans' ? 'fill' : 'regular'}
           />
           <span>{t('plans')}</span>
+        </button>
+        <button
+          type="button"
+          className={route.page === 'moderation' ? 'is-active' : ''}
+          aria-current={route.page === 'moderation' ? 'page' : undefined}
+          onClick={() => navigate({ page: 'moderation' })}
+        >
+          <ClockCountdown
+            size={22}
+            weight={route.page === 'moderation' ? 'fill' : 'regular'}
+          />
+          <span>{locale() === 'zh-CN' ? '定时复查' : 'Rechecks'}</span>
         </button>
         <button
           type="button"
@@ -1281,10 +1307,12 @@ function PlanList({
   plans,
   selectedPlanId,
   onNewPlan,
+  onSelectPlan,
 }: {
   plans: Plan[];
   selectedPlanId?: string;
   onNewPlan: () => void;
+  onSelectPlan: (planId: string) => void;
 }) {
   const [showArchived, setShowArchived] = useState(false);
   const visiblePlans = plans.filter(
@@ -1333,7 +1361,7 @@ function PlanList({
               <button
                 type="button"
                 className={selectedPlanId === plan.id ? 'is-active' : ''}
-                onClick={() => navigate({ page: 'plans', planId: plan.id })}
+                onClick={() => onSelectPlan(plan.id)}
               >
                 <span className="plan-list-index">{index + 1}</span>
                 <span className="plan-list-copy">
@@ -1358,7 +1386,9 @@ function PlanList({
 
 function TargetStatusBadge({ status }: { status: string }) {
   const failed = isFailedTarget(status);
-  const success = status === 'submitted';
+  const success = status === 'published';
+  const moderation = status === 'pending_moderation';
+  const unconfirmed = status === 'unconfirmed' || status === 'submitted';
   const filtered = status === 'filtered';
   const blocked =
     status === 'blocked' ||
@@ -1369,22 +1399,30 @@ function TargetStatusBadge({ status }: { status: string }) {
       className={`target-status ${
         success
           ? 'success'
-          : failed
-            ? 'failed'
-            : filtered
-              ? 'filtered'
-              : blocked
-                ? 'blocked'
-                : status === 'running' ||
-                    status === 'generating' ||
-                    status === 'opening' ||
-                    status === 'analyzing'
-                  ? 'running'
-                  : 'pending'
+          : moderation
+            ? 'moderation'
+            : unconfirmed
+              ? 'unconfirmed'
+              : failed
+                ? 'failed'
+                : filtered
+                  ? 'filtered'
+                  : blocked
+                    ? 'blocked'
+                    : status === 'running' ||
+                        status === 'generating' ||
+                        status === 'opening' ||
+                        status === 'analyzing'
+                      ? 'running'
+                      : 'pending'
       }`}
     >
       {success ? (
         <CheckCircle size={15} weight="fill" aria-hidden />
+      ) : moderation ? (
+        <ClockCountdown size={15} weight="fill" aria-hidden />
+      ) : unconfirmed ? (
+        <Warning size={15} weight="fill" aria-hidden />
       ) : filtered ? (
         <FunnelSimple size={15} weight="fill" aria-hidden />
       ) : failed ? (
@@ -1404,10 +1442,7 @@ function TargetStatusBadge({ status }: { status: string }) {
   );
 }
 
-type OutboundLinkTagsByUrl = ReadonlyMap<
-  string,
-  readonly OutboundLinkTag[]
->;
+type OutboundLinkTagsByUrl = ReadonlyMap<string, readonly OutboundLinkTag[]>;
 
 function targetOutboundLinkTags(
   url: string,
@@ -1431,7 +1466,10 @@ function TargetOutboundLinkAttributes({
 }) {
   if (loading) {
     return (
-      <span className="target-link-attributes-loading" aria-label={t('loading')}>
+      <span
+        className="target-link-attributes-loading"
+        aria-label={t('loading')}
+      >
         ...
       </span>
     );
@@ -1474,7 +1512,9 @@ function TargetTable({
   selectedIds,
   onToggleSelected,
   onOpenFailure,
+  onRecheckTarget,
   onDeleteTarget,
+  recheckingTargetId,
   onPageChange,
 }: {
   page: PlanTargetsPage | null;
@@ -1486,7 +1526,9 @@ function TargetTable({
   selectedIds: Set<string>;
   onToggleSelected: (id: string) => void;
   onOpenFailure: (target: PlanTargetWithAttempts) => void;
+  onRecheckTarget: (target: PlanTargetWithAttempts) => void;
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
+  recheckingTargetId: string | null;
   onPageChange: (page: number) => void;
 }) {
   if (loading) {
@@ -1558,10 +1600,7 @@ function TargetTable({
                       type="button"
                       className="target-link"
                       title={target.url}
-                      onClick={() => {
-                        if (failed) onOpenFailure(target);
-                      }}
-                      disabled={!failed}
+                      onClick={() => onOpenFailure(target)}
                     >
                       {displayTarget(target.url)}
                     </button>
@@ -1581,22 +1620,45 @@ function TargetTable({
                     </time>
                   </td>
                   <td className="target-action-column">
-                    {!readOnly ? (
-                      <IconButton
-                        label={
-                          canDelete
-                            ? t('deleteTargetAction', [
-                                displayTarget(target.url),
-                              ])
-                            : t('deleteTargetUnavailable')
-                        }
-                        className="target-delete-button"
-                        onClick={() => onDeleteTarget(target)}
-                        disabled={!canDelete}
-                      >
-                        <Trash size={16} aria-hidden />
-                      </IconButton>
-                    ) : null}
+                    <span className="target-row-actions">
+                      {target.attempts?.some(
+                        (attempt) =>
+                          attempt.commentFingerprint || attempt.comment
+                      ) ? (
+                        <IconButton
+                          label={
+                            locale() === 'zh-CN'
+                              ? `复查评论：${displayTarget(target.url)}`
+                              : `Recheck comment: ${displayTarget(target.url)}`
+                          }
+                          className="target-recheck-button"
+                          onClick={() => onRecheckTarget(target)}
+                          disabled={recheckingTargetId === target.id}
+                        >
+                          {recheckingTargetId === target.id ? (
+                            <SpinnerGap size={16} className="is-spinning" />
+                          ) : (
+                            <Eye size={16} aria-hidden />
+                          )}
+                        </IconButton>
+                      ) : null}
+                      {!readOnly ? (
+                        <IconButton
+                          label={
+                            canDelete
+                              ? t('deleteTargetAction', [
+                                  displayTarget(target.url),
+                                ])
+                              : t('deleteTargetUnavailable')
+                          }
+                          className="target-delete-button"
+                          onClick={() => onDeleteTarget(target)}
+                          disabled={!canDelete}
+                        >
+                          <Trash size={16} aria-hidden />
+                        </IconButton>
+                      ) : null}
+                    </span>
                   </td>
                 </tr>
               );
@@ -1641,7 +1703,9 @@ function BatchAccordion({
   readOnly,
   onToggleSelected,
   onOpenFailure,
+  onRecheckTarget,
   onDeleteTarget,
+  recheckingTargetId,
   onPageChange,
 }: {
   batch: PlanBatch;
@@ -1655,7 +1719,9 @@ function BatchAccordion({
   onToggle: () => void;
   onToggleSelected: (id: string) => void;
   onOpenFailure: (target: PlanTargetWithAttempts) => void;
+  onRecheckTarget: (target: PlanTargetWithAttempts) => void;
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
+  recheckingTargetId: string | null;
   onPageChange: (page: number) => void;
 }) {
   const finished = isFinishedBatch(batch.status);
@@ -1708,7 +1774,9 @@ function BatchAccordion({
             selectedIds={selectedIds}
             onToggleSelected={onToggleSelected}
             onOpenFailure={onOpenFailure}
+            onRecheckTarget={onRecheckTarget}
             onDeleteTarget={onDeleteTarget}
+            recheckingTargetId={recheckingTargetId}
             onPageChange={onPageChange}
           />
         </div>
@@ -1731,6 +1799,7 @@ function PlanDetailPane({
   onPageChange,
   onToggleSelected,
   onOpenFailure,
+  onRecheckTarget,
   onDeleteTarget,
   onRetrySelected,
   onRun,
@@ -1751,6 +1820,7 @@ function PlanDetailPane({
   onPageChange: (page: number) => void;
   onToggleSelected: (id: string) => void;
   onOpenFailure: (target: PlanTargetWithAttempts) => void;
+  onRecheckTarget: (target: PlanTargetWithAttempts) => void;
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
   onRetrySelected: () => void;
   onRun: () => void;
@@ -1883,7 +1953,13 @@ function PlanDetailPane({
             onToggle={() => onExpandBatch(batch.id)}
             onToggleSelected={onToggleSelected}
             onOpenFailure={onOpenFailure}
+            onRecheckTarget={onRecheckTarget}
             onDeleteTarget={onDeleteTarget}
+            recheckingTargetId={
+              busyAction?.startsWith('recheck-target:')
+                ? busyAction.slice('recheck-target:'.length)
+                : null
+            }
             onPageChange={onPageChange}
           />
         ))}
@@ -1919,6 +1995,7 @@ function PlansPage({
   onNewPlan,
   onRenamePlan,
   onOpenFailure,
+  onRecheckTarget,
   onDeleteTarget,
   onRunPlan,
   onArchivePlan,
@@ -1939,6 +2016,7 @@ function PlansPage({
   onNewPlan: () => void;
   onRenamePlan: (plan: Plan) => void;
   onOpenFailure: (target: PlanTargetWithAttempts) => void;
+  onRecheckTarget: (target: PlanTargetWithAttempts) => void;
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
   onRunPlan: (planId: string, resume?: boolean) => void;
   onArchivePlan: (plan: Plan) => void;
@@ -1951,8 +2029,14 @@ function PlansPage({
   onBatchCommand: (type: 'batch.open-current' | 'batch.stop') => void;
   onResume: (planId: string) => void;
 }) {
+  const [activePlanId, setActivePlanId] = useState<string | undefined>(
+    selectedPlanId
+  );
+  useEffect(() => {
+    setActivePlanId(selectedPlanId);
+  }, [selectedPlanId]);
   const selectedPlan =
-    plans.find((plan) => plan.id === selectedPlanId) ??
+    plans.find((plan) => plan.id === activePlanId) ??
     plans.find((plan) => plan.status !== 'archived') ??
     plans[0];
   const [detail, setDetail] = useState<PlanDetail | null>(null);
@@ -2055,6 +2139,10 @@ function PlansPage({
           plans={plans}
           selectedPlanId={selectedPlan?.id}
           onNewPlan={onNewPlan}
+          onSelectPlan={(planId) => {
+            setActivePlanId(planId);
+            navigate({ page: 'plans', planId });
+          }}
         />
         {!selectedPlan ? (
           <main className="plan-detail-pane empty-detail">
@@ -2108,6 +2196,7 @@ function PlansPage({
               })
             }
             onOpenFailure={onOpenFailure}
+            onRecheckTarget={onRecheckTarget}
             onDeleteTarget={onDeleteTarget}
             onRetrySelected={() => {
               const selectedUrls =
@@ -2641,9 +2730,7 @@ function OutboundLinkLibraryDrawer({
   entries: OutboundLinkLibraryEntry[];
   loading: boolean;
   onEntriesChange: (
-    updater: (
-      current: OutboundLinkLibraryEntry[]
-    ) => OutboundLinkLibraryEntry[]
+    updater: (current: OutboundLinkLibraryEntry[]) => OutboundLinkLibraryEntry[]
   ) => void;
   onClose: () => void;
   onToast: (message: string, kind?: Toast['kind']) => void;
@@ -3006,14 +3093,12 @@ function OutboundLinkLibraryDrawer({
 function NewPlanDialog({
   open,
   settings,
-  plans,
   busy,
   onClose,
   onCreate,
 }: {
   open: boolean;
   settings: ExtensionSettings;
-  plans: Plan[];
   busy: boolean;
   onClose: () => void;
   onCreate: (input: {
@@ -3040,16 +3125,6 @@ function NewPlanDialog({
       return null;
     }
   }, [selectedSite?.websiteUrl]);
-  const duplicateSite =
-    normalizedPromotingWebsiteUrl !== null &&
-    plans.some(
-      (plan) =>
-        plan.status !== 'archived' &&
-        samePromotingWebsite(
-          plan.promotingWebsiteUrl,
-          normalizedPromotingWebsiteUrl
-        )
-    );
   const tooMany = parsed.valid.length > 2_000;
   const canSubmit =
     name.trim().length > 0 &&
@@ -3058,7 +3133,6 @@ function NewPlanDialog({
     parsed.valid.length > 0 &&
     parsed.invalid.length === 0 &&
     !tooMany &&
-    !duplicateSite &&
     !busy;
 
   useEffect(() => {
@@ -3238,9 +3312,6 @@ function NewPlanDialog({
             {!normalizedPromotingWebsiteUrl ? (
               <p className="form-error">{t('invalidConfiguredWebsite')}</p>
             ) : null}
-            {duplicateSite ? (
-              <p className="form-error">{t('duplicateActiveSite')}</p>
-            ) : null}
             {parsed.invalid.length > 0 ? (
               <p className="form-error">{t('invalidInput')}</p>
             ) : null}
@@ -3334,7 +3405,6 @@ function RenamePlanDialog({
           <label className="form-field">
             <span>{t('planName')}</span>
             <input
-              autoFocus
               value={name}
               maxLength={120}
               onChange={(event) => setName(event.target.value)}
@@ -3522,7 +3592,7 @@ function ConfirmDeleteDialog({
   );
 }
 
-function ErrorDetailDrawer({
+function TargetDetailDrawer({
   target,
   busy,
   onClose,
@@ -3549,6 +3619,10 @@ function ErrorDetailDrawer({
   if (!target) return null;
   const error = target.lastError;
   const attempts = target.attempts ?? [];
+  const failed = isFailedTarget(target.status);
+  const attemptComments = attempts
+    .map((attempt) => attempt.comment?.trim())
+    .filter((comment): comment is string => Boolean(comment));
   const diagnostic = [
     `URL: ${target.url}`,
     `Status: ${target.status}`,
@@ -3556,6 +3630,9 @@ function ErrorDetailDrawer({
     `Message: ${error?.message ?? target.latestMessage}`,
     `Updated: ${new Date(target.updatedAt).toISOString()}`,
     `Attempts: ${target.attemptCount}`,
+    ...(attemptComments.length > 0
+      ? [`Written content: ${attemptComments.join('\n\n')}`]
+      : []),
   ].join('\n');
 
   const copy = async () => {
@@ -3569,7 +3646,7 @@ function ErrorDetailDrawer({
 
   return (
     <div
-      className="drawer-backdrop error-backdrop"
+      className="drawer-backdrop target-detail-backdrop"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -3577,47 +3654,64 @@ function ErrorDetailDrawer({
     >
       <dialog
         open
-        className="error-drawer"
-        aria-labelledby="error-drawer-title"
+        className="target-detail-drawer"
+        aria-labelledby="target-detail-drawer-title"
       >
         <div className="drawer-heading">
           <div>
-            <p className="page-eyebrow">{t('failedStatus')}</p>
-            <h2 id="error-drawer-title">{t('errorDetail')}</h2>
+            <p className="page-eyebrow">{t('linkProcessDetail')}</p>
+            <h2 id="target-detail-drawer-title">{t('linkProcessDetail')}</h2>
           </div>
           <IconButton label={t('close')} onClick={onClose}>
             <X size={21} />
           </IconButton>
         </div>
-        <div className="error-target">
-          <WarningCircle size={23} weight="fill" aria-hidden />
+        <div className={`target-detail-card ${failed ? 'has-error' : ''}`}>
+          {failed ? (
+            <WarningCircle size={23} weight="fill" aria-hidden />
+          ) : (
+            <LinkSimple size={23} weight="bold" aria-hidden />
+          )}
           <div>
             <strong title={target.url}>{displayTarget(target.url)}</strong>
             <small>{target.host}</small>
           </div>
+          <TargetStatusBadge status={target.status} />
         </div>
-        <section className="error-reason-card">
-          <h3>{t('friendlyReason')}</h3>
-          <p>{friendlyReason(target)}</p>
+        <section
+          className={`target-detail-result ${failed ? 'has-error' : ''}`}
+        >
+          <h3>{failed ? t('friendlyReason') : t('latestUpdate')}</h3>
+          <p>{failed ? friendlyReason(target) : target.latestMessage || '—'}</p>
         </section>
-        <dl className="error-metadata">
+        <dl className="target-detail-metadata">
           <div>
-            <dt>{t('errorCode')}</dt>
-            <dd>
-              <code>{error?.code ?? 'UNKNOWN'}</code>
-            </dd>
+            <dt>{t('status')}</dt>
+            <dd>{targetStatusCopy(target.status)}</dd>
+          </div>
+          <div>
+            <dt>{t('updatedAt')}</dt>
+            <dd>{formatTime(target.updatedAt)}</dd>
           </div>
           <div>
             <dt>{t('attempts', [target.attemptCount])}</dt>
-            <dd>{formatTime(target.updatedAt)}</dd>
+            <dd>{attempts.length}</dd>
           </div>
+          {error ? (
+            <div>
+              <dt>{t('errorCode')}</dt>
+              <dd>
+                <code>{error.code}</code>
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt>{t('originalMessage')}</dt>
             <dd>{error?.message ?? (target.latestMessage || '—')}</dd>
           </div>
         </dl>
         <section className="attempt-timeline">
-          <h3>{t('attemptHistory')}</h3>
+          <h3>{t('processingFlow')}</h3>
           {attempts.length === 0 ? (
             <p>{t('unknownErrorReason')}</p>
           ) : (
@@ -3627,30 +3721,43 @@ function ErrorDetailDrawer({
                   <strong>{t('attempts', [attempt.attemptNumber])}</strong>
                   <TargetStatusBadge status={attempt.status} />
                 </header>
-                <ol>
-                  {attempt.timeline.map((event, index) => (
-                    <li key={`${event.stage}-${event.at}-${index}`}>
-                      <span />
-                      <div>
-                        <strong>{targetStatusCopy(event.status)}</strong>
-                        <p>{event.message}</p>
-                      </div>
-                      <time dateTime={new Date(event.at).toISOString()}>
-                        {formatTime(event.at)}
-                      </time>
-                    </li>
-                  ))}
-                </ol>
+                {attempt.timeline.length === 0 ? (
+                  <p>{t('unknownErrorReason')}</p>
+                ) : (
+                  <ol>
+                    {attempt.timeline.map((event, index) => (
+                      <li key={`${event.stage}-${event.at}-${index}`}>
+                        <span />
+                        <div>
+                          <strong>{targetStatusCopy(event.stage)}</strong>
+                          <p>{event.message}</p>
+                        </div>
+                        <time dateTime={new Date(event.at).toISOString()}>
+                          {formatTime(event.at)}
+                        </time>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {attempt.comment ? (
+                  <section className="attempt-written-content">
+                    <h4>{t('writtenContent')}</h4>
+                    <p>{attempt.comment}</p>
+                  </section>
+                ) : null}
               </article>
             ))
           )}
+          {attempts.length > 0 && attemptComments.length === 0 ? (
+            <p className="no-written-content">{t('noWrittenContent')}</p>
+          ) : null}
         </section>
-        <div className="error-drawer-actions">
+        <div className="target-detail-actions">
           <button type="button" className="secondary-button" onClick={copy}>
             <Copy size={18} aria-hidden />
             {t('copyDiagnostics')}
           </button>
-          {!readOnly ? (
+          {!readOnly && failed ? (
             <button
               type="button"
               className="primary-button"
@@ -3670,7 +3777,6 @@ function ErrorDetailDrawer({
     </div>
   );
 }
-
 function ToastRegion({
   toasts,
   onDismiss,
@@ -4046,6 +4152,38 @@ export default function App() {
     }
   };
 
+  const recheckTarget = async (target: PlanTargetWithAttempts) => {
+    const key = `recheck-target:${target.id}`;
+    setBusyAction(key);
+    try {
+      const allowed =
+        isPreviewMode() || (await requestBatchOriginPermissions([target.url]));
+      if (!allowed) {
+        pushToast(translate('permissionDenied'), 'error');
+        return;
+      }
+      const response = await sendToBackground({
+        type: 'moderation.recheckTarget',
+        planId: target.planId,
+        targetId: target.id,
+      });
+      pushToast(
+        response.data.status === 'published'
+          ? locale() === 'zh-CN'
+            ? '已检测到公开评论，状态已更新为“已显示”'
+            : 'Public comment found; status updated to Published'
+          : locale() === 'zh-CN'
+            ? '本次没有检测到公开评论，原状态保持不变'
+            : 'Public comment not found; the previous status was preserved'
+      );
+      await refresh();
+    } catch {
+      pushToast(t('actionFailed'), 'error');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -4106,6 +4244,8 @@ export default function App() {
             onOpenFailure={openRecentFailure}
             onBatchCommand={runBatchCommand}
           />
+        ) : route.page === 'moderation' ? (
+          <ModerationRecheckPage />
         ) : (
           <PlansPage
             plans={plans}
@@ -4120,6 +4260,7 @@ export default function App() {
             onNewPlan={() => setNewPlanOpen(true)}
             onRenamePlan={setPlanToRename}
             onOpenFailure={setSelectedError}
+            onRecheckTarget={recheckTarget}
             onDeleteTarget={setTargetToDelete}
             onRunPlan={runPlan}
             onArchivePlan={(plan) =>
@@ -4158,7 +4299,6 @@ export default function App() {
       <NewPlanDialog
         open={newPlanOpen}
         settings={settings}
-        plans={plans}
         busy={busyAction === 'create'}
         onClose={() => setNewPlanOpen(false)}
         onCreate={createPlan}
@@ -4198,7 +4338,7 @@ export default function App() {
           if (targetToDelete) void deleteTarget(targetToDelete, addToFilter);
         }}
       />
-      <ErrorDetailDrawer
+      <TargetDetailDrawer
         target={selectedError}
         busy={Boolean(
           selectedError && busyAction === `retry:${selectedError.planId}`

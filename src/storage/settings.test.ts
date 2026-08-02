@@ -21,7 +21,7 @@ function site(overrides: Partial<SiteProfile> = {}): SiteProfile {
     websiteUrl: 'https://product.example',
     displayName: 'Alex',
     email: 'alex@example.com',
-    linkMode: 'inline',
+    linkMode: 'a-tag-newline',
     ...overrides,
   };
 }
@@ -106,7 +106,7 @@ describe('extension settings', () => {
         websiteUrl: 'https://www.product.example/',
         displayName: 'Alex',
         email: 'alex@example.com',
-        linkMode: 'inline',
+        linkMode: 'a-tag-newline',
       },
     });
 
@@ -120,7 +120,7 @@ describe('extension settings', () => {
           websiteUrl: 'https://www.product.example',
           displayName: 'Alex',
           email: 'alex@example.com',
-          linkMode: 'inline',
+          linkMode: 'a-tag-newline',
         },
       ],
       activeSiteId: 'site-1',
@@ -142,6 +142,20 @@ describe('extension settings', () => {
     await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
 
     expect(await getSettings()).toEqual(next);
+  });
+
+  it('upgrades the retired inline mode to a-tag-newline', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: {
+        provider: 'deepseek',
+        sites: [site({ linkMode: 'inline' })],
+        activeSiteId: 'site-1',
+      },
+    });
+
+    await expect(getSettings()).resolves.toMatchObject({
+      sites: [{ linkMode: 'a-tag-newline' }],
+    });
   });
 
   it('falls back to defaults for invalid stored settings', async () => {
@@ -169,7 +183,7 @@ describe('extension settings', () => {
       websiteUrl: 'https://product.example',
       displayName: 'Alex',
       email: 'alex@example.com',
-      linkMode: 'inline',
+      linkMode: 'a-tag-newline',
       siteId: 'x',
       siteLabel: 'Muse',
     });

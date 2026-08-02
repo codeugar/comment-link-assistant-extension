@@ -1,5 +1,8 @@
+import { attachLinkFollow, extractPromotedUrl } from './link-follow';
+import { getWordPressSubmitReceipt } from './receipts';
 import type {
   CommentFormSummary,
+  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionBaseline,
   PageSubmissionExpectation,
@@ -9,7 +12,6 @@ import type {
   PreparedPageSubmission,
   TargetPageContext,
 } from './types';
-import { attachLinkFollow, extractPromotedUrl } from './link-follow';
 import { isLocallyVisible, isVisible } from './visibility';
 
 const EDITOR_SELECTOR = [
@@ -78,14 +80,23 @@ const WORDPRESS_CANONICAL_EDITOR_SELECTOR =
   'textarea#comment, textarea[name="comment"]';
 const WORDPRESS_CANONICAL_SUBMIT_SELECTOR =
   '#submit, input[type="submit"][name="submit"], .comment-submit';
-const SUBMISSION_MARKER = 'data-comment-link-assistant-token';
 const RENDERED_COMMENT_EXCLUDE =
   /preview|draft|(?:^|[\s_-])(?:editor|form|composer|input)(?:$|[\s_-])/i;
+const RENDERED_COMMENT_SELECTOR = [
+  '[class*="comment"]',
+  '[id*="comment"]',
+  '[class*="reply"]',
+  '[id*="reply"]',
+  '[itemprop="comment"]',
+  '[itemtype*="Comment"]',
+  '[data-comment-id]',
+  '[data-comment-key]',
+].join(', ');
 const DOM_SETTLE_MS = 50;
 const SUBMIT_ENABLE_TIMEOUT_MS = 750;
 const MAX_FEEDBACK_MESSAGES = 20;
 const MAX_FEEDBACK_MESSAGE_LENGTH = 500;
-const PREPARATION_TTL_MS = 30_000;
+const PREPARATION_TTL_MS = 2 * 60_000;
 // Read-only analyze is load-tolerant: heavy / slow pages rarely reach a fully
 // loaded state within a batch's grace window, but their server-rendered comment
 // form is present early. These bounds keep the settle deterministic and short.
@@ -110,22 +121,7 @@ interface ActiveDomSubmission {
   expiresAt: number;
 }
 
-interface PreparedDomReference {
-  document: Document;
-  container: HTMLElement;
-  containerDescriptor: string;
-  editor: HTMLElement;
-  submit: HTMLElement;
-  nameInput: HTMLInputElement | null;
-  nameValue: string;
-  emailInput: HTMLInputElement | null;
-  emailValue: string;
-  websiteInput: HTMLInputElement | null;
-  websiteValue: string;
-}
-
 const activeDomSubmissions = new WeakMap<Document, ActiveDomSubmission>();
-const preparedDomReferences = new Map<string, PreparedDomReference>();
 
 function isHtmlElement(element: Element): element is HTMLElement {
   return element.namespaceURI === 'http://www.w3.org/1999/xhtml';
@@ -1369,6 +1365,30 @@ function fingerprintFor(comment: string): string {
   return normalizeWhitespace(comment).slice(0, 80);
 }
 
+const REQUIRED_BODY_ANCHOR = /<a\s+href=(["'])([\s\S]*?)\1>([^<>\r\n]+)<\/a>/gi;
+
+function comparableHttpUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.href.replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function hasRequiredBodyAnchor(comment: string, websiteUrl: string): boolean {
+  const anchors = [...comment.matchAll(REQUIRED_BODY_ANCHOR)];
+  const promotedUrl = extractPromotedUrl(comment);
+  return (
+    anchors.length === 1 &&
+    Boolean(anchors[0]?.[3]?.trim()) &&
+    !comment.includes('{LINK}') &&
+    comparableHttpUrl(promotedUrl ?? '') === comparableHttpUrl(websiteUrl) &&
+    comparableHttpUrl(websiteUrl) !== null
+  );
+}
+
 function comparablePageUrl(value: string): string {
   const url = new URL(value);
   url.hash = '';
@@ -1432,13 +1452,20 @@ function renderedCommentExists(
   fingerprint: string
 ): boolean {
   if (!fingerprint) return false;
-  const candidates = queryAllDeep(
+  const candidates = new Set(queryAllDeep(document, RENDERED_COMMENT_SELECTOR));
+  // A few WordPress themes put the actual comment body in a generic block
+  // inside a semantic comment region. Include those blocks as a fallback.
+  for (const element of queryAllDeep(
     document,
-    '[class*="comment"], [id*="comment"], [class*="reply"], [id*="reply"]'
-  );
-  return candidates.some((element) => {
+    'article, li, section, div, p'
+  )) {
+    if (containsRenderedFingerprint(element.textContent ?? '', fingerprint)) {
+      candidates.add(element);
+    }
+  }
+  return Array.from(candidates).some((element) => {
     if (
-      !containsFingerprintWords(element.textContent ?? '', fingerprint) ||
+      !containsRenderedFingerprint(element.textContent ?? '', fingerprint) ||
       element.matches('form, textarea, input, [contenteditable="true"]') ||
       element.querySelector(`form, ${EDITOR_SELECTOR}`) ||
       hasExcludedRenderedCommentContext(element) ||
@@ -1446,15 +1473,57 @@ function renderedCommentExists(
     ) {
       return false;
     }
-    return normalizeWhitespace(visibleTextContent(element)).includes(
+    return containsRenderedFingerprint(
+      visibleTextContent(element),
       fingerprint
     );
   });
 }
 
+function renderedTargetWebsiteExists(
+  document: Document,
+  targetWebsiteUrl?: string
+): boolean {
+  const expected = comparableHttpUrl(targetWebsiteUrl ?? '');
+  if (!expected) return false;
+  return queryAllDeep(document, 'a[href]').some((element) => {
+    if (element.tagName !== 'A' || !isVisible(element)) {
+      return false;
+    }
+    const href = element.getAttribute('href') ?? '';
+    let resolvedHref: string;
+    try {
+      resolvedHref = new URL(href, element.ownerDocument.baseURI).href;
+    } catch {
+      return false;
+    }
+    return (
+      comparableHttpUrl(resolvedHref) === expected &&
+      Boolean(findRenderedCommentContainer(element))
+    );
+  });
+}
+
+function findRenderedCommentContainer(element: Element): Element | null {
+  let current: Element | null = element;
+  while (current) {
+    if (current.matches('form, [role="form"]')) return null;
+    if (
+      current.matches(RENDERED_COMMENT_SELECTOR) &&
+      !hasExcludedRenderedCommentContext(current)
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
 function containsFingerprintWords(text: string, fingerprint: string): boolean {
-  const haystack = normalizeWhitespace(text);
-  const words = fingerprint.split(/\s+/).filter(Boolean);
+  const haystack = normalizeFingerprintText(text);
+  const words = normalizeFingerprintText(fingerprint)
+    .split(/\s+/)
+    .filter(Boolean);
   let offset = 0;
   for (const word of words) {
     const index = haystack.indexOf(word, offset);
@@ -1462,6 +1531,34 @@ function containsFingerprintWords(text: string, fingerprint: string): boolean {
     offset = index + word.length;
   }
   return words.length > 0;
+}
+
+// Renderers may change curly quotes, dash characters, NBSPs, zero-width
+// characters, and Unicode normalization while inserting the comment.
+function normalizeFingerprintText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\u200B|\u200C|\u200D|\uFEFF/g, '')
+    .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function containsRenderedFingerprint(
+  text: string,
+  fingerprint: string
+): boolean {
+  const haystack = normalizeFingerprintText(text);
+  const needle = normalizeFingerprintText(fingerprint);
+  return Boolean(
+    needle &&
+      (haystack.includes(needle) || containsFingerprintWords(haystack, needle))
+  );
 }
 
 function hasExcludedRenderedCommentContext(element: Element): boolean {
@@ -1538,11 +1635,43 @@ function hasWordPressModerationReceipt(document: Document): boolean {
   }
 }
 
+/**
+ * Checks only public rendering of an already accepted comment. It never reads
+ * or mutates a form, so normal articles without a comment form stay eligible
+ * for a future moderation re-check.
+ */
+export function checkModerationDocument(
+  document: Document,
+  fingerprint: string,
+  targetWebsiteUrl?: string
+): ModerationCheckResult {
+  if (renderedTargetWebsiteExists(document, targetWebsiteUrl)) {
+    return {
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
+      fingerprint: fingerprint || targetWebsiteUrl || '',
+    };
+  }
+  const form = buildFormSummary(document);
+  if (
+    form.readiness === 'login_required' ||
+    form.readiness === 'captcha_required'
+  ) {
+    return { status: form.readiness, message: form.message, fingerprint };
+  }
+  return {
+    status: 'pending_moderation',
+    message: 'COMMENT_PENDING_MODERATION_NOT_VISIBLE',
+    fingerprint,
+  };
+}
+
 export function verifySubmissionDocument(
   document: Document,
   fingerprint: string,
   baseline?: PageSubmissionBaseline,
-  targetUrl?: string
+  targetUrl?: string,
+  expectedUrl?: string
 ): PageSubmissionResult {
   const finalize = (result: PageSubmissionResult): PageSubmissionResult =>
     attachLinkFollow(result, document, targetUrl, fingerprint);
@@ -1571,6 +1700,10 @@ export function verifySubmissionDocument(
     renderedComment &&
     !(baseline?.renderedComment ?? false) &&
     !draftStillInEditor;
+  const renderedTargetWebsite = renderedTargetWebsiteExists(
+    document,
+    targetUrl
+  );
   const pendingFeedback = feedbackChanged && PENDING_COPY.test(feedback);
   const successFeedback = feedbackChanged && SUCCESS_COPY.test(feedback);
   const errorFeedback = feedbackChanged && ERROR_COPY.test(feedback);
@@ -1580,12 +1713,16 @@ export function verifySubmissionDocument(
   const duplicateComment =
     DUPLICATE_COMMENT_COPY.test(feedback) ||
     DUPLICATE_COMMENT_COPY.test(bodyCopy);
-  const moderationReceipt = hasWordPressModerationReceipt(document);
+  const receipt = expectedUrl
+    ? getWordPressSubmitReceipt(document.location.href, expectedUrl)
+    : hasWordPressModerationReceipt(document)
+      ? 'pending_moderation'
+      : null;
   // WordPress duplicate-comment rejection: an explicit terminal error.
   if (
     duplicateComment &&
     !pendingFeedback &&
-    !successFeedback &&
+    !receipt &&
     !renderedCommentAdded
   ) {
     return finalize({
@@ -1595,45 +1732,30 @@ export function verifySubmissionDocument(
       clickOccurred: true,
     });
   }
-  if (
-    errorFeedback &&
-    (pendingFeedback || successFeedback || renderedCommentAdded)
-  ) {
+  // Public display is intentionally proved by one signal only: the promoted
+  // website URL is rendered as a visible link inside a comment container.
+  if (renderedTargetWebsite) {
     return finalize({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
       fingerprint,
       clickOccurred: true,
     });
   }
-  // WordPress moderation receipt is authoritative for "held for moderation".
-  if (
-    !errorFeedback &&
-    (moderationReceipt ||
-      pendingFeedback ||
-      (successFeedback && !renderedCommentAdded))
-  ) {
+  // WordPress moderation receipts and fresh moderation feedback prove server
+  // acceptance, but intentionally do not claim the comment is public yet.
+  if (receipt === 'pending_moderation' || pendingFeedback) {
     return finalize({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'pending_moderation',
+      message:
+        receipt === 'pending_moderation'
+          ? 'COMMENT_PENDING_WORDPRESS_MODERATION'
+          : 'COMMENT_PENDING_MODERATION_FEEDBACK',
       fingerprint,
       clickOccurred: true,
     });
   }
-  if (!errorFeedback && renderedCommentAdded) {
-    return finalize({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
-      fingerprint,
-      clickOccurred: true,
-    });
-  }
-  if (
-    errorFeedback &&
-    !pendingFeedback &&
-    !successFeedback &&
-    !renderedCommentAdded
-  ) {
+  if (errorFeedback && !successFeedback && !renderedTargetWebsite) {
     return finalize({
       status: 'validation_error',
       message: feedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
@@ -1641,9 +1763,12 @@ export function verifySubmissionDocument(
       clickOccurred: true,
     });
   }
+  // A click (or generic "thanks" copy) is not a receipt of either public
+  // display or moderation acceptance. Keep it as an explicit unknown outcome
+  // rather than silently promoting it to submitted.
   return finalize({
-    status: 'submitted',
-    message: 'COMMENT_SUBMITTED',
+    status: 'unconfirmed',
+    message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     fingerprint,
     clickOccurred: true,
   });
@@ -1696,6 +1821,16 @@ export async function prepareSubmissionDocument(
   expected?: PageSubmissionExpectation
 ): Promise<PageSubmissionPreparation> {
   const fingerprint = fingerprintFor(input.comment);
+  if (
+    input.requireInlineAnchor &&
+    !hasRequiredBodyAnchor(input.comment, input.websiteUrl)
+  ) {
+    return preparationError(
+      'validation_error',
+      'COMMENT_BODY_LINK_REQUIRED',
+      fingerprint
+    );
+  }
   const analysis: PageAnalysis = {
     page: buildPageContext(document),
     form: buildFormSummary(document),
@@ -1804,38 +1939,30 @@ export async function prepareSubmissionDocument(
       setNativeValue(websiteInput, websiteUrl);
     }
 
-    await waitForEnabledSubmit(document, analysis.form.submitLabel);
+    await waitForEnabledSubmit(document);
 
-    const markedEditor = findEditor(document);
-    const markedSubmit = markedEditor
-      ? findSubmit(findContainer(markedEditor))
+    // Re-find the live controls after the page has settled. Dynamic themes
+    // often replace the form nodes after input events, so DOM identity and
+    // class/attribute descriptors are deliberately not treated as content
+    // validation signals.
+    const currentEditor = findEditor(document);
+    const currentContainer = currentEditor
+      ? findContainer(currentEditor)
       : null;
-    const markedContainer = markedEditor ? findContainer(markedEditor) : null;
-    const markedNameInput = markedContainer
-      ? findInput(markedContainer, 'name')
+    const currentSubmit = currentContainer
+      ? findSubmit(currentContainer)
       : null;
-    const markedEmailInput = markedContainer
-      ? findInput(markedContainer, 'email')
-      : null;
-    const markedWebsiteInput = markedContainer
-      ? findInput(markedContainer, 'website')
+    const currentWebsiteInput = currentContainer
+      ? findInput(currentContainer, 'website')
       : null;
     if (
-      !markedEditor ||
-      !markedSubmit ||
-      !markedContainer ||
-      isDisabled(markedSubmit) ||
-      structuralDescriptor(markedEditor) !== analysis.form.editorLabel ||
-      elementDescriptor(markedSubmit) !== analysis.form.submitLabel ||
-      Boolean(markedNameInput) !== analysis.form.hasNameField ||
-      Boolean(markedEmailInput) !== analysis.form.hasEmailField ||
-      Boolean(markedWebsiteInput) !== analysis.form.hasWebsiteField ||
-      (markedNameInput !== null && markedNameInput.value !== displayName) ||
-      (markedEmailInput !== null && markedEmailInput.value !== email) ||
-      (markedWebsiteInput !== null &&
-        markedWebsiteInput.value !== websiteUrl) ||
-      normalizeWhitespace(readEditorValue(markedEditor)) !==
-        normalizeWhitespace(input.comment)
+      !currentEditor ||
+      !currentSubmit ||
+      isDisabled(currentSubmit) ||
+      Boolean(currentWebsiteInput) !== analysis.form.hasWebsiteField ||
+      normalizeWhitespace(readEditorValue(currentEditor)) !==
+        normalizeWhitespace(input.comment) ||
+      (currentWebsiteInput !== null && currentWebsiteInput.value !== websiteUrl)
     ) {
       releaseDomSubmission(document, domToken);
       return preparationError(
@@ -1844,21 +1971,6 @@ export async function prepareSubmissionDocument(
         fingerprint
       );
     }
-    markedEditor.setAttribute(SUBMISSION_MARKER, domToken);
-    markedSubmit.setAttribute(SUBMISSION_MARKER, domToken);
-    preparedDomReferences.set(domToken, {
-      document,
-      container: markedContainer,
-      containerDescriptor: structuralDescriptor(markedContainer),
-      editor: markedEditor,
-      submit: markedSubmit,
-      nameInput: markedNameInput,
-      nameValue: markedNameInput?.value ?? '',
-      emailInput: markedEmailInput,
-      emailValue: markedEmailInput?.value ?? '',
-      websiteInput: markedWebsiteInput,
-      websiteValue: markedWebsiteInput?.value ?? '',
-    });
     const baseline: PageSubmissionBaseline = {
       feedbackMessages: readPageFeedbackMessages(document),
       renderedComment: renderedCommentExists(document, fingerprint),
@@ -1869,6 +1981,7 @@ export async function prepareSubmissionDocument(
       prepared: {
         fingerprint,
         comment: input.comment,
+        websiteUrl,
         domToken,
         baseline,
         expected: expected ?? {
@@ -1894,15 +2007,6 @@ export async function clickPreparedSubmissionDocument(
     page: buildPageContext(document),
     form: buildFormSummary(document),
   };
-  if (analysis.form.hasWebsiteField !== prepared.expected.hasWebsiteField) {
-    releaseDomSubmission(document, prepared.domToken);
-    return {
-      status: 'validation_error',
-      message: 'LINK_PLACEMENT_CHANGED',
-      fingerprint: prepared.fingerprint,
-      clickOccurred: false,
-    };
-  }
   if (
     comparablePageUrl(analysis.page.url) !==
     comparablePageUrl(prepared.expected.url)
@@ -1932,44 +2036,36 @@ export async function clickPreparedSubmissionDocument(
   const editor = findEditor(document);
   const currentContainer = editor ? findContainer(editor) : null;
   const submit = currentContainer ? findSubmit(currentContainer) : null;
-  const nameInput = currentContainer
-    ? findInput(currentContainer, 'name')
-    : null;
-  const emailInput = currentContainer
-    ? findInput(currentContainer, 'email')
-    : null;
   const websiteInput = currentContainer
     ? findInput(currentContainer, 'website')
     : null;
   const activeSubmission = activeDomSubmissions.get(document);
-  const domReference = preparedDomReferences.get(prepared.domToken);
+  const expectedWebsiteUrl =
+    prepared.websiteUrl ?? extractPromotedUrl(prepared.comment);
+  // The lease only arbitrates genuinely concurrent preparations in this
+  // content-script instance. A background wake, content-script reinjection,
+  // or a slow page can legitimately lose/expire the in-memory lease while the
+  // visible semantic form state remains exactly what we prepared. In that
+  // case the URL, comment, Website value and enabled submit control below are
+  // the authoritative click guard.
+  const hasConflictingLivePreparation = Boolean(
+    activeSubmission &&
+      activeSubmission.expiresAt > Date.now() &&
+      activeSubmission.token !== prepared.domToken
+  );
   if (
     !editor ||
     !submit ||
     isDisabled(submit) ||
-    !activeSubmission ||
-    activeSubmission.token !== prepared.domToken ||
-    activeSubmission.expiresAt <= Date.now() ||
-    !domReference ||
-    domReference.document !== document ||
-    domReference.container !== currentContainer ||
-    structuralDescriptor(currentContainer) !==
-      domReference.containerDescriptor ||
-    domReference.editor !== editor ||
-    domReference.submit !== submit ||
-    domReference.nameInput !== nameInput ||
-    domReference.nameValue !== (nameInput?.value ?? '') ||
-    domReference.emailInput !== emailInput ||
-    domReference.emailValue !== (emailInput?.value ?? '') ||
-    domReference.websiteInput !== websiteInput ||
-    domReference.websiteValue !== (websiteInput?.value ?? '') ||
-    !currentContainer?.isConnected ||
-    !editor.isConnected ||
-    !submit.isConnected ||
-    editor.getAttribute(SUBMISSION_MARKER) !== prepared.domToken ||
-    submit.getAttribute(SUBMISSION_MARKER) !== prepared.domToken ||
+    hasConflictingLivePreparation ||
+    Boolean(websiteInput) !== prepared.expected.hasWebsiteField ||
     normalizeWhitespace(readEditorValue(editor)) !==
-      normalizeWhitespace(prepared.comment)
+      normalizeWhitespace(prepared.comment) ||
+    (websiteInput !== null &&
+      (expectedWebsiteUrl?.trim()
+        ? comparableHttpUrl(websiteInput.value) !==
+          comparableHttpUrl(expectedWebsiteUrl)
+        : websiteInput.value.trim() !== ''))
   ) {
     releaseDomSubmission(document, prepared.domToken);
     return {
@@ -1980,9 +2076,6 @@ export async function clickPreparedSubmissionDocument(
     };
   }
 
-  preparedDomReferences.delete(prepared.domToken);
-  editor.removeAttribute(SUBMISSION_MARKER);
-  submit.removeAttribute(SUBMISSION_MARKER);
   try {
     submit.click();
     await waitForPageResponse(document, waitMs, prepared.baseline);
@@ -1990,7 +2083,8 @@ export async function clickPreparedSubmissionDocument(
       document,
       prepared.fingerprint,
       prepared.baseline,
-      extractPromotedUrl(prepared.comment) ?? undefined
+      extractPromotedUrl(prepared.comment) ?? undefined,
+      prepared.expected.url
     );
   } finally {
     releaseDomSubmission(document, prepared.domToken);
@@ -2022,20 +2116,13 @@ function waitForDomSettle(document: Document): Promise<void> {
   });
 }
 
-async function waitForEnabledSubmit(
-  document: Document,
-  expectedLabel: string
-): Promise<void> {
+async function waitForEnabledSubmit(document: Document): Promise<void> {
   const deadline = Date.now() + SUBMIT_ENABLE_TIMEOUT_MS;
   do {
     await waitForDomSettle(document);
     const editor = findEditor(document);
     const submit = editor ? findSubmit(findContainer(editor)) : null;
-    if (
-      submit &&
-      elementDescriptor(submit) === expectedLabel &&
-      !isDisabled(submit)
-    ) {
+    if (submit && !isDisabled(submit)) {
       return;
     }
   } while (Date.now() < deadline);
@@ -2053,20 +2140,6 @@ function preparationError(
 }
 
 function releaseDomSubmission(document: Document, token: string): void {
-  const reference = preparedDomReferences.get(token);
-  if (reference?.editor.getAttribute(SUBMISSION_MARKER) === token) {
-    reference.editor.removeAttribute(SUBMISSION_MARKER);
-  }
-  if (reference?.submit.getAttribute(SUBMISSION_MARKER) === token) {
-    reference.submit.removeAttribute(SUBMISSION_MARKER);
-  }
-  preparedDomReferences.delete(token);
-  if (
-    reference &&
-    activeDomSubmissions.get(reference.document)?.token === token
-  ) {
-    activeDomSubmissions.delete(reference.document);
-  }
   if (activeDomSubmissions.get(document)?.token === token) {
     activeDomSubmissions.delete(document);
   }

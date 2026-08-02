@@ -1,11 +1,12 @@
 import {
   analyzePageDocument,
+  checkModerationDocument,
   clickPreparedSubmissionDocument,
   prepareSubmissionDocument,
   verifySubmissionDocument,
 } from './dom';
-import { hasWordPressSubmitReceipt } from './receipts';
 import type {
+  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionBaseline,
   PageSubmissionExpectation,
@@ -20,6 +21,11 @@ export const PAGE_COMMAND_MESSAGE_TYPE = 'comment-link-assistant:page-command';
 export type PageCommand =
   | { type: 'analyze' }
   | {
+      type: 'moderation.check';
+      fingerprint?: string;
+      targetWebsiteUrl?: string;
+    }
+  | {
       type: 'submit.prepare';
       input: PageSubmissionInput;
       expected: PageSubmissionExpectation;
@@ -30,6 +36,7 @@ export type PageCommand =
       fingerprint: string;
       baseline: PageSubmissionBaseline;
       expectedUrl: string;
+      targetWebsiteUrl?: string;
     };
 
 export interface PageCommandMessage {
@@ -39,6 +46,7 @@ export interface PageCommandMessage {
 
 export type PageCommandResult =
   | { type: 'analysis'; analysis: PageAnalysis }
+  | { type: 'moderation-check'; result: ModerationCheckResult }
   | { type: 'preparation'; preparation: PageSubmissionPreparation }
   | { type: 'submission'; result: PageSubmissionResult }
   | { type: 'error'; message: string };
@@ -47,10 +55,20 @@ export function isPageCommand(value: unknown): value is PageCommand {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (record.type === 'analyze') return true;
+  if (record.type === 'moderation.check') {
+    return (
+      (typeof record.fingerprint === 'string' &&
+        record.fingerprint.length > 0) ||
+      (typeof record.targetWebsiteUrl === 'string' &&
+        record.targetWebsiteUrl.length > 0)
+    );
+  }
   if (record.type === 'verify') {
     return (
       typeof record.fingerprint === 'string' &&
       typeof record.expectedUrl === 'string' &&
+      (record.targetWebsiteUrl === undefined ||
+        typeof record.targetWebsiteUrl === 'string') &&
       isBaseline(record.baseline)
     );
   }
@@ -69,6 +87,8 @@ export function isPageCommand(value: unknown): value is PageCommand {
     (input.displayName === undefined ||
       typeof input.displayName === 'string') &&
     (input.email === undefined || typeof input.email === 'string') &&
+    (input.requireInlineAnchor === undefined ||
+      typeof input.requireInlineAnchor === 'boolean') &&
     isExpectation(record.expected)
   );
 }
@@ -123,6 +143,16 @@ export async function runPageCommand(
   if (command.type === 'analyze') {
     return { type: 'analysis', analysis: await analyzePageDocument(document) };
   }
+  if (command.type === 'moderation.check') {
+    return {
+      type: 'moderation-check',
+      result: checkModerationDocument(
+        document,
+        command.fingerprint ?? '',
+        command.targetWebsiteUrl
+      ),
+    };
+  }
   if (command.type === 'verify') {
     if (
       !isAllowedSubmissionReturnUrl(document.location.href, command.expectedUrl)
@@ -130,8 +160,8 @@ export async function runPageCommand(
       return {
         type: 'submission',
         result: {
-          status: 'submitted',
-          message: 'COMMENT_SUBMITTED',
+          status: 'unconfirmed',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
           fingerprint: command.fingerprint,
           clickOccurred: true,
         },
@@ -140,22 +170,10 @@ export async function runPageCommand(
     const result = verifySubmissionDocument(
       document,
       command.fingerprint,
-      command.baseline
+      command.baseline,
+      command.targetWebsiteUrl,
+      command.expectedUrl
     );
-    if (
-      result.status === 'submitted' &&
-      hasWordPressSubmitReceipt(document.location.href, command.expectedUrl)
-    ) {
-      return {
-        type: 'submission',
-        result: {
-          status: 'submitted',
-          message: 'COMMENT_SUBMITTED',
-          fingerprint: command.fingerprint,
-          clickOccurred: true,
-        },
-      };
-    }
     return { type: 'submission', result };
   }
   if (command.type === 'submit.prepare') {

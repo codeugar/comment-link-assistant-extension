@@ -255,8 +255,8 @@ describe('WordPress submit-receipt confirmation', () => {
     });
 
     expect(result).toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'pending_moderation',
+      message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
       clickOccurred: true,
     });
   });
@@ -277,7 +277,7 @@ describe('WordPress submit-receipt confirmation', () => {
     });
   });
 
-  it('confirms a fresh #comment-<id> permalink receipt through the page command', async () => {
+  it('keeps a fresh #comment-<id> receipt unconfirmed without the promoted URL', async () => {
     const origin = document.location.origin;
     document.defaultView?.history.replaceState(
       {},
@@ -297,8 +297,8 @@ describe('WordPress submit-receipt confirmation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'submitted',
-        message: 'COMMENT_SUBMITTED',
+        status: 'unconfirmed',
+        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
       },
     });
   });

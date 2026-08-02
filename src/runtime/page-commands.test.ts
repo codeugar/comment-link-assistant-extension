@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   analyzeTab,
+  checkTabForPublishedComment,
   clickPreparedTabSubmission,
   prepareTabSubmission,
   submitCurrentPage,
@@ -11,6 +12,62 @@ describe('page command runtime', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('routes a moderation recheck through the read-only page command', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'moderation-check',
+      result: {
+        status: 'published',
+        message: 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT',
+        fingerprint: 'Useful fingerprint',
+      },
+    });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+    });
+
+    await expect(
+      checkTabForPublishedComment(42, 'Useful fingerprint')
+    ).resolves.toMatchObject({ status: 'published' });
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        command: {
+          type: 'moderation.check',
+          fingerprint: 'Useful fingerprint',
+        },
+      })
+    );
+  });
+
+  it('routes a target-website recheck without a comment fingerprint', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'moderation-check',
+      result: {
+        status: 'published',
+        message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
+        fingerprint: 'https://product.example',
+      },
+    });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
+    });
+
+    await expect(
+      checkTabForPublishedComment(42, '', 'https://product.example')
+    ).resolves.toMatchObject({ status: 'published' });
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        command: {
+          type: 'moderation.check',
+          targetWebsiteUrl: 'https://product.example',
+        },
+      })
+    );
   });
 
   it('analyzes the specified tab without depending on the active tab', async () => {
@@ -202,7 +259,7 @@ describe('page command runtime', () => {
     ).rejects.toThrow('PAGE_COMMAND_TIMEOUT');
 
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     await result;
   });
 
@@ -271,7 +328,7 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('confirms a WordPress moderation redirect from the URL alone', async () => {
+  it('falls back to a WordPress moderation receipt when the DOM check is unavailable', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       comment: 'A relevant comment',
@@ -301,24 +358,32 @@ describe('page command runtime', () => {
     await expect(
       verifyTabSubmission(42, prepared, prepared.expected.url)
     ).resolves.toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'pending_moderation',
+      message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     });
 
-    // The URL receipt is authoritative; a still-loading page must not be
-    // consulted (that race is exactly what used to produce false failures).
+    // The DOM URL check has priority; if it is unavailable, the deterministic
+    // moderation receipt still preserves the pending state.
     expect(executeScript).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it('confirms a new WordPress comment anchor from the URL alone', async () => {
+  it('does not confirm a new WordPress comment anchor from the URL alone', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       baseline: { feedbackMessages: [], renderedComment: false },
     };
-    const sendMessage = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result: {
+        status: 'unconfirmed',
+        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        fingerprint: prepared.fingerprint,
+        clickOccurred: true,
+      },
+    });
     const executeScript = vi.fn();
     vi.stubGlobal('chrome', {
       tabs: {
@@ -335,20 +400,29 @@ describe('page command runtime', () => {
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article')
     ).resolves.toMatchObject({
-      status: 'submitted',
+      status: 'unconfirmed',
       clickOccurred: true,
     });
 
     expect(executeScript).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it('confirms a paginated-comments redirect carrying the anchor', async () => {
+  it('verifies a paginated anchor in-page using the promoted URL', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       baseline: { feedbackMessages: [], renderedComment: false },
+      websiteUrl: 'https://product.example',
     };
-    const sendMessage = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result: {
+        status: 'published',
+        message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
+        fingerprint: prepared.fingerprint,
+        clickOccurred: true,
+      },
+    });
     const executeScript = vi.fn();
     vi.stubGlobal('chrome', {
       tabs: {
@@ -365,12 +439,20 @@ describe('page command runtime', () => {
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article/')
     ).resolves.toMatchObject({
-      status: 'submitted',
+      status: 'published',
       clickOccurred: true,
     });
 
     expect(executeScript).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        command: expect.objectContaining({
+          type: 'verify',
+          targetWebsiteUrl: 'https://product.example',
+        }),
+      })
+    );
   });
 
   it('verifies in-page on a paginated-comments path without a receipt', async () => {
@@ -623,8 +705,8 @@ describe('page command runtime', () => {
         }
       )
     ).resolves.toMatchObject({
-      status: 'submitted',
-      message: 'COMMENT_SUBMITTED',
+      status: 'unconfirmed',
+      message: 'COMMENT_SUBMISSION_UNCONFIRMED',
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
@@ -697,17 +779,11 @@ describe('page command runtime', () => {
           fillWebsiteField: true,
         }
       )
-    ).resolves.toMatchObject({ status: 'submitted' });
+    ).resolves.toMatchObject({ status: 'pending_moderation' });
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls[2]?.[1]).toMatchObject({
-      command: {
-        type: 'verify',
-        expectedUrl: 'https://blog.example/article',
-      },
-    });
   });
 
-  it('gives the read-only analyze command headroom past the 10s command timeout', async () => {
+  it('keeps a bounded timeout for a read-only analyze command', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('chrome', {
       tabs: { sendMessage: vi.fn(() => new Promise(() => {})) },
@@ -721,10 +797,7 @@ describe('page command runtime', () => {
       () => outcome('rejected')
     );
 
-    // The 10s submit/verify timeout must not apply to a read-only analyze.
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(outcome).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(19_999);
+    await vi.advanceTimersByTimeAsync(29_999);
     expect(outcome).not.toHaveBeenCalled();
 
     // Analyze still has a hard 30s bound so it can never hang forever.
@@ -733,7 +806,7 @@ describe('page command runtime', () => {
     await expect(pending).rejects.toThrow('PAGE_COMMAND_TIMEOUT');
   });
 
-  it('keeps the 10s command timeout for a submit click', async () => {
+  it('gives a submit click 2 minutes for slow ad-heavy pages', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       comment: 'A relevant comment',
@@ -755,8 +828,9 @@ describe('page command runtime', () => {
     const rejection = expect(pending).rejects.toThrow(
       'PAGE_SUBMISSION_NAVIGATION_IN_PROGRESS'
     );
-    // A mutating submit.click must still reject at 10s, not the analyze 30s.
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(1);
     await rejection;
   });
 

@@ -51,10 +51,7 @@
     "message": "链接放置方式"
   },
   "linkModePreferWebsiteField": {
-    "message": "优先填写网站字段"
-  },
-  "linkModeInline": {
-    "message": "允许在评论中自然加入链接"
+    "message": "优先填写网站 URL"
   },
   "saveSettings": {
     "message": "保存设置"
@@ -123,10 +120,10 @@
     "message": "请填写所选 KIE 模型的 API Key。"
   },
   "openDashboard": {
-    "message": "\u6253\u5f00\u770b\u677f"
+    "message": "打开看板"
   },
   "dashboardOpenFailed": {
-    "message": "\u65e0\u6cd5\u6253\u5f00\u770b\u677f"
+    "message": "无法打开看板"
   },
   "openSettings": {
     "message": "打开设置"
@@ -279,7 +276,7 @@
     "message": "批次已停止"
   },
   "batchSummary": {
-    "message": "已提交 $1 · 失败 $2"
+    "message": "已显示 $1 · 等待审核 $2 · 结果未确认 $3 · 失败 $4"
   },
   "startNewBatch": {
     "message": "开始新批次"
@@ -354,13 +351,13 @@
     "message": "未找到评论区"
   },
   "batchStatusValidationError": {
-    "message": "提交失败"
+    "message": "提交前校验失败"
   },
   "batchStatusFailed": {
     "message": "失败"
   },
   "batchStatusFiltered": {
-    "message": "\u5df2\u8fc7\u6ee4"
+    "message": "已过滤"
   },
   "batchStatusStopped": {
     "message": "已停止"
@@ -382,6 +379,9 @@
   },
   "websiteRequiredForTarget": {
     "message": "此表单要求填写网站网址，因此没有提交。"
+  },
+  "commentBodyLinkRequired": {
+    "message": "提交前链接校验失败：评论正文中的推广链接缺失，或与配置的网站地址不一致。请检查 HTTP/HTTPS、域名和路径。"
   },
   "unsafeSubmitBlocked": {
     "message": "所选操作不是安全的评论提交动作，插件已拦截且未提交。"
@@ -487,5 +487,32 @@
   },
   "planEmpty": {
     "message": "暂无计划"
+  },
+  "batchStatusPublished": {
+    "message": "已显示"
+  },
+  "batchStatusPendingModeration": {
+    "message": "已提交，等待审核"
+  },
+  "batchStatusUnconfirmed": {
+    "message": "提交结果未确认"
+  },
+  "commentPublishedByAnchor": {
+    "message": "已通过页面上的新评论链接确认公开显示。"
+  },
+  "commentPublishedByFingerprint": {
+    "message": "已通过页面呈现的评论正文确认公开显示。"
+  },
+  "commentPendingWordPressModeration": {
+    "message": "网站已接受评论，并标记为等待审核。"
+  },
+  "commentPendingModerationFeedback": {
+    "message": "页面提示评论正在等待审核。"
+  },
+  "linkModeATagNewline": {
+    "message": "a 标签换行"
+  },
+  "linkModeCommentOnly": {
+    "message": "优先评论"
   }
 }

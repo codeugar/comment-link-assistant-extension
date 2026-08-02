@@ -194,8 +194,8 @@ function targetFor(
   const batchOffset = (batchSequence - 1) * 30;
   const absolute = batchOffset + position;
   let status: PlanTarget['status'] = 'pending';
-  if (batchSequence < 3) status = 'submitted';
-  if (batchSequence === 3 && position <= 18) status = 'submitted';
+  if (batchSequence < 3) status = 'published';
+  if (batchSequence === 3 && position <= 18) status = 'published';
   if (batchSequence === 3 && position === 19) status = 'running';
   if (batchSequence === 3 && (position === 20 || position === 21)) {
     status = 'failed';
@@ -223,7 +223,31 @@ function targetFor(
       at: updatedAt - 21_000,
     },
     {
-      stage: status === 'failed' ? 'failed' : 'submitted',
+      stage: 'generating',
+      status: 'running' as const,
+      message: 'Generated comment content',
+      at: updatedAt - 14_000,
+    },
+    {
+      stage: 'prepared',
+      status: 'running' as const,
+      message: 'Prepared the target comment form',
+      at: updatedAt - 9_000,
+    },
+    {
+      stage: 'click_dispatched',
+      status: 'running' as const,
+      message: 'Submitted the prepared form',
+      at: updatedAt - 5_000,
+    },
+    {
+      stage: 'verifying',
+      status: 'running' as const,
+      message: 'Verified the submission result',
+      at: updatedAt - 2_000,
+    },
+    {
+      stage: status === 'failed' ? 'failed' : 'published',
       status,
       message: lastError?.message ?? 'Submission confirmed',
       at: updatedAt,
@@ -239,6 +263,12 @@ function targetFor(
     attemptNumber: 1,
     status,
     timeline,
+    ...(status === 'published' || status === 'running'
+      ? {
+          comment:
+            'Really enjoyed this perspective. The practical examples make the topic much easier to apply.',
+        }
+      : {}),
     error: lastError,
     createdAt: updatedAt - 40_000,
     updatedAt,
@@ -440,7 +470,7 @@ function makeDemoBatchItem(index: number): BatchItem {
   const target = targetFor('seed-audio', 'seed-audio-batch-3', 3, index + 1);
   const status =
     index < 18
-      ? 'submitted'
+      ? 'published'
       : index === 18
         ? 'generating'
         : index === 19 || index === 20
