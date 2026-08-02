@@ -1,86 +1,589 @@
 # Comment Link Assistant
 
-WXT-based Chrome Manifest V3 extension for processing a user-supplied queue of
-blog or forum URLs. It reads the promoted website's Meta Title and Meta
-Description once, generates a distinct contextual comment for each target,
-fills and submits the comment form, and checks the result.
+评论外链助手是一款基于 Chrome Manifest V3 的浏览器扩展，用于管理博客、论坛等站点的评论外链工作流。
 
-## Architecture
+它把用户导入的目标链接整理成计划和批次，依次打开目标页面、识别评论表单、读取页面上下文、生成相关评论、填写表单并记录每一步进度。遇到登录或验证码时，任务会暂停并等待人工处理，而不是绕过站点限制。
 
-The extension calls the selected provider directly. It supports
-`deepseek-v4-flash` through DeepSeek's official API and `gemini-3.5-flash`
-through KIE's OpenAI-compatible API. No companion server is required.
+> 本扩展只处理用户主动导入的链接，不会自动发现网站，也不会在后台扫描整个互联网。
 
-DeepSeek and KIE keys are stored in `chrome.storage.local`, restricted to
-trusted extension contexts. They are sent only to the selected provider and
-are never exposed to injected page scripts or written into batch snapshots.
+## 核心功能
 
-The toolbar action opens a persistent Side Panel. The user reviews the promoted
-website metadata and target count, then confirms the whole batch once. The
-service worker processes one URL at a time in a reusable inactive tab placed in
-a collapsed `Comment Assistant` group. Automated work never activates that tab;
-login and CAPTCHA gates pause the queue until the user explicitly opens it.
-Reliably detected standard comment forms are filled directly without asking AI
-to rediscover their fields. AI form planning is reserved for unresolved or
-initially hidden forms.
-If the comment form is initially hidden, the same constrained AI planner can
-select a visible same-page control that reveals it, including controls written
-in other languages. The page operator accepts only an observed candidate ID,
-blocks navigation and form-submission controls, and attempts the reveal once.
+- 运营看板：查看计划数量、处理进度、成功与失败统计、今日排程、实时运行状态和近期错误。
+- 计划管理：将大量目标链接拆分成多个批次，逐批运行、暂停、继续、重试、归档或删除。
+- 页面识别：识别 WordPress 评论区、常见评论表单、富文本编辑器、隐藏评论入口、登录限制和验证码。
+- 评论生成：根据推广网站信息和目标页面正文，生成与文章内容相关的评论。
+- 自动填写：填写评论正文、姓名、邮箱和 Website 字段，并在提交前再次校验页面是否发生变化。
+- 进度恢复：浏览器 Service Worker 被挂起、页面加载缓慢或任务被手动停止后，可从已保存状态继续运行。
+- 过滤列表：按精确 URL 或域名跳过不希望再次处理的目标。
+- 外链库：手工记录目标 URL 的 dofollow、nofollow、需要登录、需要验证码等标签。
 
-Before a provider request or page click, the next phase is persisted. A
-recovered generation request with an unknown outcome is not repeated, and a
-recovered `click_dispatched` item is verified instead of clicked again. An
-unconfirmed submission is recorded as terminal and is never automatically
-retried. A comment counts as published only when its fingerprint is rendered on
-the page and also appears in a credential-free public-page fetch. Explicit
-acceptance without a publicly visible comment is recorded as submitted but not
-visible, and later targets from that website are skipped. Each website keeps a
-timestamped node history and its generated comment in the batch snapshot until
-the user starts a new batch. Failed websites also expose their raw diagnostic
-code in the Side Panel with a copy action for troubleshooting.
+## 工作流程
 
-The dedicated worker tab has a `{ batchId, tabId }` ownership marker in
-`chrome.storage.session`. Every read, activation, navigation, and page command
-checks that marker. Because session storage is cleared with the browser
-session, a persisted tab ID is never trusted after a browser restart.
-Completed and stopped batches close the owned worker tab automatically; the
-empty Chrome tab group disappears while the Side Panel history remains.
+1. 在设置中添加推广网站、显示名称、邮箱和模型 API Key。
+2. 粘贴目标 URL，或导入 TXT、CSV 内容。
+3. 创建计划并设置每个批次包含的链接数量。
+4. 从运营看板或计划详情启动下一批任务。
+5. 扩展使用一个后台工作标签页，按顺序处理每个目标链接。
+6. 遇到登录或验证码时，任务暂停；用户打开当前链接完成操作后继续运行。
+7. 在计划详情中查看每个目标的状态、尝试记录、错误码和生成结果，并对失败项进行重试。
 
-## Development
+## 运营看板
 
-From this project directory:
+运营看板用于汇总整个扩展的运行情况，而不是只显示当前批次。
+
+### 总览指标
+
+看板顶部展示：
+
+- 活跃计划数量
+- 已处理链接数量
+- 成功提交数量
+- 失败数量
+- 待处理、运行中、需要人工处理、已停止、已过滤和未知状态数量
+
+### 今日排程
+
+每个计划会按照设定的批次大小拆分。看板会显示：
+
+- 今天可以运行的批次
+- 下一批批次
+- 当前是第几批
+- 批次包含多少条链接
+- 已处理多少条链接
+
+扩展不会自动在固定时间发布评论。排程用于组织任务，批次仍由用户主动启动。
+
+### 实时运行
+
+任务运行时，看板会显示：
+
+- 当前计划和批次
+- 当前处理的目标链接
+- 当前运行阶段
+- 本批总数、已处理、成功、失败和剩余数量
+- 打开当前链接、停止批次和继续运行等操作
+
+### 网站统计
+
+看板从两个维度汇总结果：
+
+- 按推广网站统计：查看不同推广网站对应的计划和执行结果。
+- 按目标域名统计：查看不同博客或论坛域名的处理量与成功、失败情况。
+
+### 近期失败
+
+看板会列出最近失败的目标，包括：
+
+- 目标 URL
+- 所属计划和批次
+- 失败状态
+- 友好错误说明
+- 原始诊断错误码
+
+原始错误码可以复制，用于排查识别、权限、页面变化、模型请求或提交失败等问题。
+
+## 计划管理
+
+### 创建计划
+
+一个计划包含：
+
+- 计划名称
+- 推广网站
+- 目标 URL 列表
+- 每批处理数量
+
+导入后，扩展会先规范化并去重 URL，再按照批次大小拆分。每个批次拥有独立状态和运行记录。
+
+### URL 导入与识别
+
+目标输入支持以下格式：
+
+- 每行一个 HTTP 或 HTTPS URL
+- 同一行包含多个、以空格分隔的 URL
+- TXT 内容
+- CSV 内容
+- 带有 `url`、`link`、`target`、`网址`、`目标网址` 等表头的 CSV
+- CSV 中混合 URL 和说明文字时，只提取 HTTP(S) 单元格
+
+处理规则：
+
+- 只接受 HTTP 和 HTTPS URL。
+- 自动移除 URL Fragment。
+- 自动去除重复目标。
+- 拒绝包含用户名或密码的 URL。
+- 普通 URL 最长为 2048 个字符。
+- CSV 中包含逗号的 URL 应使用双引号包裹。
+- URL 查询参数或 Fragment 中的未引用逗号会保留为 URL 的一部分。
+- 无法识别的行会显示具体行号，而不是静默忽略。
+
+### 计划与批次状态
+
+计划状态包括：
+
+- 进行中
+- 已完成
+- 已归档
+
+批次状态包括：
+
+- 待运行
+- 运行中
+- 需要人工处理
+- 已停止
+- 已完成
+- 完成但有错误
+
+在计划详情中可以查看每个批次和每条链接的处理结果、更新时间、尝试次数与完整时间线。
+
+### 管理操作
+
+计划支持：
+
+- 修改计划名称
+- 启动下一批
+- 继续被阻塞或停止的批次
+- 选择失败目标重新生成并重试
+- 删除单条目标链接
+- 删除目标时同时加入过滤列表
+- 归档计划
+- 永久删除计划及其本地运行记录
+
+已经发布到第三方网站的评论不会因为删除本地计划而被撤回。
+
+## 任务进度与状态机
+
+每个目标链接按照以下阶段顺序处理：
+
+```text
+queued
+  → opening
+  → analyzing
+  → generating
+  → prepared
+  → click_dispatched
+  → verifying
+  → submitted
+```
+
+可能出现的其他状态：
+
+- `login_required`：需要登录，批次暂停。
+- `captcha_required`：需要完成人机验证，批次暂停。
+- `no_form`：未找到可信的评论表单。
+- `validation_error`：表单字段、页面结构或提交结果校验失败。
+- `failed`：页面加载、模型请求、权限或运行环境失败。
+- `filtered`：命中过滤列表，未打开或提交。
+- `stopped`：用户主动停止任务。
+
+扩展会为每个目标保存阶段事件、时间戳、错误信息和尝试记录。运营看板和计划详情从这些持久化状态中恢复进度。
+
+## 页面和评论表单的识别方式
+
+扩展优先使用确定性的 DOM 规则识别表单，不会把整个页面交给模型后让模型随意点击。
+
+### 1. 页面上下文
+
+目标页面会提取：
+
+- 当前 URL
+- 页面标题
+- Meta Description 或 Open Graph Description
+- 文章正文摘要，最多 8000 个字符
+- 页面语言
+- 是否存在 Website 字段
+
+正文优先从 `article`、`.entry-content`、`.post-content`、`main`、`[role="main"]` 等文章区域读取，找不到时才回退到页面正文。
+
+### 2. WordPress 快速识别
+
+对于原生 WordPress 评论表单，扩展使用结构化标识直接识别：
+
+- `#commentform`
+- 提交到 `wp-comments-post.php` 的表单
+- `#respond` 或 `.comment-respond`
+- `textarea#comment` 或 `textarea[name="comment"]`
+- `#submit`、`input[name="submit"]` 或 `.comment-submit`
+
+这一识别方式不依赖按钮语言，因此中文、英文或其他语言的 WordPress 评论区都可以使用同一套规则。
+
+隐藏的反垃圾 honeypot 字段会因为不可见而被排除，真实的可见评论输入框会被优先选择。
+
+### 3. 通用评论表单识别
+
+通用识别支持以下编辑器：
+
+- `textarea`
+- `contenteditable`
+- ARIA textbox
+- ProseMirror
+- Quill
+- Lexical
+- 位于同源 iframe 中的编辑器
+- 位于开放 Shadow DOM 中的编辑器
+
+扩展会综合以下信息为候选编辑器评分：
+
+- `id`、`name`、`class`
+- Placeholder
+- ARIA Label
+- 可见文本
+- 容器和标题中的 comment、reply、discussion、评论、回复、留言等语义
+
+搜索框、订阅框、联系表单、问卷、客服、订单、支付、登录、注册、举报、删除和管理操作会被降权或直接排除。
+
+### 4. 提交按钮识别
+
+提交按钮通过以下方式识别：
+
+- `button` 或 `input[type="submit"]`
+- `id`、`name` 中的 submit、post、publish、send、reply、respond
+- 按钮文本中的提交评论、发表评论、发布回复等语义
+- WordPress 的标准提交标识
+
+搜索、订阅、预览、取消、删除、举报、点赞、投票、分享、登录和注册按钮不会被当作评论提交按钮。
+
+### 5. 姓名、邮箱和 Website 字段
+
+字段识别会综合：
+
+- `type`
+- `autocomplete`
+- `inputmode`
+- `id`、`name`、`class`
+- Placeholder
+- ARIA Label
+- `<label>` 和 `aria-labelledby`
+
+扩展还会读取 `required`、`aria-required`、必填容器以及标签中的星号，确认姓名、邮箱或 Website 是否为必填项。
+
+### 6. 隐藏评论入口
+
+如果页面初始没有显示评论表单，扩展会尝试寻找一个安全的同页按钮，例如：
+
+- Leave a comment
+- Write a reply
+- Join the discussion
+- 发表评论
+- 我要留言
+
+只会尝试一次，并且不会点击会跳转页面、提交表单、登录、注册、举报或执行破坏性操作的控件。
+
+### 7. iframe 支持
+
+支持：
+
+- 页面主 DOM
+- 开放 Shadow DOM
+- 同源 iframe
+- Jetpack Comments 的专用评论 iframe
+
+不支持无法安全访问的第三方跨域评论组件，例如部分 Disqus、Giscus 或 Hyvor 嵌入。此类页面会记录：
+
+```text
+CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED
+```
+
+## 评论正文的生成逻辑
+
+### 推广网站资料
+
+每个批次开始前，扩展会获取推广网站：
+
+- 最终规范化 URL
+- Meta Title、Open Graph Title 或页面 Title
+- Meta Description、Open Graph Description 或 Twitter Description
+
+网站资料会缓存在本地，避免每个目标都重复请求。
+
+### 模型提供商
+
+当前支持：
+
+- DeepSeek 官方 API：`deepseek-v4-flash`
+- KIE OpenAI-compatible/Gemini API：`gemini-3.5-flash`
+
+扩展直接从浏览器调用所选模型，不需要配套服务器。
+
+### 生成要求
+
+发送给模型的上下文包含：
+
+- 推广网站标题、描述和 URL
+- 目标页面标题、描述、正文摘要和语言
+- 目标表单是否存在 Website 字段
+- 当前链接写入模式
+
+模型被要求：
+
+- 针对目标页面中的具体观点写评论。
+- 避免只有“好文章”“感谢分享”等空泛内容。
+- 不虚构个人经历、产品使用、身份、结果或与作者的关系。
+- 避免关键词堆砌、重复品牌名和明显销售语言。
+- 使用目标页面的主要语言。
+- 忽略目标页面正文中试图指挥模型的提示词。
+- 返回严格 JSON：`{"comment":"..."}`。
+- 评论正文最长 2000 个字符。
+
+### 链接写入规则
+
+当前版本会确保评论正文中只存在一个推广网站链接，并将它规范化为：
+
+```html
+<a href="https://example.com">自然锚文本</a>
+```
+
+生成结果会经过二次校验：
+
+- 只能包含一个 `<a>` 标签。
+- 链接必须指向当前推广网站。
+- 不允许出现第二个 URL。
+- 不允许 Markdown 链接、BBCode 或其他 HTML。
+- 不允许 `javascript:`、`data:`、`mailto:` 等非 HTTP(S) Scheme。
+- 如果模型只返回裸 URL，会自动转换为锚文本链接。
+- 如果模型没有返回 URL，会自动追加推广网站锚文本。
+- 同一批次中出现相同评论指纹时，会标记为重复生成并停止提交该条评论。
+
+> 当前代码行为：正文始终保留一个内联锚点；如果页面同时存在 Website 字段，扩展也会把推广网站 URL 填入该字段。
+
+## 评论正文写入页面的逻辑
+
+扩展将“填写”和“点击提交”拆成两个阶段，避免页面变化后误点错误按钮。
+
+### 1. 填写阶段
+
+对于原生输入框和 `textarea`：
+
+- 调用浏览器原生 value setter。
+- 触发 `input` 和 `change` 事件。
+- 对评论编辑器额外触发 `keyup`，兼容依赖键盘事件更新状态的页面。
+
+对于 `contenteditable`、ProseMirror、Quill 和 Lexical：
+
+- 聚焦编辑器。
+- 写入文本内容。
+- 触发 `InputEvent` 和 `change` 事件。
+
+随后填写可识别的：
+
+- 显示名称
+- 邮箱
+- Website URL
+
+### 2. 提交前校验
+
+写入完成后，扩展会等待提交按钮解除禁用，然后重新扫描页面并确认：
+
+- 页面 URL 没有变化。
+- 评论编辑器仍是之前识别的编辑器。
+- 提交按钮仍是之前识别的按钮。
+- 姓名、邮箱和 Website 字段数量没有变化。
+- 所有字段中的值与准备提交的值一致。
+- 评论正文没有被页面脚本替换或清空。
+
+校验通过后，扩展会为本次提交创建一个短期、一次性的 DOM Token，同时保存提交前的反馈消息和评论渲染状态作为 Baseline。
+
+### 3. 点击阶段
+
+在真正点击之前，批次状态先持久化为：
+
+```text
+click_dispatched
+```
+
+点击前会再次检查 DOM Token、元素引用、字段值和页面结构。任何一项不一致都会终止点击并记录：
+
+```text
+PAGE_CHANGED_SINCE_GENERATION
+```
+
+这样可以避免页面重新渲染后，扩展对错误的按钮执行提交。
+
+### 4. 提交结果验证
+
+点击后，扩展根据以下信号判断结果：
+
+- 新出现的成功、待审核或错误提示
+- WordPress 的 `unapproved` 和 `moderation-hash` 回执
+- WordPress 评论提交后的 URL 回执
+- 页面中是否新增包含评论指纹的评论内容
+- 评论是否仍停留在编辑器中
+- 是否出现登录或验证码页面
+- 是否出现重复评论提示
+- 已渲染链接的 `rel` 和落点，可识别 dofollow、nofollow、ugc、链接被移除或等待审核等状态
+
+如果已经触发点击，并且页面没有明确返回失败，当前版本会将该目标记录为 `submitted`。
+
+> `submitted` 表示扩展已完成提交操作或收到站点接受信号，不等同于评论已经公开可见、被搜索引擎收录或产生 SEO 效果。
+
+## 暂停、停止与恢复
+
+### 登录和验证码
+
+遇到以下情况会暂停整个批次：
+
+- 页面明确要求登录后评论
+- 跳转到登录、注册、账号或身份验证路径
+- 页面出现 reCAPTCHA、hCaptcha 或 Cloudflare Turnstile
+
+用户可以打开当前后台标签页，完成登录或验证码后继续运行，也可以跳过当前目标。
+
+### 防止重复提交
+
+扩展会在关键动作之前保存下一阶段：
+
+- 模型请求前保存 `COMMENT_GENERATION_REQUESTED`
+- 点击前保存 `click_dispatched`
+
+如果模型请求结果未知，恢复后不会盲目重复生成。
+
+如果点击是否成功未知，恢复后会进入 `verifying`，只验证原来的提交结果，不会再次点击评论按钮。
+
+手动停止批次时，已经处于 `click_dispatched` 或 `verifying` 的目标会保留其准备数据，以便继续时验证原提交，而不是重复发布。
+
+## 后台工作标签页
+
+扩展只使用一个可复用的后台工作标签页：
+
+- 标签页不会在处理每个链接时自动抢占当前窗口焦点。
+- 标签页会被放入折叠的 Comment Assistant 标签组。
+- 登录或验证码需要人工处理时，用户可以主动打开当前链接。
+- 每次读取、导航和执行页面命令前都会校验 `{ batchId, tabId }` 所有权。
+- 所有权标记保存在 `chrome.storage.session` 中，浏览器重启后不会信任旧 tabId。
+- 批次完成或停止后，会自动关闭属于该批次的工作标签页。
+
+## 数据与权限
+
+### 本地数据
+
+以下数据保存在浏览器本地：
+
+- 推广网站配置
+- 模型 API Key
+- 计划、批次、目标和尝试记录
+- 当前批次快照和恢复状态
+- 过滤列表
+- 外链库
+
+看板数据主要使用 IndexedDB，当前运行状态与设置使用 `chrome.storage.local`，工作标签页所有权使用 `chrome.storage.session`。
+
+### API Key
+
+DeepSeek 和 KIE API Key 保存在 `chrome.storage.local`，并限制为可信扩展上下文访问。Key 只发送给用户选择的模型提供商，不会注入目标页面，也不会写入批次快照或评论正文。
+
+### Chrome 权限
+
+固定权限：
+
+- `storage`：保存设置、计划和进度。
+- `unlimitedStorage`：保存较大的计划、历史和尝试记录。
+- `activeTab`：在用户操作后读取当前标签页。
+- `scripting`：按需注入页面分析和表单操作逻辑。
+- `alarms`：Service Worker 被挂起后唤醒恢复任务。
+- `sidePanel`：展示侧边栏控制界面。
+- `tabGroups`：管理后台工作标签页分组。
+- `webNavigation`：跟踪提交后的导航状态。
+
+固定 Host 权限：
+
+- `https://api.deepseek.com/*`
+- `https://api.kie.ai/*`
+
+目标网站权限不会在安装时一次性申请。运行计划时，只针对推广网站和用户导入目标的 HTTP(S) Origin 请求可选 Host 权限。
+
+扩展没有常驻 `<all_urls>` Content Script，也不依赖宽泛的 `tabs` 权限。
+
+## 安装方式
+
+### 环境要求
+
+- Node.js 22 或更高版本
+- pnpm
+- Chrome 或兼容 Manifest V3 的 Chromium 浏览器
+
+### 从源码构建
 
 ```bash
+git clone https://github.com/codeugar/comment-link-assistant-extension.git
+cd comment-link-assistant-extension
+
 pnpm install
-pnpm dev
-pnpm test
 pnpm typecheck
+pnpm test
 pnpm build
+```
+
+生产构建输出目录：
+
+```text
+.output/chrome-mv3/
+```
+
+### 在 Chrome 中安装
+
+1. 打开 `chrome://extensions/`。
+2. 开启右上角的“开发者模式”。
+3. 点击“加载已解压的扩展程序”。
+4. 选择项目中的 `.output/chrome-mv3/` 目录。
+5. 将扩展固定到浏览器工具栏。
+6. 点击扩展图标打开侧边栏。
+7. 通过侧边栏中的运营看板入口打开完整看板。
+8. 在设置中填写模型 API Key 和推广网站资料。
+
+首次运行某个计划时，Chrome 会要求授权访问推广网站和计划中的目标站点。
+
+### 开发模式
+
+```bash
+pnpm dev
+```
+
+WXT 会启动开发构建和热更新。按照终端输出加载对应的开发构建目录。
+
+### 生成安装包
+
+```bash
 pnpm zip
 ```
 
-The production build is written to `.output/chrome-mv3/`. Load that directory
-from `chrome://extensions` with Developer mode enabled.
+压缩包会生成在 `.output/` 目录中。
 
-## Permissions
+## 常用开发命令
 
-- `storage`: persist public settings, local provider keys, and batch progress.
-- `activeTab`: inspect the current tab after a user gesture.
-- `scripting`: inject the page analyzer and comment-form operator on demand.
-- `alarms`: provide a recovery wake-up if the service worker is suspended.
-- `sidePanel`: keep batch controls and progress visible while browsing.
-- `tabGroups`: organize the single inactive worker tab in a collapsed group.
-- Fixed provider host permissions: call DeepSeek and KIE directly.
-- Optional HTTP/HTTPS host permissions: requested at runtime only for the
-  promoted website and user-supplied target origins.
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm dev` | 启动 WXT 开发模式 |
+| `pnpm build` | 构建 Chrome Manifest V3 生产版本 |
+| `pnpm zip` | 生成扩展压缩包 |
+| `pnpm test` | 运行 Vitest 测试 |
+| `pnpm typecheck` | 运行 TypeScript 类型检查 |
+| `pnpm lint` | 运行 Biome 检查 |
+| `pnpm format` | 使用 Biome 格式化代码 |
 
-The extension has no broad `tabs` permission and no always-on `<all_urls>`
-content script.
+## 主要目录
 
-## Comment-frame support
+```text
+entrypoints/
+  background.ts          后台 Service Worker 和消息调度
+  sidepanel/             快速操作、设置和当前批次控制
+  dashboard/             运营看板与计划管理界面
 
-Comment forms in the page DOM, open shadow DOM, and same-origin iframes are
-supported. Third-party cross-origin widgets such as hosted Disqus, Giscus, or
-Hyvor frames are reported as `CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED` and must
-be handled manually.
+src/
+  api/client.ts          模型请求、正文解析和链接安全校验
+  batch/runner.ts        批次状态机和恢复逻辑
+  batch/state.ts         批次与目标状态变更
+  dashboard/             看板数据库、汇总和计划服务
+  page/dom.ts            页面分析、表单识别、填写、点击和验证
+  runtime/               页面命令、权限和工作标签页管理
+  storage/               设置、快照、过滤列表和本地数据
+  website/               推广网站资料提取与缓存
+```
+
+## 已知限制
+
+- 第三方跨域评论 iframe 无法安全访问时，需要人工处理。
+- 登录和验证码不会被自动绕过。
+- 页面在生成评论后重新渲染或改变表单结构时，提交会被阻止并记录校验错误。
+- 某些站点会过滤 HTML、移除链接、添加 `nofollow` 或要求审核，扩展无法保证最终外链属性。
+- `submitted` 是提交操作状态，不是公开展示、搜索收录或 SEO 结果保证。
+- 自动化评论必须遵守目标网站规则、适用法律和社区规范。
