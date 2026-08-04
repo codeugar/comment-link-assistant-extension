@@ -1,5 +1,5 @@
 import { createBatch, pauseCurrentItem } from '@/batch/state';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { BATCH_STORAGE_KEY, clearBatch, getBatch, setBatch } from './batch';
 
@@ -21,6 +21,7 @@ function makeBatch() {
 describe('batch storage', () => {
   beforeEach(async () => {
     await fakeBrowser.reset();
+    vi.restoreAllMocks();
   });
 
   it('returns null when no valid batch is stored', async () => {
@@ -43,6 +44,15 @@ describe('batch storage', () => {
     expect(
       (await chrome.storage.local.get(BATCH_STORAGE_KEY))[BATCH_STORAGE_KEY]
     ).toEqual(batch);
+  });
+
+  it('does not rewrite a current snapshot during a read', async () => {
+    const batch = makeBatch();
+    await setBatch(batch);
+    const setSpy = vi.spyOn(chrome.storage.local, 'set');
+
+    await expect(getBatch()).resolves.toEqual(batch);
+    expect(setSpy).not.toHaveBeenCalled();
   });
 
   it('keeps a pre-timeline batch by adding its current node on read', async () => {

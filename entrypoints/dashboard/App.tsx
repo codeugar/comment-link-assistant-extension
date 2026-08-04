@@ -27,7 +27,6 @@ import {
 } from '@/storage/outbound-link-import';
 import {
   OUTBOUND_LINK_LIBRARY_STORAGE_KEY,
-  OUTBOUND_LINK_TAGS,
   type OutboundLinkFollowStatus,
   type OutboundLinkLibraryEntry,
   type OutboundLinkTag,
@@ -557,7 +556,6 @@ function Sidebar({
   route,
   settingsOpen,
   filterListOpen,
-  outboundLinkLibraryOpen,
   onOpenFilterList,
   onOpenOutboundLinkLibrary,
   onOpenSettings,
@@ -565,7 +563,6 @@ function Sidebar({
   route: Route;
   settingsOpen: boolean;
   filterListOpen: boolean;
-  outboundLinkLibraryOpen: boolean;
   onOpenFilterList: () => void;
   onOpenOutboundLinkLibrary: () => void;
   onOpenSettings: () => void;
@@ -2650,31 +2647,6 @@ function outboundLinkTagCopy(tag: OutboundLinkTag): string {
   }
 }
 
-function toggleOutboundLinkTag(
-  current: readonly OutboundLinkTag[],
-  tag: OutboundLinkTag
-): OutboundLinkTag[] {
-  const next = new Set(current);
-  if (next.has(tag)) {
-    next.delete(tag);
-  } else {
-    if (tag === 'dofollow') next.delete('nofollow');
-    if (tag === 'nofollow') next.delete('dofollow');
-    next.add(tag);
-  }
-  return OUTBOUND_LINK_TAGS.filter((candidate) => next.has(candidate));
-}
-
-function sameOutboundLinkTags(
-  left: readonly OutboundLinkTag[],
-  right: readonly OutboundLinkTag[]
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((tag, index) => tag === right[index])
-  );
-}
-
 function outboundLinkLibraryErrorCopy(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (message.includes('OUTBOUND_LINK_ENTRY_INVALID')) {
@@ -2687,61 +2659,6 @@ function outboundLinkLibraryErrorCopy(error: unknown): string {
     return t('outboundLinkTagConflict');
   }
   return t('actionFailed');
-}
-
-function OutboundLinkTagPicker({
-  tags,
-  onChange,
-  disabled = false,
-}: {
-  tags: readonly OutboundLinkTag[];
-  onChange: (tags: OutboundLinkTag[]) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <fieldset className="outbound-link-tag-picker" disabled={disabled}>
-      <legend>{t('outboundLinkTags')}</legend>
-      <div className="outbound-link-tag-options">
-        {OUTBOUND_LINK_TAGS.map((tag) => {
-          const selected = tags.includes(tag);
-          return (
-            <button
-              key={tag}
-              type="button"
-              aria-pressed={selected}
-              className={`outbound-link-tag is-${tag}${
-                selected ? ' is-selected' : ''
-              }`}
-              onClick={() => onChange(toggleOutboundLinkTag(tags, tag))}
-            >
-              {outboundLinkTagCopy(tag)}
-            </button>
-          );
-        })}
-      </div>
-    </fieldset>
-  );
-}
-
-function OutboundLinkTagChips({
-  tags,
-}: {
-  tags: readonly OutboundLinkTag[];
-}) {
-  if (tags.length === 0) {
-    return (
-      <span className="outbound-link-no-tags">{t('outboundLinkNoTags')}</span>
-    );
-  }
-  return (
-    <div className="outbound-link-tag-chips">
-      {tags.map((tag) => (
-        <span key={tag} className={`outbound-link-tag is-${tag}`}>
-          {outboundLinkTagCopy(tag)}
-        </span>
-      ))}
-    </div>
-  );
 }
 
 function nullableBooleanLabel(value: boolean | null): string {
@@ -3350,6 +3267,8 @@ function OutboundLinkLibraryPage({
   );
 }
 
+/* Legacy drawer retained only in history; the external-link library now uses
+ * the dedicated OutboundLinkLibraryPage route above.
 function OutboundLinkLibraryDrawer({
   open,
   entries,
@@ -3730,6 +3649,7 @@ function OutboundLinkLibraryDrawer({
     </div>
   );
 }
+*/
 function NewPlanDialog({
   open,
   settings,
@@ -4464,7 +4384,6 @@ export default function App() {
   const [loadError, setLoadError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterListOpen, setFilterListOpen] = useState(false);
-  const [outboundLinkLibraryOpen, setOutboundLinkLibraryOpen] = useState(false);
   const [outboundLinkLibrary, setOutboundLinkLibrary] = useState<
     OutboundLinkLibraryEntry[]
   >([]);
@@ -4849,21 +4768,17 @@ export default function App() {
         route={route}
         settingsOpen={settingsOpen}
         filterListOpen={filterListOpen}
-        outboundLinkLibraryOpen={outboundLinkLibraryOpen}
         onOpenFilterList={() => {
           setSettingsOpen(false);
-          setOutboundLinkLibraryOpen(false);
           setFilterListOpen(true);
         }}
         onOpenOutboundLinkLibrary={() => {
           setSettingsOpen(false);
           setFilterListOpen(false);
-          setOutboundLinkLibraryOpen(false);
           navigate({ page: 'outbound' });
         }}
         onOpenSettings={() => {
           setFilterListOpen(false);
-          setOutboundLinkLibraryOpen(false);
           setSettingsOpen(true);
         }}
       />
@@ -4950,14 +4865,6 @@ export default function App() {
       <FilterListDrawer
         open={filterListOpen}
         onClose={() => setFilterListOpen(false)}
-        onToast={pushToast}
-      />
-      <OutboundLinkLibraryDrawer
-        open={outboundLinkLibraryOpen}
-        entries={outboundLinkLibrary}
-        loading={outboundLinkLibraryLoading}
-        onEntriesChange={setOutboundLinkLibrary}
-        onClose={() => setOutboundLinkLibraryOpen(false)}
         onToast={pushToast}
       />
       <SettingsDrawer

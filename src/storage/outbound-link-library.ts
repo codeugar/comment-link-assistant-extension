@@ -255,7 +255,6 @@ export function parseStoredOutboundLinkLibrary(
 
   const entries: OutboundLinkLibraryEntry[] = [];
   const ids = new Set<string>();
-  const urls = new Set<string>();
   for (const storedEntry of value.slice(0, MAX_OUTBOUND_LINK_ENTRIES)) {
     try {
       if (!storedEntry || typeof storedEntry !== 'object') continue;
@@ -315,14 +314,32 @@ export function parseStoredOutboundLinkLibrary(
       );
       if (existingIndex >= 0) {
         const existing = entries[existingIndex];
-        if (entry.updatedAt >= existing.updatedAt) {
-          entries[existingIndex] = entry;
-        }
+        const newestFirst =
+          entry.updatedAt >= existing.updatedAt
+            ? [entry, existing]
+            : [existing, entry];
+        const followStatus =
+          newestFirst.find((candidate) => candidate.followStatus !== 'unknown')
+            ?.followStatus ?? 'unknown';
+        const loginRequired =
+          newestFirst.find((candidate) => candidate.loginRequired !== null)
+            ?.loginRequired ?? null;
+        const captchaRequired =
+          newestFirst.find((candidate) => candidate.captchaRequired !== null)
+            ?.captchaRequired ?? null;
+        entries[existingIndex] = {
+          ...existing,
+          tags: tagsForEntry(followStatus, loginRequired, captchaRequired),
+          followStatus,
+          loginRequired,
+          captchaRequired,
+          createdAt: Math.min(existing.createdAt, entry.createdAt),
+          updatedAt: Math.max(existing.updatedAt, entry.updatedAt),
+        };
         continue;
       }
-      if (ids.has(entry.id) || urls.has(entry.domain)) continue;
+      if (ids.has(entry.id)) continue;
       ids.add(entry.id);
-      urls.add(entry.domain);
       entries.push(entry);
     } catch {
       // Ignore only the malformed record; all other persisted links remain.

@@ -1,5 +1,10 @@
 import { isDueToday, nextPendingChunk, planProgress } from '@/batch/plan';
-import type { BatchItem, BatchItemStatus, BatchSnapshot } from '@/batch/types';
+import {
+  type BatchItem,
+  type BatchItemStatus,
+  type BatchSnapshot,
+  batchSnapshotSchema,
+} from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
 import { TextLoop } from '@/components/core/text-loop';
 import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
@@ -353,6 +358,7 @@ export default function App() {
   >(() => new Set());
 
   useEffect(() => {
+    let disposed = false;
     void Promise.all([
       restrictStorageToTrustedContexts(),
       getSettings(),
@@ -376,6 +382,7 @@ export default function App() {
         setHistory(storedHistory);
         setPlans(storedPlans);
         setLoaded(true);
+        if (!disposed) chrome.storage.onChanged.addListener(onStorageChanged);
       }
     );
 
@@ -384,18 +391,37 @@ export default function App() {
       areaName: string
     ) => {
       if (areaName !== 'local') return;
-      if (changes[BATCH_STORAGE_KEY]) void getBatch().then(setBatch);
+      if (changes[BATCH_STORAGE_KEY]) {
+        const changedBatch = batchSnapshotSchema.safeParse(
+          changes[BATCH_STORAGE_KEY].newValue
+        );
+        if (changedBatch.success) {
+          setBatch(changedBatch.data);
+        } else {
+          void getBatch().then(setBatch);
+        }
+      }
       if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
       if (changes[PLANS_STORAGE_KEY]) void getPlans().then(setPlans);
       if (changes[SETTINGS_STORAGE_KEY]) {
-        void getSettings().then((nextSettings) => {
+        const changedSettings = extensionSettingsSchema.safeParse(
+          changes[SETTINGS_STORAGE_KEY].newValue
+        );
+        const applySettings = (nextSettings: ExtensionSettings) => {
           setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
           setSettings(nextSettings);
-        });
+        };
+        if (changedSettings.success) {
+          applySettings(changedSettings.data);
+        } else {
+          void getSettings().then(applySettings);
+        }
       }
     };
-    chrome.storage.onChanged.addListener(onStorageChanged);
-    return () => chrome.storage.onChanged.removeListener(onStorageChanged);
+    return () => {
+      disposed = true;
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+    };
   }, []);
 
   const activeSite = getActiveSite(settings);

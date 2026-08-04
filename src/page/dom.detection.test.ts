@@ -101,9 +101,25 @@ describe('cross-origin comment frames', () => {
         </form>
       </div>
     `;
-    return document.getElementById(
+    const frame = document.getElementById(
       'jetpack_remote_comment'
     ) as HTMLIFrameElement;
+    // Keep Happy DOM from performing a real remote navigation while retaining
+    // the observable attribute promotion that production code performs.
+    const getAttribute = frame.getAttribute.bind(frame);
+    const setAttribute = frame.setAttribute.bind(frame);
+    let promotedSrc: string | null = null;
+    vi.spyOn(frame, 'getAttribute').mockImplementation((name) =>
+      name === 'src' ? promotedSrc : getAttribute(name)
+    );
+    vi.spyOn(frame, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'src') {
+        promotedSrc = String(value);
+        return;
+      }
+      setAttribute(name, value);
+    });
+    return frame;
   }
 
   it('reports a lazy-loaded Jetpack remote-comment iframe as a ready frame', async () => {
@@ -137,7 +153,7 @@ describe('cross-origin comment frames', () => {
       <div id="comments">
         <iframe
           title="Comments"
-          src="https://widget.disqus.com/embed.html?forum=example#comment"
+          data-src="https://widget.disqus.com/embed.html?forum=example#comment"
           style="width:100%; height:430px; border:0;"></iframe>
       </div>
     `;
@@ -383,7 +399,10 @@ describe('HUBzero CKEditor iframe comment form', () => {
       0
     );
 
-    expect(result).toMatchObject({ status: 'submitted', clickOccurred: true });
+    expect(result).toMatchObject({
+      status: 'unconfirmed',
+      clickOccurred: true,
+    });
     expect(submitted).toBe(true);
     expect(frameDocument.body.textContent).toContain('KB walkthrough');
     expect(

@@ -214,14 +214,14 @@ describe('outbound-link library storage', () => {
 
     expect(await getOutboundLinkLibrary()).toEqual([
       {
-        id: 'duplicate-url',
+        id: 'valid',
         domain: 'blog.example.com',
         url: 'blog.example.com',
-        tags: ['nofollow'],
+        tags: ['nofollow', 'captcha_required'],
         followStatus: 'nofollow',
         loginRequired: null,
-        captchaRequired: null,
-        createdAt: 3_000,
+        captchaRequired: true,
+        createdAt: 1_000,
         updatedAt: 3_000,
       },
     ]);

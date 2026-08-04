@@ -3,10 +3,9 @@ import {
   createBatch,
   filterQueuedItems,
   pauseCurrentItem,
-  skipCurrentManualGate,
   updateBatchProgress,
 } from '@/batch/state';
-import { BATCH_STORAGE_KEY } from '@/storage/batch';
+import { BATCH_STORAGE_KEY, getBatch } from '@/storage/batch';
 import { HISTORY_STORAGE_KEY } from '@/storage/batch-history';
 import { FILTER_LIST_STORAGE_KEY } from '@/storage/filter-list';
 import { PLANS_STORAGE_KEY } from '@/storage/plans';
@@ -357,9 +356,9 @@ describe('side panel navigation', () => {
     ['login_required', 'LOGIN_REQUIRED'],
     ['captcha_required', 'CAPTCHA_REQUIRED'],
   ] as const)(
-    'shows paused %s detail and diagnostic copy action',
+    'shows terminal %s detail and diagnostic copy action',
     async (status, message) => {
-      const paused = pauseCurrentItem(
+      const completed = completeCurrentItem(
         createBatch({
           targetText: 'https://blog.example/post',
           settings: {
@@ -374,8 +373,8 @@ describe('side panel navigation', () => {
         message
       );
       await chrome.storage.local.set({
-        [SETTINGS_STORAGE_KEY]: paused.settings,
-        [BATCH_STORAGE_KEY]: paused,
+        [SETTINGS_STORAGE_KEY]: completed.settings,
+        [BATCH_STORAGE_KEY]: completed,
       });
 
       await renderSidePanel();
@@ -385,7 +384,7 @@ describe('side panel navigation', () => {
     }
   );
 
-  it('skips a paused pre-submit login target and continues the batch', async () => {
+  it('migrates a paused pre-submit login target and continues without a skip action', async () => {
     const paused = pauseCurrentItem(
       createBatch({
         id: 'batch-skip-gate',
@@ -403,27 +402,26 @@ describe('side panel navigation', () => {
       'LOGIN_REQUIRED',
       2_000
     );
-    const skipped = skipCurrentManualGate(paused, 3_000);
     await chrome.storage.local.set({
       [SETTINGS_STORAGE_KEY]: paused.settings,
       [BATCH_STORAGE_KEY]: paused,
     });
-    const sendMessage = vi
-      .spyOn(chrome.runtime, 'sendMessage')
-      .mockResolvedValue({
-        ok: true,
-        data: { type: 'batch.skip-current', data: skipped },
-      } as never);
-
+    await expect(getBatch()).resolves.toMatchObject({
+      status: 'running',
+      currentIndex: 1,
+    });
     await renderSidePanel();
-    await clickButton('skipCurrentTarget');
 
-    expect(sendMessage).toHaveBeenCalledWith({ type: 'batch.skip-current' });
-    expect(container.textContent).toContain('batchStatusFailed');
+    expect(
+      Array.from(container.querySelectorAll('button')).find(
+        (candidate) => candidate.textContent?.trim() === 'skipCurrentTarget'
+      )
+    ).toBeUndefined();
+    expect(container.textContent).toContain('batchStatusLoginRequired');
     expect(container.textContent).toContain('batchSkippedLoginDescription');
   });
 
-  it('does not offer skip when a prepared submission must be verified', async () => {
+  it('does not offer skip for an unconfirmed post-click result', async () => {
     let batch = updateBatchProgress(
       createBatch({
         targetText: 'https://blog.example/post',
@@ -453,7 +451,11 @@ describe('side panel navigation', () => {
         },
       }
     );
-    batch = pauseCurrentItem(batch, 'login_required', 'LOGIN_REQUIRED');
+    batch = completeCurrentItem(
+      batch,
+      'unconfirmed',
+      'LOGIN_REQUIRED_AFTER_CLICK'
+    );
     await chrome.storage.local.set({
       [SETTINGS_STORAGE_KEY]: batch.settings,
       [BATCH_STORAGE_KEY]: batch,
@@ -522,7 +524,7 @@ describe('side panel navigation', () => {
     expect(container.textContent).toContain('unsafeSubmitBlocked');
   });
 
-  it('shows a submitted comment as a successful terminal result', async () => {
+  it('migrates a legacy submitted comment to an unconfirmed result', async () => {
     const completed = completeCurrentItem(
       createBatch({
         targetText: 'https://blog.example/post',
@@ -544,8 +546,8 @@ describe('side panel navigation', () => {
 
     await renderSidePanel();
 
-    expect(container.textContent).toContain('batchStatusSubmitted');
-    expect(container.querySelector('.status-submitted')).not.toBeNull();
+    expect(container.textContent).toContain('batchStatusUnconfirmed');
+    expect(container.querySelector('.status-unconfirmed')).not.toBeNull();
   });
 
   it('shows the current website as an expanded persistent node timeline', async () => {
@@ -771,6 +773,9 @@ describe('batch item retry', () => {
         itemIds: ['batch-retry:1'],
       })
     );
+    await vi.waitFor(() => {
+      expect(container.textContent).not.toContain('batchRetryItem');
+    });
   });
 
   it('offers a batch-level retry that sends every failed id', async () => {
@@ -793,6 +798,9 @@ describe('batch item retry', () => {
         itemIds: ['batch-retry:0', 'batch-retry:1'],
       })
     );
+    await vi.waitFor(() => {
+      expect(container.textContent).not.toContain('batchRetryFailed');
+    });
   });
 
   it('shows retry error code instead of generic comment submission failure', async () => {

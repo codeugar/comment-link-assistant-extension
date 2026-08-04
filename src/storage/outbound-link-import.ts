@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import {
   type OutboundLinkFollowStatus,
   normalizeOutboundLinkDomain,
@@ -20,6 +19,9 @@ export interface OutboundLinkImportResult {
 }
 
 const MAX_IMPORT_ROWS = 10_000;
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+type SpreadsheetModule = typeof import('xlsx');
+type SpreadsheetWorkbook = ReturnType<SpreadsheetModule['read']>;
 const HEADER_ALIASES = {
   domain: new Set([
     'domain',
@@ -129,6 +131,31 @@ function rowsFromText(text: string): string[][] {
     );
 }
 
+async function loadSpreadsheetModule(): Promise<SpreadsheetModule> {
+  return import('xlsx');
+}
+
+function firstNonEmptySheetRows(
+  XLSX: SpreadsheetModule,
+  workbook: SpreadsheetWorkbook
+): unknown[][] {
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      raw: false,
+      defval: '',
+    });
+    if (
+      rows.some((row) => row.some((cell) => normalizedCell(cell).length > 0))
+    ) {
+      return rows;
+    }
+  }
+  return [];
+}
+
 function parseRows(rawRows: unknown[][]): OutboundLinkImportResult {
   const rows = rawRows
     .slice(0, MAX_IMPORT_ROWS + 1)
@@ -205,25 +232,18 @@ export function parseOutboundLinkImportText(
 export async function parseOutboundLinkImportFile(
   file: File
 ): Promise<OutboundLinkImportResult> {
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error('OUTBOUND_LINK_IMPORT_FILE_TOO_LARGE');
+  }
   const name = file.name.toLowerCase();
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+    const XLSX = await loadSpreadsheetModule();
     const workbook = XLSX.read(new Uint8Array(await file.arrayBuffer()), {
       type: 'array',
       cellDates: false,
       sheetRows: MAX_IMPORT_ROWS + 1,
     });
-    const sheetName = workbook.SheetNames.find(
-      (candidate) => workbook.Sheets[candidate]
-    );
-    if (!sheetName) return { rows: [], invalidRows: [], headerDetected: false };
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(
-      workbook.Sheets[sheetName],
-      {
-        header: 1,
-        raw: false,
-        defval: '',
-      }
-    );
+    const rows = firstNonEmptySheetRows(XLSX, workbook);
     return parseRows(rows);
   }
   return parseOutboundLinkImportText(await file.text());
@@ -247,26 +267,22 @@ export function parseTargetFileRows(text: string): string[] {
 }
 
 export async function parseTargetFile(file: File): Promise<string[]> {
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error('TARGET_IMPORT_FILE_TOO_LARGE');
+  }
   const name = file.name.toLowerCase();
   if (!name.endsWith('.xlsx') && !name.endsWith('.xls')) {
-    return parseTargetFileRows(await file.text());
+    // Preserve the original text so the shared plan parser can still find a
+    // URL/domain in any CSV column and report the original line number.
+    return [await file.text()];
   }
+  const XLSX = await loadSpreadsheetModule();
   const workbook = XLSX.read(new Uint8Array(await file.arrayBuffer()), {
     type: 'array',
     sheetRows: MAX_IMPORT_ROWS,
   });
-  const sheetName = workbook.SheetNames.find(
-    (candidate) => workbook.Sheets[candidate]
-  );
-  if (!sheetName) return [];
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
-    header: 1,
-    raw: false,
-    defval: '',
-  });
-  const values = rows.map((row) => normalizedCell(row[0])).filter(Boolean);
-  const first = values[0]?.toLowerCase();
-  return [
+  const rows = firstNonEmptySheetRows(XLSX, workbook);
+  const targetHeaders = [
     'url',
     'urls',
     'link',
@@ -274,7 +290,13 @@ export async function parseTargetFile(file: File): Promise<string[]> {
     'target_url',
     '网址',
     '目标网址',
-  ].includes(first)
-    ? values.slice(1)
-    : values;
+  ];
+  const headerRow = rows[0] ?? [];
+  const headerIndex = headerRow.findIndex((cell) =>
+    targetHeaders.includes(normalizedCell(cell).toLowerCase())
+  );
+  const columnIndex = headerIndex >= 0 ? headerIndex : 0;
+  return (headerIndex >= 0 ? rows.slice(1) : rows)
+    .map((row) => normalizedCell(row[columnIndex]))
+    .filter(Boolean);
 }

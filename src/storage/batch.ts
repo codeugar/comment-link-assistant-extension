@@ -45,19 +45,22 @@ function migrateLegacySubmissionStatuses(value: unknown): unknown {
       record.status === 'submitted'
         ? 'COMMENT_SUBMISSION_UNCONFIRMED'
         : record.message;
-    const events = Array.isArray(record.events)
-      ? record.events.map((event) => {
-          if (!event || typeof event !== 'object') return event;
-          const eventRecord = event as Record<string, unknown>;
-          if (eventRecord.status !== 'submitted') return event;
-          changed = true;
-          return {
-            ...eventRecord,
-            status: 'unconfirmed',
-            message: 'COMMENT_SUBMISSION_UNCONFIRMED',
-          };
-        })
-      : record.events;
+    let events = record.events;
+    if (Array.isArray(record.events)) {
+      let eventsChanged = false;
+      const migratedEvents = record.events.map((event) => {
+        if (!event || typeof event !== 'object') return event;
+        const eventRecord = event as Record<string, unknown>;
+        if (eventRecord.status !== 'submitted') return event;
+        eventsChanged = true;
+        return {
+          ...eventRecord,
+          status: 'unconfirmed',
+          message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        };
+      });
+      if (eventsChanged) events = migratedEvents;
+    }
     if (status === record.status && events === record.events) return item;
     changed = true;
     return { ...record, status, message, events };
