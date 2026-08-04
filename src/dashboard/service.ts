@@ -202,9 +202,18 @@ function snapshotCounts(snapshot: BatchSnapshot) {
     } else if (item.status === 'unconfirmed' || item.status === 'submitted') {
       unconfirmed += 1;
     } else if (failedBatchStatuses.has(item.status)) failed += 1;
-    else if (item.status === 'filtered') filtered += 1;
+    else if (
+      item.status === 'login_required' ||
+      item.status === 'captcha_required'
+    ) {
+      // Manual gates are intentionally skipped, not counted as failures.
+    } else if (item.status === 'filtered') filtered += 1;
   }
-  const processed = submitted + unconfirmed + failed + filtered;
+  const skipped = snapshot.items.filter(
+    (item) =>
+      item.status === 'login_required' || item.status === 'captcha_required'
+  ).length;
+  const processed = submitted + unconfirmed + failed + filtered + skipped;
   return {
     total: snapshot.items.length,
     processed,

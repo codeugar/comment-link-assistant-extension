@@ -26,10 +26,12 @@ import { getProviderApiKeys } from '@/storage/settings';
 import { type ProviderApiKeys, usesInlineAnchor } from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
 import {
-  completeCurrentItem,
-  pauseCurrentItem,
-  updateBatchProgress,
-} from './state';
+  type TargetLibraryGateState,
+  type TargetLibraryObservation,
+  getTargetLibraryGateState,
+  observeTargetLibrary,
+} from './link-library-observer';
+import { completeCurrentItem, updateBatchProgress } from './state';
 import type { BatchItem, BatchItemStatus, BatchSnapshot } from './types';
 
 const GENERATION_READY = 'COMMENT_GENERATION_READY';
@@ -107,6 +109,15 @@ export interface BatchRunnerDependencies {
    * uses the persisted filter list below.
    */
   isTargetFiltered?(url: string): Promise<boolean>;
+  /**
+   * Domain-level outbound-link observations. Kept optional for isolated
+   * runners and migration tests; production uses the storage adapter.
+   */
+  getTargetLibraryGateState?(url: string): Promise<TargetLibraryGateState>;
+  observeTargetLibrary?(
+    url: string,
+    observation: TargetLibraryObservation
+  ): Promise<void>;
   now(): number;
 }
 
@@ -163,6 +174,8 @@ const defaultDependencies: BatchRunnerDependencies = {
     return verifyTabSubmission(tabId, prepared, expectedUrl);
   },
   isTargetFiltered,
+  getTargetLibraryGateState,
+  observeTargetLibrary,
   now: Date.now,
 };
 
@@ -198,6 +211,37 @@ export function commentFingerprint(value: string): string {
 
 function afterTerminal(batch: BatchSnapshot): BatchStepResult {
   return batch.status === 'running' ? 'continue' : 'wait';
+}
+
+async function observeTargetLibrarySafely(
+  dependencies: BatchRunnerDependencies,
+  url: string,
+  observation: TargetLibraryObservation
+): Promise<void> {
+  try {
+    await dependencies.observeTargetLibrary?.(url, observation);
+  } catch {
+    // Library observations are telemetry. A storage or migration failure must
+    // never strand the execution queue or turn a gate into a batch failure.
+  }
+}
+
+async function targetLibraryGateStateSafely(
+  dependencies: BatchRunnerDependencies,
+  url: string
+): Promise<TargetLibraryGateState> {
+  try {
+    return (
+      (await dependencies.getTargetLibraryGateState?.(url)) ?? {
+        loginRequired: false,
+        captchaRequired: false,
+      }
+    );
+  } catch {
+    // A stale or malformed library row must not prevent the target from being
+    // opened. The page-level detector remains the source of truth.
+    return { loginRequired: false, captchaRequired: false };
+  }
 }
 
 function tabLocation(tab: WorkerTab): string {
@@ -434,22 +478,49 @@ async function saveUnconfirmedSubmission(
   return afterTerminal(next);
 }
 
-async function savePause(
+async function saveManualGate(
   batch: BatchSnapshot,
   status: 'login_required' | 'captcha_required',
   message: string,
-  dependencies: BatchRunnerDependencies
+  dependencies: BatchRunnerDependencies,
+  clicked = false
 ): Promise<BatchStepResult> {
-  const next = pauseCurrentItem(batch, status, message, dependencies.now());
+  await observeTargetLibrarySafely(
+    dependencies,
+    batch.items[batch.currentIndex]!.url,
+    {
+      [status === 'login_required' ? 'loginRequired' : 'captchaRequired']: true,
+    }
+  );
+  const next = completeCurrentItem(
+    batch,
+    clicked ? 'unconfirmed' : status,
+    clicked
+      ? `${status === 'login_required' ? 'LOGIN_REQUIRED' : 'CAPTCHA_REQUIRED'}_AFTER_CLICK:${message}`
+      : message,
+    dependencies.now()
+  );
   await dependencies.setBatch(next);
-  return 'wait';
+  return afterTerminal(next);
 }
 
 async function saveSubmissionResult(
   batch: BatchSnapshot,
   result: PageSubmissionResult,
-  dependencies: BatchRunnerDependencies
+  dependencies: BatchRunnerDependencies,
+  clicked = false
 ): Promise<BatchStepResult> {
+  const targetUrl = batch.items[batch.currentIndex]?.url;
+  const didClick = clicked || result.clickOccurred;
+  if (
+    targetUrl &&
+    (result.linkFollow?.status === 'dofollow' ||
+      result.linkFollow?.status === 'nofollow')
+  ) {
+    await observeTargetLibrarySafely(dependencies, targetUrl, {
+      followStatus: result.linkFollow.status,
+    });
+  }
   const item = currentItem(batch);
   if (
     result.status === 'validation_error' &&
@@ -473,28 +544,35 @@ async function saveSubmissionResult(
     return 'continue';
   }
   if (result.status === 'login_required') {
-    const resumable = result.clickOccurred
+    const resumable = didClick
       ? batch
       : updateBatchProgress(
           batch,
           { item: { prepared: null } },
           dependencies.now()
         );
-    return savePause(resumable, 'login_required', result.message, dependencies);
+    return saveManualGate(
+      resumable,
+      'login_required',
+      result.message,
+      dependencies,
+      didClick
+    );
   }
   if (result.status === 'captcha_required') {
-    const resumable = result.clickOccurred
+    const resumable = didClick
       ? batch
       : updateBatchProgress(
           batch,
           { item: { prepared: null } },
           dependencies.now()
         );
-    return savePause(
+    return saveManualGate(
       resumable,
       'captcha_required',
       result.message,
-      dependencies
+      dependencies,
+      didClick
     );
   }
   // An explicit in-page validation/submission error is a kept terminal state.
@@ -672,7 +750,7 @@ async function advanceOpening(
     }
     const gateStatus = manualGateStatus(location);
     if (gateStatus) {
-      return savePause(
+      return saveManualGate(
         batch,
         gateStatus,
         gateStatus === 'captcha_required'
@@ -682,7 +760,7 @@ async function advanceOpening(
       );
     }
     if (!location || !hasSameOrigin(location, item.url)) {
-      return savePause(
+      return saveManualGate(
         batch,
         'login_required',
         'TARGET_REDIRECT_REQUIRES_MANUAL_ACTION',
@@ -695,7 +773,7 @@ async function advanceOpening(
         redirectAnalysis.form.readiness === 'login_required' ||
         redirectAnalysis.form.readiness === 'captcha_required'
       ) {
-        return savePause(
+        return saveManualGate(
           batch,
           redirectAnalysis.form.readiness,
           redirectAnalysis.form.message ||
@@ -792,7 +870,7 @@ async function advanceAnalysis(
   }
 
   if (analysis.form.readiness === 'login_required') {
-    return savePause(
+    return saveManualGate(
       batch,
       'login_required',
       analysis.form.message || 'LOGIN_REQUIRED',
@@ -800,13 +878,17 @@ async function advanceAnalysis(
     );
   }
   if (analysis.form.readiness === 'captcha_required') {
-    return savePause(
+    return saveManualGate(
       batch,
       'captcha_required',
       analysis.form.message || 'CAPTCHA_REQUIRED',
       dependencies
     );
   }
+  await observeTargetLibrarySafely(dependencies, item.url, {
+    loginRequired: false,
+    captchaRequired: false,
+  });
   if (!analysis.page.title.trim() || !analysis.page.excerpt.trim()) {
     return saveFailure(batch, 'TARGET_PAGE_CONTEXT_MISSING', dependencies);
   }
@@ -1139,11 +1221,12 @@ async function advanceDispatchedClick(
   const location = tab ? tabLocation(tab) : '';
   const gateStatus = manualGateStatus(location);
   if (gateStatus) {
-    return savePause(
+    return saveManualGate(
       batch,
       gateStatus,
       gateStatus === 'captcha_required' ? 'CAPTCHA_REQUIRED' : 'LOGIN_REQUIRED',
-      dependencies
+      dependencies,
+      true
     );
   }
   if (
@@ -1159,14 +1242,15 @@ async function advanceDispatchedClick(
         redirectAnalysis.form.readiness === 'login_required' ||
         redirectAnalysis.form.readiness === 'captcha_required'
       ) {
-        return savePause(
+        return saveManualGate(
           batch,
           redirectAnalysis.form.readiness,
           redirectAnalysis.form.message ||
             (redirectAnalysis.form.readiness === 'captcha_required'
               ? 'CAPTCHA_REQUIRED'
               : 'LOGIN_REQUIRED'),
-          dependencies
+          dependencies,
+          true
         );
       }
     } catch {
@@ -1210,7 +1294,7 @@ async function verifyDispatchedComment(
       item.prepared.expected.url,
       batch.id
     );
-    return saveSubmissionResult(batch, result, dependencies);
+    return saveSubmissionResult(batch, result, dependencies, true);
   } catch (error) {
     // A tab that left the submission page is a real signal and stays terminal.
     // Anything else (command timeout, injection race) retries on later wakes:
@@ -1244,6 +1328,25 @@ export async function advanceBatchStep(
     (await dependencies.isTargetFiltered?.(item.url))
   ) {
     return skipFilteredTarget(batch, dependencies);
+  }
+  if (item.status === 'queued' && dependencies.getTargetLibraryGateState) {
+    const known = await targetLibraryGateStateSafely(dependencies, item.url);
+    if (known.captchaRequired) {
+      return saveManualGate(
+        batch,
+        'captcha_required',
+        'OUTBOUND_LINK_LIBRARY_CAPTCHA_REQUIRED',
+        dependencies
+      );
+    }
+    if (known.loginRequired) {
+      return saveManualGate(
+        batch,
+        'login_required',
+        'OUTBOUND_LINK_LIBRARY_LOGIN_REQUIRED',
+        dependencies
+      );
+    }
   }
 
   switch (item.status) {

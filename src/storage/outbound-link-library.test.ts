@@ -19,12 +19,12 @@ describe('outbound-link library storage', () => {
     vi.restoreAllMocks();
   });
 
-  it('normalizes exact URL rows and stores tags in a stable order', () => {
+  it('normalizes domains and stores tags in a stable order', () => {
     expect(
       normalizeOutboundLinkUrl(
         ' HTTPS://WWW.Example.com:443/post/?b=2&a=1#comment '
       )
-    ).toBe('https://www.example.com/post/?b=2&a=1');
+    ).toBe('example.com');
     expect(
       normalizeOutboundLinkTags([
         'captcha_required',
@@ -50,7 +50,7 @@ describe('outbound-link library storage', () => {
     );
   });
 
-  it('persists, de-duplicates and removes exact URL entries', async () => {
+  it('persists, de-duplicates and removes domain entries', async () => {
     const first = await addOutboundLinkLibraryEntry({
       url: 'https://blog.example.com/post#comment',
       tags: ['dofollow', 'login_required'],
@@ -62,16 +62,11 @@ describe('outbound-link library storage', () => {
       now: 2_000,
     });
 
-    expect(duplicate).toEqual({ entry: first, created: false });
-    expect(await getOutboundLinkLibrary()).toEqual([
-      {
-        id: first.id,
-        url: 'https://blog.example.com/post',
-        tags: ['dofollow', 'login_required'],
-        createdAt: 1_000,
-        updatedAt: 1_000,
-      },
-    ]);
+    expect(duplicate).toEqual({
+      entry: { ...first, updatedAt: 2_000 },
+      created: false,
+    });
+    expect(await getOutboundLinkLibrary()).toEqual([duplicate.entry]);
     expect(await removeOutboundLinkLibraryEntry(first.id)).toBe(true);
     expect(await removeOutboundLinkLibraryEntry(first.id)).toBe(false);
     expect(await getOutboundLinkLibrary()).toEqual([]);
@@ -108,6 +103,9 @@ describe('outbound-link library storage', () => {
     expect(tagsUpdated).toEqual({
       ...entry,
       tags: ['nofollow', 'captcha_required'],
+      followStatus: 'nofollow',
+      loginRequired: null,
+      captchaRequired: true,
       updatedAt: 2_000,
     });
 
@@ -118,8 +116,12 @@ describe('outbound-link library storage', () => {
     });
     expect(urlUpdated).toEqual({
       ...entry,
-      url: 'https://blog.example.com/new',
+      domain: 'blog.example.com',
+      url: 'blog.example.com',
       tags: ['nofollow', 'captcha_required'],
+      followStatus: 'nofollow',
+      loginRequired: null,
+      captchaRequired: true,
       updatedAt: 3_000,
     });
   });
@@ -130,14 +132,14 @@ describe('outbound-link library storage', () => {
       now: 1_000,
     });
     const second = await addOutboundLinkLibraryEntry({
-      url: 'https://blog.example.com/two',
+      url: 'https://other.example.com/two',
       now: 1_000,
     });
 
     await expect(
       updateOutboundLinkLibraryEntry({
         id: second.id,
-        url: `${first.url}#comment`,
+        url: first.url,
       })
     ).rejects.toMatchObject({ code: 'OUTBOUND_LINK_ENTRY_DUPLICATE' });
     expect(await getOutboundLinkLibrary()).toEqual([first, second]);
@@ -213,10 +215,14 @@ describe('outbound-link library storage', () => {
     expect(await getOutboundLinkLibrary()).toEqual([
       {
         id: 'valid',
-        url: 'https://blog.example.com/post',
-        tags: ['dofollow', 'captcha_required'],
+        domain: 'blog.example.com',
+        url: 'blog.example.com',
+        tags: ['nofollow', 'captcha_required'],
+        followStatus: 'nofollow',
+        loginRequired: null,
+        captchaRequired: true,
         createdAt: 1_000,
-        updatedAt: 2_000,
+        updatedAt: 3_000,
       },
     ]);
     expect(parseStoredOutboundLinkLibrary({ malformed: true })).toBeNull();
@@ -265,7 +271,7 @@ describe('outbound-link library storage', () => {
 
       expect(removed).toBe(true);
       expect(added).toMatchObject({
-        url: 'https://kept.example/post',
+        domain: 'kept.example',
         tags: ['login_required'],
       });
       expect(await getOutboundLinkLibrary()).toEqual([added]);
@@ -293,7 +299,7 @@ describe('outbound-link library storage', () => {
       await addOutboundLinkLibraryEntry({ url: 'https://next.example/post' });
 
       expect(await getOutboundLinkLibrary()).toEqual([
-        expect.objectContaining({ url: 'https://next.example/post' }),
+        expect.objectContaining({ url: 'next.example' }),
       ]);
     } finally {
       setSpy.mockRestore();

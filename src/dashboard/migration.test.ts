@@ -265,7 +265,7 @@ describe('legacy dashboard migration', () => {
     const summary = await repo.getDashboardSummary({ now: 9_100 });
     expect(summary.counts).toMatchObject({
       total: 5,
-      processed: 1,
+      processed: 2,
       submitted: 0,
       failed: 0,
       unknown: 2,

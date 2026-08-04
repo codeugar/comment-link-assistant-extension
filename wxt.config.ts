@@ -8,7 +8,7 @@ export default defineConfig({
   manifest: () => ({
     name: '__MSG_extensionName__',
     description: '__MSG_extensionDescription__',
-    default_locale: 'en',
+    default_locale: 'zh_CN',
     action: {
       default_title: '__MSG_extensionName__',
     },

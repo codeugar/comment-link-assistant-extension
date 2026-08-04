@@ -5,11 +5,13 @@ import type {
   ProviderApiKeys,
   SiteProfile,
 } from '@/types';
+import { UI_LOCALES } from '@/types';
 import { z } from 'zod';
 
 export const SETTINGS_STORAGE_KEY = 'comment-link-assistant.settings';
 export const PROVIDER_API_KEYS_STORAGE_KEY =
   'comment-link-assistant.provider-api-keys';
+export const DEFAULT_UI_LOCALE = 'zh-CN' as const;
 
 const DEFAULT_SITE_ID = 'site-1';
 
@@ -29,6 +31,7 @@ export function createDefaultSettings(): ExtensionSettings {
     provider: 'deepseek',
     sites: [createDefaultSite()],
     activeSiteId: DEFAULT_SITE_ID,
+    locale: DEFAULT_UI_LOCALE,
   };
 }
 
@@ -89,6 +92,7 @@ export const extensionSettingsSchema = z
     provider: z.enum(['deepseek', 'kie-gemini']),
     sites: z.array(siteProfileSchema).min(1).max(20),
     activeSiteId: z.string().trim().min(1).max(200),
+    locale: z.enum(UI_LOCALES).default(DEFAULT_UI_LOCALE),
   })
   .superRefine((settings, context) => {
     if (!settings.sites.some((site) => site.id === settings.activeSiteId)) {
@@ -194,7 +198,12 @@ export async function getSettings(): Promise<ExtensionSettings> {
   const parsed = extensionSettingsSchema.safeParse(value);
   if (parsed.success) {
     const normalized = normalizeLegacyLinkModes(parsed.data);
-    if (normalized !== parsed.data) {
+    if (
+      normalized !== parsed.data ||
+      !value ||
+      typeof value !== 'object' ||
+      !Object.hasOwn(value, 'locale')
+    ) {
       await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: normalized });
     }
     return normalized;

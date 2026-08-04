@@ -8,6 +8,15 @@
   "settingsTitle": {
     "message": "Settings"
   },
+  "languageLabel": {
+    "message": "Interface language"
+  },
+  "languageChinese": {
+    "message": "简体中文"
+  },
+  "languageEnglish": {
+    "message": "English"
+  },
   "deepSeekApiKeyLabel": {
     "message": "DeepSeek API key"
   },

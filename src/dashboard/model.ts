@@ -305,6 +305,7 @@ export function isFailedTargetStatus(
 
 export function isProcessedTargetStatus(status: PlanTargetStatus): boolean {
   return (
+    status === 'blocked' ||
     status === 'published' ||
     status === 'pending_moderation' ||
     status === 'unconfirmed' ||

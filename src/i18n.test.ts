@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MESSAGE_KEYS } from './i18n';
+import {
+  DEFAULT_UI_LOCALE,
+  MESSAGE_KEYS,
+  getUiLocale,
+  setUiLocale,
+  translate,
+} from './i18n';
 
 const requiredBatchKeys = [
   'batchSetupTitle',
@@ -24,6 +30,16 @@ const requiredBatchKeys = [
 ] as const;
 
 describe('batch translations', () => {
+  it('defaults to Chinese and switches catalogs without browser locale', () => {
+    expect(DEFAULT_UI_LOCALE).toBe('zh-CN');
+    setUiLocale('zh-CN');
+    expect(translate('settingsTitle')).toBe('设置');
+    setUiLocale('en');
+    expect(getUiLocale()).toBe('en');
+    expect(translate('settingsTitle')).toBe('Settings');
+    setUiLocale(DEFAULT_UI_LOCALE);
+  });
+
   it.each(['en', 'zh_CN'])('defines every batch message in %s', (locale) => {
     const path = join(
       process.cwd(),

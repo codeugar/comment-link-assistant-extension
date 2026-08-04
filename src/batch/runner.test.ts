@@ -189,6 +189,61 @@ describe('batch runner', () => {
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
   });
 
+  it.each(['login_required', 'captcha_required'] as const)(
+    'skips a known %s domain before opening it',
+    async (gate) => {
+      const context = dependencies(initialBatch(), {
+        getTargetLibraryGateState: vi.fn(async () => ({
+          loginRequired: gate === 'login_required',
+          captchaRequired: gate === 'captcha_required',
+        })),
+        observeTargetLibrary: vi.fn(async () => undefined),
+      });
+
+      expect(await advanceBatchStep(context.deps)).toBe('wait');
+      expect(context.read()).toMatchObject({
+        status: 'completed',
+        currentIndex: 1,
+        items: [
+          {
+            status: gate,
+            message: `OUTBOUND_LINK_LIBRARY_${gate === 'login_required' ? 'LOGIN' : 'CAPTCHA'}_REQUIRED`,
+          },
+        ],
+      });
+      expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
+      expect(context.deps.observeTargetLibrary).toHaveBeenCalledWith(
+        'https://blog.example/post',
+        {
+          [gate === 'login_required' ? 'loginRequired' : 'captchaRequired']:
+            true,
+        }
+      );
+    }
+  );
+
+  it('continues when an outbound-link observation fails', async () => {
+    const context = dependencies(
+      updateBatchProgress(
+        initialBatch(),
+        { workerTabId: 7, item: { status: 'analyzing' } },
+        3
+      ),
+      {
+        analyzeTab: vi.fn(async () => analysis('login_required')),
+        observeTargetLibrary: vi.fn(async () => {
+          throw new Error('LIBRARY_WRITE_FAILED');
+        }),
+      }
+    );
+
+    expect(await advanceBatchStep(context.deps)).toBe('wait');
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [{ status: 'login_required' }],
+    });
+  });
+
   it('re-checks a target added to the filter list before a paused batch resumes', async () => {
     const paused = pauseCurrentItem(
       initialBatch(),
@@ -612,7 +667,7 @@ describe('batch runner', () => {
     });
   });
 
-  it('pauses when a custom same-origin redirect renders a login gate', async () => {
+  it('skips when a custom same-origin redirect renders a login gate', async () => {
     const batch = updateBatchProgress(
       initialBatch('https://blog.example/post'),
       {
@@ -636,7 +691,7 @@ describe('batch runner', () => {
     await advanceBatchStep(context.deps);
 
     expect(context.read()).toMatchObject({
-      status: 'paused',
+      status: 'completed',
       items: [{ status: 'login_required' }],
     });
   });
@@ -670,7 +725,7 @@ describe('batch runner', () => {
     });
   });
 
-  it('pauses instead of adopting a redirect to an unrelated domain', async () => {
+  it('skips instead of adopting a redirect to an unrelated domain', async () => {
     const batch = updateBatchProgress(
       initialBatch('https://blog.example/post'),
       {
@@ -1014,7 +1069,7 @@ describe('batch runner', () => {
   });
 
   it.each(['login_required', 'captcha_required'] as const)(
-    'pauses on %s without stealing focus from the current page',
+    'skips %s without stealing focus from the current page',
     async (readiness) => {
       const batch = updateBatchProgress(
         initialBatch(),
@@ -1028,8 +1083,8 @@ describe('batch runner', () => {
       await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
 
       expect(context.read()).toMatchObject({
-        status: 'paused',
-        currentIndex: 0,
+        status: 'completed',
+        currentIndex: 1,
         items: [{ status: readiness }],
       });
     }
@@ -1072,7 +1127,7 @@ describe('batch runner', () => {
     ['https://blog.example/create-account', 'login_required'],
     ['https://blog.example/challenge/captcha', 'captcha_required'],
   ] as const)(
-    'pauses directly when target navigation reaches the manual gate %s',
+    'skips directly when target navigation reaches the manual gate %s',
     async (redirectUrl, expectedStatus) => {
       const batch = updateBatchProgress(
         initialBatch(),
@@ -1096,7 +1151,7 @@ describe('batch runner', () => {
       await advanceBatchStep(context.deps);
 
       expect(context.read()).toMatchObject({
-        status: 'paused',
+        status: 'completed',
         items: [{ status: expectedStatus }],
       });
       expect(context.deps.analyzeTab).not.toHaveBeenCalled();
@@ -1359,7 +1414,7 @@ describe('batch runner', () => {
     expect(context.read()?.items[1]?.status).not.toBe('failed');
   });
 
-  it('pauses on a post-submit login redirect and resumes by verifying the same item', async () => {
+  it('skips on a post-submit login redirect without re-verifying', async () => {
     const batch = updateBatchProgress(
       initialBatch(),
       {
@@ -1384,17 +1439,9 @@ describe('batch runner', () => {
 
     await advanceBatchStep(context.deps);
     expect(context.read()).toMatchObject({
-      status: 'paused',
-      items: [{ status: 'login_required', prepared: expect.any(Object) }],
+      status: 'completed',
+      items: [{ status: 'unconfirmed', prepared: null }],
     });
-
-    await context.deps.setBatch(resumeBatch(context.read() as BatchSnapshot));
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'opening',
-      message: 'BATCH_RESUME_VERIFICATION_REQUIRED',
-    });
-    await advanceBatchStep(context.deps);
-    expect(context.read()?.items[0]).toMatchObject({ status: 'verifying' });
     expect(context.deps.analyzeTab).not.toHaveBeenCalled();
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
   });
@@ -1451,7 +1498,7 @@ describe('batch runner', () => {
     }
   );
 
-  it('pauses when a post-submit custom same-origin redirect renders a login gate', async () => {
+  it('skips when a post-submit custom same-origin redirect renders a login gate', async () => {
     const batch = updateBatchProgress(
       initialBatch(),
       {
@@ -1474,13 +1521,13 @@ describe('batch runner', () => {
     await advanceBatchStep(context.deps);
 
     expect(context.read()).toMatchObject({
-      status: 'paused',
-      items: [{ status: 'login_required', prepared: expect.any(Object) }],
+      status: 'completed',
+      items: [{ status: 'unconfirmed', prepared: null }],
     });
     expect(context.deps.verifyTabSubmission).not.toHaveBeenCalled();
   });
 
-  it('re-prepares after a CAPTCHA appears before the click occurs', async () => {
+  it('skips after a CAPTCHA appears before the click occurs', async () => {
     const batch = updateBatchProgress(
       initialBatch(),
       {
@@ -1506,15 +1553,8 @@ describe('batch runner', () => {
 
     await advanceBatchStep(context.deps);
     expect(context.read()).toMatchObject({
-      status: 'paused',
+      status: 'completed',
       items: [{ status: 'captcha_required', prepared: null }],
-    });
-
-    await context.deps.setBatch(resumeBatch(context.read() as BatchSnapshot));
-    expect(context.read()?.items[0]).toMatchObject({
-      status: 'opening',
-      message: 'BATCH_RESUME_TARGET_REQUIRED',
-      comment: 'A useful comment',
     });
   });
 
