@@ -23,8 +23,9 @@ export type OutboundLinkFollowStatus =
 
 export interface OutboundLinkLibraryEntry {
   id: string;
-  /** Canonical hostname. `url` remains as a compatibility alias for old UI. */
+  /** Canonical hostname derived from `url` for grouping and site-level gates. */
   domain: string;
+  /** Complete executable target URL, including path and query string. */
   url: string;
   tags: OutboundLinkTag[];
   followStatus: OutboundLinkFollowStatus;
@@ -141,11 +142,6 @@ function validHttpUrl(value: string): URL {
   return url;
 }
 
-/**
- * Library rows represent canonical hostnames. The input may be a bare domain,
- * a URL, or a URL with a path; paths are intentionally discarded because the
- * library describes site-level behavior.
- */
 export function normalizeOutboundLinkUrl(value: string): string {
   if (typeof value !== 'string') {
     throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_INVALID');
@@ -155,11 +151,29 @@ export function normalizeOutboundLinkUrl(value: string): string {
     throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_INVALID');
   }
   const url = validHttpUrl(trimmed);
-  return url.hostname.toLowerCase().replace(/^www\./i, '');
+  url.hash = '';
+  const normalized = url.toString();
+  const result =
+    url.pathname === '/' && !url.search
+      ? normalized.replace(/\/$/, '')
+      : normalized;
+  if (result.length > MAX_OUTBOUND_LINK_URL_LENGTH) {
+    throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_INVALID');
+  }
+  return result;
 }
 
 export function normalizeOutboundLinkDomain(value: string): string {
-  return normalizeOutboundLinkUrl(value);
+  if (typeof value !== 'string') {
+    throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_INVALID');
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_OUTBOUND_LINK_URL_LENGTH) {
+    throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_INVALID');
+  }
+  return validHttpUrl(trimmed)
+    .hostname.toLowerCase()
+    .replace(/^www\./i, '');
 }
 
 function tagsForEntry(
@@ -260,13 +274,14 @@ export function parseStoredOutboundLinkLibrary(
       if (!storedEntry || typeof storedEntry !== 'object') continue;
       const candidate = storedEntry as Record<string, unknown>;
       const id = typeof candidate.id === 'string' ? candidate.id : '';
-      const sourceDomain =
-        typeof candidate.domain === 'string'
-          ? candidate.domain
-          : typeof candidate.url === 'string'
-            ? candidate.url
+      const sourceUrl =
+        typeof candidate.url === 'string'
+          ? candidate.url
+          : typeof candidate.domain === 'string'
+            ? candidate.domain
             : '';
-      const domain = normalizeOutboundLinkDomain(sourceDomain);
+      const url = normalizeOutboundLinkUrl(sourceUrl);
+      const domain = normalizeOutboundLinkDomain(url);
       const createdAt =
         typeof candidate.createdAt === 'number' &&
         Number.isInteger(candidate.createdAt) &&
@@ -299,7 +314,7 @@ export function parseStoredOutboundLinkLibrary(
       const entry: OutboundLinkLibraryEntry = {
         id: id || createEntryId(),
         domain,
-        url: domain,
+        url,
         tags: tagsForEntry(followStatus, loginRequired, captchaRequired),
         followStatus,
         loginRequired,
@@ -310,7 +325,7 @@ export function parseStoredOutboundLinkLibrary(
       const parsed = outboundLinkLibraryEntrySchema.safeParse(entry);
       if (!parsed.success) continue;
       const existingIndex = entries.findIndex(
-        (candidate) => candidate.domain === entry.domain
+        (candidate) => candidate.url === entry.url
       );
       if (existingIndex >= 0) {
         const existing = entries[existingIndex];
@@ -376,7 +391,8 @@ async function setOutboundLinkLibrary(
 export async function addOutboundLinkLibraryEntryWithResult(
   input: AddOutboundLinkLibraryEntryInput
 ): Promise<AddOutboundLinkLibraryEntryResult> {
-  const domain = normalizeOutboundLinkDomain(input.domain ?? input.url);
+  const url = normalizeOutboundLinkUrl(input.url);
+  const domain = normalizeOutboundLinkDomain(url);
   const tags = normalizeOutboundLinkTags(input.tags ?? []);
   const legacyFields = fieldsFromTags(tags);
   const followStatus =
@@ -394,7 +410,7 @@ export async function addOutboundLinkLibraryEntryWithResult(
 
   return serializeOutboundLinkLibraryMutation(async () => {
     const entries = await getOutboundLinkLibrary();
-    const existing = entries.find((entry) => entry.domain === domain);
+    const existing = entries.find((entry) => entry.url === url);
     const hasMetadataUpdate =
       input.followStatus !== undefined ||
       input.loginRequired !== undefined ||
@@ -444,7 +460,7 @@ export async function addOutboundLinkLibraryEntryWithResult(
     const entry: OutboundLinkLibraryEntry = {
       id: createEntryId(),
       domain,
-      url: domain,
+      url,
       tags: tagsForEntry(followStatus, loginRequired, captchaRequired),
       followStatus,
       loginRequired,
@@ -485,7 +501,7 @@ export async function updateOutboundLinkLibraryEntry(
   }
 
   const url = updatesUrl
-    ? normalizeOutboundLinkDomain((input.domain ?? input.url) as string)
+    ? normalizeOutboundLinkUrl((input.url ?? input.domain) as string)
     : undefined;
   const tags = updatesTags ? normalizeOutboundLinkTags(input.tags) : undefined;
 
@@ -495,9 +511,10 @@ export async function updateOutboundLinkLibraryEntry(
     if (index === -1) return null;
 
     const current = entries[index];
-    const nextUrl = url ?? current.domain;
+    const nextUrl = url ?? current.url;
+    const nextDomain = normalizeOutboundLinkDomain(nextUrl);
     const duplicate = entries.find(
-      (entry) => entry.id !== id && entry.domain === nextUrl
+      (entry) => entry.id !== id && entry.url === nextUrl
     );
     if (duplicate) {
       throw new OutboundLinkLibraryError('OUTBOUND_LINK_ENTRY_DUPLICATE');
@@ -515,7 +532,7 @@ export async function updateOutboundLinkLibraryEntry(
       : (legacyFields?.captchaRequired ?? current.captchaRequired);
     const updated: OutboundLinkLibraryEntry = {
       ...current,
-      domain: nextUrl,
+      domain: nextDomain,
       url: nextUrl,
       tags: tagsForEntry(
         nextFollowStatus,

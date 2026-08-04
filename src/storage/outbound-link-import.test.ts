@@ -34,6 +34,7 @@ describe('outbound link imports', () => {
     expect(result.rows).toEqual([
       {
         lineNumber: 1,
+        url: 'https://www.example.com/post',
         domain: 'example.com',
         followStatus: 'dofollow',
         loginRequired: false,
@@ -41,6 +42,7 @@ describe('outbound link imports', () => {
       },
       {
         lineNumber: 2,
+        url: 'https://blog.example.com',
         domain: 'blog.example.com',
         followStatus: 'nofollow',
         loginRequired: true,
@@ -57,14 +59,20 @@ describe('outbound link imports', () => {
     expect(result.rows).toEqual([
       {
         lineNumber: 2,
+        url: 'https://example.com',
         domain: 'example.com',
         followStatus: 'dofollow',
         captchaRequired: false,
       },
     ]);
     expect(result.invalidRows).toEqual([
-      { lineNumber: 3, domain: '', error: 'DOMAIN_REQUIRED' },
-      { lineNumber: 4, domain: 'foo.example.com', error: 'ATTRIBUTE_INVALID' },
+      { lineNumber: 3, url: '', domain: '', error: 'URL_REQUIRED' },
+      {
+        lineNumber: 4,
+        url: 'https://foo.example.com',
+        domain: 'foo.example.com',
+        error: 'ATTRIBUTE_INVALID',
+      },
     ]);
   });
 
@@ -75,6 +83,7 @@ describe('outbound link imports', () => {
     expect(result.rows).toEqual([
       {
         lineNumber: 2,
+        url: 'https://example.com',
         domain: 'example.com',
         followStatus: 'dofollow',
         loginRequired: false,
@@ -107,6 +116,7 @@ describe('outbound link imports', () => {
     expect(result.rows).toEqual([
       {
         lineNumber: 2,
+        url: 'https://www.example.com/post',
         domain: 'example.com',
         followStatus: 'dofollow',
         loginRequired: false,

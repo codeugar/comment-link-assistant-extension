@@ -11,7 +11,7 @@ describe('batch outbound-link library adapter', () => {
     await fakeBrowser.reset();
   });
 
-  it('stores explicit tri-state observations by canonical domain', async () => {
+  it('stores explicit tri-state observations on the complete target URL', async () => {
     await observeTargetLibrary('https://www.Example.com/post', {
       followStatus: 'dofollow',
       loginRequired: false,
@@ -21,6 +21,7 @@ describe('batch outbound-link library adapter', () => {
     await expect(getOutboundLinkLibrary()).resolves.toEqual([
       expect.objectContaining({
         domain: 'example.com',
+        url: 'https://www.example.com/post',
         followStatus: 'dofollow',
         loginRequired: false,
         captchaRequired: false,
@@ -31,7 +32,7 @@ describe('batch outbound-link library adapter', () => {
     ).resolves.toEqual({ loginRequired: false, captchaRequired: false });
   });
 
-  it('updates only the observed fields and detects a known gate', async () => {
+  it('keeps article rows separate and aggregates known gates by domain', async () => {
     await observeTargetLibrary('example.com', { loginRequired: true });
     await observeTargetLibrary('https://www.example.com/post', {
       captchaRequired: true,
@@ -43,8 +44,16 @@ describe('batch outbound-link library adapter', () => {
     await expect(getOutboundLinkLibrary()).resolves.toEqual([
       expect.objectContaining({
         domain: 'example.com',
+        url: 'https://example.com',
         followStatus: 'unknown',
         loginRequired: true,
+        captchaRequired: null,
+      }),
+      expect.objectContaining({
+        domain: 'example.com',
+        url: 'https://www.example.com/post',
+        followStatus: 'unknown',
+        loginRequired: null,
         captchaRequired: true,
       }),
     ]);

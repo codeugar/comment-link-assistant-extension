@@ -28,11 +28,14 @@ const settings: ExtensionSettings = {
   locale: 'zh-CN',
 };
 
-function entry(id: string, domain = `${id}.example`): OutboundLinkLibraryEntry {
+function entry(
+  id: string,
+  url = `https://${id}.example/article-${id}`
+): OutboundLinkLibraryEntry {
   return {
     id,
-    domain,
-    url: domain,
+    domain: new URL(url).hostname.replace(/^www\./, ''),
+    url,
     tags: [],
     followStatus: 'unknown',
     loginRequired: null,
@@ -94,10 +97,10 @@ afterEach(async () => {
 });
 
 describe('dashboard library and plan flow components', () => {
-  it('imports selected library domains into the existing plan text and resets selector selection', async () => {
+  it('imports selected complete library URLs into the existing plan text and resets selector selection', async () => {
     const entries = [
-      entry('blog', 'blog.example'),
-      entry('forum', 'forum.example'),
+      entry('blog', 'https://blog.example/posts/123'),
+      entry('forum', 'https://forum.example/thread/456'),
     ];
     await act(async () => {
       root.render(
@@ -124,14 +127,14 @@ describe('dashboard library and plan flow components', () => {
     await click(button('从外链库选择'));
 
     const blogCheckbox = container.querySelector<HTMLInputElement>(
-      'input[aria-label="从外链库选择 blog.example"]'
+      'input[aria-label="从外链库选择 https://blog.example/posts/123"]'
     );
     expect(blogCheckbox).not.toBeNull();
     await click(blogCheckbox as HTMLInputElement);
     await click(button('导入到计划'));
 
     expect(textarea?.value).toBe(
-      'https://existing.example\nhttps://blog.example'
+      'https://existing.example\nhttps://blog.example/posts/123'
     );
     expect(
       container.querySelector('.outbound-link-selector-dialog')
@@ -148,7 +151,7 @@ describe('dashboard library and plan flow components', () => {
     expect(selectorCancel).toBeDefined();
     await click(selectorCancel as HTMLButtonElement);
     expect(textarea?.value).toBe(
-      'https://existing.example\nhttps://blog.example'
+      'https://existing.example\nhttps://blog.example/posts/123'
     );
 
     await enterInput(
@@ -266,12 +269,12 @@ describe('dashboard library and plan flow components', () => {
     await click(button('下一页'));
     expect(
       container.querySelector(
-        'input[aria-label="从外链库选择 domain-55.example"]'
+        'input[aria-label="从外链库选择 https://domain-55.example/article-domain-55"]'
       )
     ).not.toBeNull();
     expect(
       container.querySelector(
-        'input[aria-label="从外链库选择 domain-1.example"]'
+        'input[aria-label="从外链库选择 https://domain-1.example/article-domain-1"]'
       )
     ).toBeNull();
   });

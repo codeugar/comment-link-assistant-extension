@@ -6,6 +6,7 @@ import {
   addOutboundLinkLibraryEntry,
   addOutboundLinkLibraryEntryWithResult,
   getOutboundLinkLibrary,
+  normalizeOutboundLinkDomain,
   normalizeOutboundLinkTags,
   normalizeOutboundLinkUrl,
   parseStoredOutboundLinkLibrary,
@@ -19,12 +20,15 @@ describe('outbound-link library storage', () => {
     vi.restoreAllMocks();
   });
 
-  it('normalizes domains and stores tags in a stable order', () => {
+  it('normalizes complete URLs, derives domains and stores tags in a stable order', () => {
     expect(
       normalizeOutboundLinkUrl(
         ' HTTPS://WWW.Example.com:443/post/?b=2&a=1#comment '
       )
-    ).toBe('example.com');
+    ).toBe('https://www.example.com/post/?b=2&a=1');
+    expect(normalizeOutboundLinkDomain('https://www.Example.com/post')).toBe(
+      'example.com'
+    );
     expect(
       normalizeOutboundLinkTags([
         'captcha_required',
@@ -50,7 +54,7 @@ describe('outbound-link library storage', () => {
     );
   });
 
-  it('persists, de-duplicates and removes domain entries', async () => {
+  it('persists, de-duplicates and removes exact URL entries', async () => {
     const first = await addOutboundLinkLibraryEntry({
       url: 'https://blog.example.com/post#comment',
       tags: ['dofollow', 'login_required'],
@@ -70,6 +74,21 @@ describe('outbound-link library storage', () => {
     expect(await removeOutboundLinkLibraryEntry(first.id)).toBe(true);
     expect(await removeOutboundLinkLibraryEntry(first.id)).toBe(false);
     expect(await getOutboundLinkLibrary()).toEqual([]);
+  });
+
+  it('keeps multiple article URLs on the same domain', async () => {
+    const first = await addOutboundLinkLibraryEntry({
+      url: 'https://blog.example.com/one',
+      now: 1_000,
+    });
+    const second = await addOutboundLinkLibraryEntry({
+      url: 'https://blog.example.com/two',
+      now: 2_000,
+    });
+
+    expect(first.domain).toBe('blog.example.com');
+    expect(second.domain).toBe('blog.example.com');
+    expect(await getOutboundLinkLibrary()).toEqual([first, second]);
   });
 
   it('serializes duplicate adds and reports only the later call as existing', async () => {
@@ -117,7 +136,7 @@ describe('outbound-link library storage', () => {
     expect(urlUpdated).toEqual({
       ...entry,
       domain: 'blog.example.com',
-      url: 'blog.example.com',
+      url: 'https://blog.example.com/new',
       tags: ['nofollow', 'captcha_required'],
       followStatus: 'nofollow',
       loginRequired: null,
@@ -177,6 +196,32 @@ describe('outbound-link library storage', () => {
     expect(await getOutboundLinkLibrary()).toEqual([entry]);
   });
 
+  it('migrates legacy domain-only rows to HTTPS root URLs', () => {
+    expect(
+      parseStoredOutboundLinkLibrary([
+        {
+          id: 'legacy',
+          domain: 'www.Example.com',
+          tags: ['dofollow'],
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      ])
+    ).toEqual([
+      {
+        id: 'legacy',
+        domain: 'example.com',
+        url: 'https://www.example.com',
+        tags: ['dofollow'],
+        followStatus: 'dofollow',
+        loginRequired: null,
+        captchaRequired: null,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ]);
+  });
+
   it('keeps valid persisted rows when adjacent storage data is malformed', async () => {
     await chrome.storage.local.set({
       [OUTBOUND_LINK_LIBRARY_STORAGE_KEY]: [
@@ -216,7 +261,7 @@ describe('outbound-link library storage', () => {
       {
         id: 'valid',
         domain: 'blog.example.com',
-        url: 'blog.example.com',
+        url: 'https://blog.example.com/post',
         tags: ['nofollow', 'captcha_required'],
         followStatus: 'nofollow',
         loginRequired: null,
@@ -299,7 +344,7 @@ describe('outbound-link library storage', () => {
       await addOutboundLinkLibraryEntry({ url: 'https://next.example/post' });
 
       expect(await getOutboundLinkLibrary()).toEqual([
-        expect.objectContaining({ url: 'next.example' }),
+        expect.objectContaining({ url: 'https://next.example/post' }),
       ]);
     } finally {
       setSpy.mockRestore();

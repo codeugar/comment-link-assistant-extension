@@ -3,6 +3,7 @@ import {
   addOutboundLinkLibraryEntry,
   getOutboundLinkLibrary,
   normalizeOutboundLinkDomain,
+  normalizeOutboundLinkUrl,
   updateOutboundLinkLibraryEntry,
 } from '@/storage/outbound-link-library';
 
@@ -39,10 +40,13 @@ export async function getTargetLibraryGateState(
   const domain = domainOf(url);
   if (!domain) return { loginRequired: false, captchaRequired: false };
   const entries = await getOutboundLinkLibrary();
-  const entry = entries.find((candidate) => candidate.domain === domain);
   return {
-    loginRequired: entry?.loginRequired === true,
-    captchaRequired: entry?.captchaRequired === true,
+    loginRequired: entries.some(
+      (entry) => entry.domain === domain && entry.loginRequired === true
+    ),
+    captchaRequired: entries.some(
+      (entry) => entry.domain === domain && entry.captchaRequired === true
+    ),
   };
 }
 
@@ -52,6 +56,12 @@ export async function observeTargetLibrary(
 ): Promise<void> {
   const domain = domainOf(url);
   if (!domain) return;
+  let targetUrl: string;
+  try {
+    targetUrl = normalizeOutboundLinkUrl(url);
+  } catch {
+    return;
+  }
   const updates: {
     followStatus?: Exclude<OutboundLinkFollowStatus, 'unknown'>;
     loginRequired?: boolean;
@@ -69,11 +79,10 @@ export async function observeTargetLibrary(
   if (Object.keys(updates).length === 0) return;
 
   const entries = await getOutboundLinkLibrary();
-  const existing = entries.find((entry) => entry.domain === domain);
+  const existing = entries.find((entry) => entry.url === targetUrl);
   if (!existing) {
     await addOutboundLinkLibraryEntry({
-      url: domain,
-      domain,
+      url: targetUrl,
       ...updates,
     });
     return;
