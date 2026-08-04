@@ -1,4 +1,4 @@
-import { createBatch } from '@/batch/state';
+import { createBatch, pauseCurrentItem } from '@/batch/state';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { BATCH_STORAGE_KEY, clearBatch, getBatch, setBatch } from './batch';
@@ -99,6 +99,34 @@ describe('batch storage', () => {
       ],
     });
   });
+
+  it.each(['login_required', 'captcha_required'] as const)(
+    'settles a legacy paused %s item on read',
+    async (status) => {
+      const legacy = pauseCurrentItem(
+        makeBatch(),
+        status,
+        status === 'login_required' ? 'LOGIN_REQUIRED' : 'CAPTCHA_REQUIRED',
+        2_000
+      );
+      await chrome.storage.local.set({ [BATCH_STORAGE_KEY]: legacy });
+
+      await expect(getBatch()).resolves.toMatchObject({
+        status: 'completed',
+        currentIndex: 1,
+        items: [
+          {
+            status,
+            prepared: null,
+            message:
+              status === 'login_required'
+                ? 'LOGIN_REQUIRED_SKIPPED'
+                : 'CAPTCHA_REQUIRED_SKIPPED',
+          },
+        ],
+      });
+    }
+  );
 
   it('rejects an invalid snapshot instead of persisting it', async () => {
     const invalid = {

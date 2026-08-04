@@ -27,6 +27,8 @@ const completionStatuses = [
   'pending_moderation',
   'unconfirmed',
   'submitted',
+  'login_required',
+  'captcha_required',
   'no_form',
   'validation_error',
   'failed',
@@ -37,6 +39,8 @@ export const RETRYABLE_ITEM_STATUSES = [
   'failed',
   'no_form',
   'validation_error',
+  'login_required',
+  'captcha_required',
   'stopped',
 ] as const satisfies readonly BatchItemStatus[];
 
@@ -49,6 +53,8 @@ const terminalItemStatuses = new Set<BatchItemStatus>([
   'pending_moderation',
   'unconfirmed',
   'submitted',
+  'login_required',
+  'captcha_required',
   'no_form',
   'validation_error',
   'failed',
@@ -125,7 +131,8 @@ function appendStatusEvent(
   message: string,
   at: number
 ): BatchItem['events'] {
-  if (item.events.at(-1)?.status === status) return item.events;
+  const previous = item.events.at(-1);
+  if (previous?.status === status) return item.events;
   return [
     ...item.events,
     { status, message: boundedMessage(message), at },
@@ -441,14 +448,23 @@ export function skipCurrentManualGate(
   // completeCurrentItem deliberately operates only on a running batch. The
   // transition is internal and immediately settles this exact paused item.
   const running: BatchSnapshot = { ...batch, status: 'running' };
-  return completeCurrentItem(
-    running,
-    'failed',
+  const message =
     item.status === 'login_required'
       ? 'LOGIN_REQUIRED_SKIPPED'
-      : 'CAPTCHA_REQUIRED_SKIPPED',
-    at
-  );
+      : 'CAPTCHA_REQUIRED_SKIPPED';
+  const completed = completeCurrentItem(running, item.status, message, at);
+  const completedItem = completed.items[batch.currentIndex];
+  if (!completedItem) return completed;
+  const events = [
+    ...completedItem.events,
+    { status: item.status, message, at: timestamp(at) },
+  ].slice(-32);
+  return legalSnapshot({
+    ...completed,
+    items: completed.items.map((candidate, index) =>
+      index === batch.currentIndex ? { ...candidate, events } : candidate
+    ),
+  });
 }
 
 const preservedStopStatuses = new Set<BatchItemStatus>([
@@ -470,6 +486,8 @@ const settledItemStatuses = new Set<BatchItemStatus>([
   'pending_moderation',
   'unconfirmed',
   'submitted',
+  'login_required',
+  'captcha_required',
   'no_form',
   'validation_error',
   'failed',

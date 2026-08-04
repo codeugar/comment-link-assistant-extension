@@ -8,7 +8,7 @@ import type {
   TargetHostSummary,
 } from '@/dashboard/model';
 import { parseDashboardTargetRows } from '@/dashboard/target-import';
-import { translate } from '@/i18n';
+import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
 import {
   type DashboardSummaryView,
   sendToBackground,
@@ -21,12 +21,19 @@ import {
   findMatchingFilterEntry,
 } from '@/storage/filter-list';
 import {
+  type ParsedOutboundLinkImportRow,
+  parseOutboundLinkImportFile,
+  parseTargetFile,
+} from '@/storage/outbound-link-import';
+import {
   OUTBOUND_LINK_LIBRARY_STORAGE_KEY,
   OUTBOUND_LINK_TAGS,
+  type OutboundLinkFollowStatus,
   type OutboundLinkLibraryEntry,
   type OutboundLinkTag,
   normalizeOutboundLinkUrl,
 } from '@/storage/outbound-link-library';
+import { SETTINGS_STORAGE_KEY, getSettings } from '@/storage/settings';
 import type { ExtensionSettings } from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
 import {
@@ -42,6 +49,7 @@ import {
   ClockCountdown,
   Copy,
   Database,
+  DownloadSimple,
   Eye,
   FileText,
   FunnelSimple,
@@ -50,6 +58,7 @@ import {
   House,
   LinkSimple,
   ListBullets,
+  MagnifyingGlass,
   PencilSimple,
   Play,
   Plus,
@@ -95,6 +104,7 @@ import type {
 type Route =
   | { page: 'dashboard' }
   | { page: 'moderation' }
+  | { page: 'outbound' }
   | { page: 'plans'; planId?: string };
 
 type IconComponent = PhosphorIcon;
@@ -142,6 +152,7 @@ function readRoute(): Route {
     return { page: 'plans', planId: parts[1] };
   }
   if (parts[0] === 'moderation') return { page: 'moderation' };
+  if (parts[0] === 'outbound') return { page: 'outbound' };
   return { page: 'dashboard' };
 }
 
@@ -149,6 +160,8 @@ function navigate(route: Route) {
   if (route.page === 'dashboard') globalThis.location.hash = '#/dashboard';
   else if (route.page === 'moderation') {
     globalThis.location.hash = '#/moderation';
+  } else if (route.page === 'outbound') {
+    globalThis.location.hash = '#/outbound';
   } else {
     globalThis.location.hash = route.planId
       ? `#/plans/${encodeURIComponent(route.planId)}`
@@ -330,11 +343,21 @@ function parseUrlInput(text: string): ParsedUrls {
   const seen = new Set<string>();
   for (const { value: candidate } of parsedRows.candidates) {
     try {
-      const url = new URL(candidate);
+      const trimmed = candidate.trim();
+      if (
+        /^[a-z][a-z\d+.-]*:/i.test(trimmed) &&
+        !/^https?:\/\//i.test(trimmed)
+      ) {
+        throw new Error('URL_NOT_ALLOWED');
+      }
+      const url = new URL(
+        /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+      );
       if (
         !['http:', 'https:'].includes(url.protocol) ||
         url.username ||
         url.password ||
+        !url.hostname ||
         candidate.length > 2_048
       ) {
         invalid.push(candidate);
@@ -606,15 +629,14 @@ function Sidebar({
         </button>
         <button
           type="button"
-          className={outboundLinkLibraryOpen ? 'is-active' : ''}
-          aria-expanded={outboundLinkLibraryOpen}
-          aria-controls="outbound-link-library-drawer"
+          className={route.page === 'outbound' ? 'is-active' : ''}
+          aria-current={route.page === 'outbound' ? 'page' : undefined}
           aria-label={t('outboundLinkLibrary')}
           onClick={onOpenOutboundLinkLibrary}
         >
           <LinkSimple
             size={22}
-            weight={outboundLinkLibraryOpen ? 'fill' : 'regular'}
+            weight={route.page === 'outbound' ? 'fill' : 'regular'}
           />
           <span>{t('outboundLinkLibrary')}</span>
         </button>
@@ -2326,7 +2348,11 @@ function SettingsDrawer({
               <FileText size={19} aria-hidden />
               {t('language')}
             </dt>
-            <dd>{t('followsBrowser')}</dd>
+            <dd>
+              {settings.locale === 'en'
+                ? t('languageEnglish')
+                : t('languageChinese')}
+            </dd>
           </div>
           <div>
             <dt>
@@ -2718,6 +2744,612 @@ function OutboundLinkTagChips({
   );
 }
 
+function nullableBooleanLabel(value: boolean | null): string {
+  if (value === true) return locale() === 'zh-CN' ? '是' : 'Yes';
+  if (value === false) return locale() === 'zh-CN' ? '否' : 'No';
+  return locale() === 'zh-CN' ? '未知' : 'Unknown';
+}
+
+function followStatusLabel(value: OutboundLinkFollowStatus): string {
+  if (value === 'dofollow') return 'Dofollow';
+  if (value === 'nofollow') return 'Nofollow';
+  return locale() === 'zh-CN' ? '未知' : 'Unknown';
+}
+
+function OutboundLinkLibraryPage({
+  entries,
+  loading,
+  refreshing,
+  onRefresh,
+  onEntriesChange,
+  onToast,
+}: {
+  entries: OutboundLinkLibraryEntry[];
+  loading: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onEntriesChange: (
+    updater: (current: OutboundLinkLibraryEntry[]) => OutboundLinkLibraryEntry[]
+  ) => void;
+  onToast: (message: string, kind?: Toast['kind']) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [domain, setDomain] = useState('');
+  const [followStatus, setFollowStatus] =
+    useState<OutboundLinkFollowStatus>('unknown');
+  const [loginRequired, setLoginRequired] = useState<boolean | null>(null);
+  const [captchaRequired, setCaptchaRequired] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<{
+    rows: ParsedOutboundLinkImportRow[];
+    invalidRows: ParsedOutboundLinkImportRow[];
+    fileName: string;
+  } | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  const filteredEntries = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return entries.filter((entry) => {
+      if (needle && !entry.domain.includes(needle)) return false;
+      if (filter === 'dofollow' && entry.followStatus !== 'dofollow')
+        return false;
+      if (filter === 'nofollow' && entry.followStatus !== 'nofollow')
+        return false;
+      if (filter === 'anonymous' && entry.loginRequired !== false) return false;
+      if (filter === 'no-captcha' && entry.captchaRequired !== false)
+        return false;
+      return true;
+    });
+  }, [entries, filter, query]);
+  const totalPages = Math.max(1, Math.ceil(filteredEntries.length / pageSize));
+  const visibleEntries = filteredEntries.slice(
+    (page - 1) * pageSize,
+    page * pageSize
+  );
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  const stats = useMemo(
+    () => ({
+      total: entries.length,
+      dofollow: entries.filter((entry) => entry.followStatus === 'dofollow')
+        .length,
+      nofollow: entries.filter((entry) => entry.followStatus === 'nofollow')
+        .length,
+      anonymous: entries.filter((entry) => entry.loginRequired === false)
+        .length,
+      noCaptcha: entries.filter((entry) => entry.captchaRequired === false)
+        .length,
+    }),
+    [entries]
+  );
+
+  const resetForm = () => {
+    setEditingId(null);
+    setDomain('');
+    setFollowStatus('unknown');
+    setLoginRequired(null);
+    setCaptchaRequired(null);
+  };
+
+  const beginEdit = (entry: OutboundLinkLibraryEntry) => {
+    setEditingId(entry.id);
+    setDomain(entry.domain);
+    setFollowStatus(entry.followStatus);
+    setLoginRequired(entry.loginRequired);
+    setCaptchaRequired(entry.captchaRequired);
+  };
+
+  const saveEntry = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!domain.trim() || busy) return;
+    setBusy(true);
+    try {
+      const normalized = normalizeOutboundLinkUrl(domain);
+      const payload = {
+        domain: normalized,
+        followStatus,
+        loginRequired,
+        captchaRequired,
+      };
+      if (isPreviewMode()) {
+        const now = Date.now();
+        const existing = entries.find((entry) => entry.id === editingId);
+        const next: OutboundLinkLibraryEntry = {
+          id: existing?.id ?? `demo-outbound-link-${now}`,
+          url: normalized,
+          tags: [
+            ...(followStatus === 'unknown' ? [] : [followStatus]),
+            ...(loginRequired === true ? ['login_required' as const] : []),
+            ...(captchaRequired === true ? ['captcha_required' as const] : []),
+          ],
+          ...payload,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        };
+        onEntriesChange((current) =>
+          editingId
+            ? current.map((entry) => (entry.id === editingId ? next : entry))
+            : [...current, next]
+        );
+      } else if (editingId) {
+        const result = await sendToBackground({
+          type: 'link-library.update',
+          id: editingId,
+          ...payload,
+        });
+        if (result.data) {
+          const updated = result.data;
+          onEntriesChange((current) =>
+            current.map((entry) => (entry.id === editingId ? updated : entry))
+          );
+        }
+      } else {
+        const result = await sendToBackground({
+          type: 'link-library.add',
+          url: normalized,
+          ...payload,
+        });
+        onEntriesChange((current) => [
+          ...current.filter((entry) => entry.id !== result.data.id),
+          result.data,
+        ]);
+      }
+      resetForm();
+      onToast(editingId ? t('outboundLinkUpdated') : t('outboundLinkSaved'));
+    } catch (error) {
+      onToast(outboundLinkLibraryErrorCopy(error), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeEntry = async (entry: OutboundLinkLibraryEntry) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (isPreviewMode()) {
+        onEntriesChange((current) =>
+          current.filter((item) => item.id !== entry.id)
+        );
+      } else {
+        await sendToBackground({ type: 'link-library.remove', id: entry.id });
+        onEntriesChange((current) =>
+          current.filter((item) => item.id !== entry.id)
+        );
+      }
+      if (editingId === entry.id) resetForm();
+      onToast(t('outboundLinkRemoved'));
+    } catch (error) {
+      onToast(outboundLinkLibraryErrorCopy(error), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || busy) return;
+    setBusy(true);
+    try {
+      const parsed = await parseOutboundLinkImportFile(file);
+      setImportResult({ ...parsed, fileName: file.name });
+    } catch {
+      onToast(t('outboundLinkImportFailed'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importResult || busy) return;
+    setBusy(true);
+    try {
+      for (const row of importResult.rows) {
+        if (isPreviewMode()) {
+          const now = Date.now();
+          const existing = entries.find((entry) => entry.domain === row.domain);
+          const next: OutboundLinkLibraryEntry = {
+            id: existing?.id ?? `demo-outbound-link-${now}-${row.lineNumber}`,
+            domain: row.domain,
+            url: row.domain,
+            tags: [
+              ...(row.followStatus && row.followStatus !== 'unknown'
+                ? [row.followStatus]
+                : []),
+              ...(row.loginRequired === true
+                ? ['login_required' as const]
+                : []),
+              ...(row.captchaRequired === true
+                ? ['captcha_required' as const]
+                : []),
+            ],
+            followStatus:
+              row.followStatus ?? existing?.followStatus ?? 'unknown',
+            loginRequired: row.loginRequired ?? existing?.loginRequired ?? null,
+            captchaRequired:
+              row.captchaRequired ?? existing?.captchaRequired ?? null,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          };
+          onEntriesChange((current) => [
+            ...current.filter((entry) => entry.domain !== row.domain),
+            next,
+          ]);
+        } else {
+          const result = await sendToBackground({
+            type: 'link-library.add',
+            url: row.domain,
+            domain: row.domain,
+            ...(row.followStatus ? { followStatus: row.followStatus } : {}),
+            ...(row.loginRequired !== undefined
+              ? { loginRequired: row.loginRequired }
+              : {}),
+            ...(row.captchaRequired !== undefined
+              ? { captchaRequired: row.captchaRequired }
+              : {}),
+          });
+          onEntriesChange((current) => [
+            ...current.filter((entry) => entry.id !== result.data.id),
+            result.data,
+          ]);
+        }
+      }
+      onToast(t('outboundLinkImportCompleted'));
+      setImportResult(null);
+    } catch (error) {
+      onToast(outboundLinkLibraryErrorCopy(error), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadTemplate = () => {
+    const blob = new Blob(
+      [
+        '博客网站域名,是否Dofollow,是否需要登录,是否CAPTCHA\nexample.com,是,否,否\n',
+      ],
+      { type: 'text/csv;charset=utf-8' }
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'outbound-link-library-template.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <main className="outbound-library-page">
+      <PageHeader
+        title={t('outboundLinkLibraryTitle')}
+        eyebrow={t('outboundLinkLibrary')}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        actions={
+          <>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={downloadTemplate}
+            >
+              <DownloadSimple size={17} aria-hidden />
+              {t('outboundLinkDownloadTemplate')}
+            </button>
+            <label className="secondary-button file-button">
+              <UploadSimple size={17} aria-hidden />
+              {t('outboundLinkImport')}
+              <input
+                type="file"
+                accept=".csv,.txt,.xlsx,.xls"
+                onChange={readImport}
+              />
+            </label>
+          </>
+        }
+      />
+      <p className="page-description">{t('outboundLinkLibraryDescription')}</p>
+      <div className="metric-grid outbound-library-metrics">
+        <MetricCard
+          label={t('outboundLinkStatDomains')}
+          value={stats.total}
+          icon={GlobeHemisphereWest}
+          tone="neutral"
+        />
+        <MetricCard
+          label={t('outboundLinkStatDofollow')}
+          value={stats.dofollow}
+          icon={LinkSimple}
+          tone="green"
+        />
+        <MetricCard
+          label={t('outboundLinkStatNofollow')}
+          value={stats.nofollow}
+          icon={LinkSimple}
+          tone="red"
+        />
+        <MetricCard
+          label={t('outboundLinkStatAnonymous')}
+          value={stats.anonymous}
+          icon={CheckCircle}
+          tone="green"
+        />
+        <MetricCard
+          label={t('outboundLinkStatNoCaptcha')}
+          value={stats.noCaptcha}
+          icon={CheckCircle}
+          tone="green"
+        />
+      </div>
+      <section className="surface-card outbound-library-editor">
+        <form onSubmit={saveEntry} className="outbound-library-editor-form">
+          <label className="form-field">
+            <span>{t('outboundLinkDomain')}</span>
+            <input
+              value={domain}
+              onChange={(event) => setDomain(event.target.value)}
+              placeholder="example.com"
+            />
+          </label>
+          <label className="form-field">
+            <span>{t('outboundLinkFollowStatus')}</span>
+            <select
+              value={followStatus}
+              onChange={(event) =>
+                setFollowStatus(event.target.value as OutboundLinkFollowStatus)
+              }
+            >
+              <option value="unknown">
+                {locale() === 'zh-CN' ? '未知' : 'Unknown'}
+              </option>
+              <option value="dofollow">Dofollow</option>
+              <option value="nofollow">Nofollow</option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>{t('outboundLinkLoginRequired')}</span>
+            <select
+              value={loginRequired === null ? '' : String(loginRequired)}
+              onChange={(event) =>
+                setLoginRequired(
+                  event.target.value === ''
+                    ? null
+                    : event.target.value === 'true'
+                )
+              }
+            >
+              <option value="">
+                {locale() === 'zh-CN' ? '未知' : 'Unknown'}
+              </option>
+              <option value="false">
+                {locale() === 'zh-CN' ? '匿名评论' : 'Anonymous'}
+              </option>
+              <option value="true">
+                {locale() === 'zh-CN' ? '需要登录' : 'Login required'}
+              </option>
+            </select>
+          </label>
+          <label className="form-field">
+            <span>{t('outboundLinkCaptchaRequired')}</span>
+            <select
+              value={captchaRequired === null ? '' : String(captchaRequired)}
+              onChange={(event) =>
+                setCaptchaRequired(
+                  event.target.value === ''
+                    ? null
+                    : event.target.value === 'true'
+                )
+              }
+            >
+              <option value="">
+                {locale() === 'zh-CN' ? '未知' : 'Unknown'}
+              </option>
+              <option value="false">
+                {locale() === 'zh-CN' ? '无需人机验证' : 'No CAPTCHA'}
+              </option>
+              <option value="true">
+                {locale() === 'zh-CN' ? '需要人机验证' : 'CAPTCHA required'}
+              </option>
+            </select>
+          </label>
+          <div className="dialog-actions">
+            {editingId ? (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={resetForm}
+              >
+                {t('cancelEdit')}
+              </button>
+            ) : null}
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={!domain.trim() || busy}
+            >
+              <Plus size={17} aria-hidden />
+              {editingId ? t('outboundLinkSave') : t('outboundLinkAdd')}
+            </button>
+          </div>
+        </form>
+      </section>
+      {importResult ? (
+        <section className="surface-card outbound-import-preview">
+          <div className="section-heading">
+            <div>
+              <h2>{t('outboundLinkImportPreview')}</h2>
+              <p>
+                {importResult.fileName} · {importResult.rows.length}{' '}
+                {t('outboundLinkImportValidRows')} ·{' '}
+                {importResult.invalidRows.length}{' '}
+                {t('outboundLinkImportInvalidRows')}
+              </p>
+            </div>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setImportResult(null)}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={confirmImport}
+                disabled={busy || importResult.rows.length === 0}
+              >
+                {t('outboundLinkImportConfirm')}
+              </button>
+            </div>
+          </div>
+          {importResult.invalidRows.length > 0 ? (
+            <ul className="form-messages">
+              {importResult.invalidRows.slice(0, 20).map((row) => (
+                <li key={row.lineNumber}>
+                  {t('outboundLinkImportRowError', [
+                    row.lineNumber,
+                    row.error ?? '',
+                  ])}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+      <section className="surface-card outbound-library-table-card">
+        <div className="section-heading">
+          <div>
+            <h2>{t('outboundLinkEntries', [filteredEntries.length])}</h2>
+            <p>{t('outboundLinkLibraryDescription')}</p>
+          </div>
+          <div className="outbound-library-filters">
+            <label className="search-field">
+              <span className="sr-only">{t('outboundLinkSearch')}</span>
+              <MagnifyingGlass size={17} aria-hidden />
+              <input
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setPage(1);
+                }}
+                placeholder={t('outboundLinkSearch')}
+              />
+            </label>
+            <select
+              value={filter}
+              onChange={(event) => {
+                setFilter(event.target.value);
+                setPage(1);
+              }}
+              aria-label={t('outboundLinkFilter')}
+            >
+              <option value="all">{t('outboundLinkFilterAll')}</option>
+              <option value="dofollow">Dofollow</option>
+              <option value="nofollow">Nofollow</option>
+              <option value="anonymous">
+                {t('outboundLinkStatAnonymous')}
+              </option>
+              <option value="no-captcha">
+                {t('outboundLinkStatNoCaptcha')}
+              </option>
+            </select>
+          </div>
+        </div>
+        {loading ? (
+          <div className="inline-loading">
+            <SpinnerGap size={24} className="is-spinning" aria-hidden />
+            {t('loading')}
+          </div>
+        ) : visibleEntries.length === 0 ? (
+          <EmptyState
+            icon={LinkSimple}
+            title={t('outboundLinkEmptyTitle')}
+            description={t('outboundLinkEmptyHint')}
+          />
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table outbound-library-table">
+              <thead>
+                <tr>
+                  <th>{t('outboundLinkDomain')}</th>
+                  <th>{t('outboundLinkFollowStatus')}</th>
+                  <th>{t('outboundLinkLoginRequired')}</th>
+                  <th>{t('outboundLinkCaptchaRequired')}</th>
+                  <th>{t('targetActions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleEntries.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>
+                      <strong>{entry.domain}</strong>
+                      <small>
+                        {t('outboundLinkUpdatedAt', [
+                          formatShortDate(entry.updatedAt),
+                        ])}
+                      </small>
+                    </td>
+                    <td>{followStatusLabel(entry.followStatus)}</td>
+                    <td>{nullableBooleanLabel(entry.loginRequired)}</td>
+                    <td>{nullableBooleanLabel(entry.captchaRequired)}</td>
+                    <td>
+                      <div className="table-actions">
+                        <IconButton
+                          label={t('editOutboundLinkEntry', [entry.domain])}
+                          onClick={() => beginEdit(entry)}
+                          disabled={busy}
+                        >
+                          <PencilSimple size={17} />
+                        </IconButton>
+                        <IconButton
+                          label={t('removeOutboundLinkEntry', [entry.domain])}
+                          onClick={() => void removeEntry(entry)}
+                          disabled={busy}
+                        >
+                          <Trash size={17} />
+                        </IconButton>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {totalPages > 1 ? (
+          <div className="pagination">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page <= 1}
+            >
+              {t('previousPage')}
+            </button>
+            <span>{t('pageOf', [page, totalPages])}</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() =>
+                setPage((current) => Math.min(totalPages, current + 1))
+              }
+              disabled={page >= totalPages}
+            >
+              {t('nextPage')}
+            </button>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
 function OutboundLinkLibraryDrawer({
   open,
   entries,
@@ -2766,7 +3398,7 @@ function OutboundLinkLibraryDrawer({
     setBusyKey('outbound-link-add');
     try {
       const normalizedUrl = normalizeOutboundLinkUrl(url);
-      if (entries.some((entry) => entry.url === normalizedUrl)) {
+      if (entries.some((entry) => entry.domain === normalizedUrl)) {
         onToast(t('outboundLinkAlreadyExists'), 'error');
         return;
       }
@@ -2776,8 +3408,16 @@ function OutboundLinkLibraryDrawer({
           ...current,
           {
             id: `demo-outbound-link-${now}`,
+            domain: normalizedUrl,
             url: normalizedUrl,
             tags,
+            followStatus: tags.includes('dofollow')
+              ? 'dofollow'
+              : tags.includes('nofollow')
+                ? 'nofollow'
+                : 'unknown',
+            loginRequired: tags.includes('login_required') ? true : null,
+            captchaRequired: tags.includes('captcha_required') ? true : null,
             createdAt: now,
             updatedAt: now,
           },
@@ -3158,11 +3798,16 @@ function NewPlanDialog({
   const readFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const content = await file.text();
-    setFileName(file.name);
-    setTargetText((current) =>
-      current.trim() ? `${current.trim()}\n${content.trim()}` : content.trim()
-    );
+    try {
+      const values = await parseTargetFile(file);
+      const content = values.join('\n').trim();
+      setFileName(file.name);
+      setTargetText((current) =>
+        current.trim() ? `${current.trim()}\n${content}` : content
+      );
+    } catch {
+      setFileName('');
+    }
     event.target.value = '';
   };
 
@@ -3258,7 +3903,7 @@ function NewPlanDialog({
               <span>{t('importFile')}</span>
               <input
                 type="file"
-                accept=".txt,.csv,text/plain,text/csv"
+                accept=".txt,.csv,.xlsx,.xls,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 onChange={readFile}
               />
             </label>
@@ -3811,6 +4456,7 @@ export default function App() {
     provider: 'deepseek',
     activeSiteId: '',
     sites: [],
+    locale: DEFAULT_UI_LOCALE,
   });
   const [batch, setBatch] = useState<BatchSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -3890,6 +4536,7 @@ export default function App() {
       if (token !== refreshToken.current) return;
       setSummary(nextSummary);
       setPlans(nextPlans);
+      setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
       setSettings(nextSettings);
       setBatch(nextBatch);
     } catch (error) {
@@ -3910,6 +4557,12 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
+    setUiLocale(settings.locale ?? DEFAULT_UI_LOCALE);
+    document.documentElement.lang = locale();
+    document.title = t('appName');
+  }, [settings.locale]);
+
+  useEffect(() => {
     void refreshOutboundLinkLibrary();
   }, [refreshOutboundLinkLibrary]);
 
@@ -3927,6 +4580,12 @@ export default function App() {
         loadActiveBatch()
           .then(setBatch)
           .catch(() => undefined);
+      }
+      if (changes[SETTINGS_STORAGE_KEY]) {
+        getSettings().then((nextSettings) => {
+          setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
+          setSettings(nextSettings);
+        });
       }
       if (changes[OUTBOUND_LINK_LIBRARY_STORAGE_KEY]) {
         void refreshOutboundLinkLibrary();
@@ -4199,7 +4858,8 @@ export default function App() {
         onOpenOutboundLinkLibrary={() => {
           setSettingsOpen(false);
           setFilterListOpen(false);
-          setOutboundLinkLibraryOpen(true);
+          setOutboundLinkLibraryOpen(false);
+          navigate({ page: 'outbound' });
         }}
         onOpenSettings={() => {
           setFilterListOpen(false);
@@ -4246,6 +4906,15 @@ export default function App() {
           />
         ) : route.page === 'moderation' ? (
           <ModerationRecheckPage />
+        ) : route.page === 'outbound' ? (
+          <OutboundLinkLibraryPage
+            entries={outboundLinkLibrary}
+            loading={outboundLinkLibraryLoading}
+            refreshing={refreshing}
+            onRefresh={() => refresh()}
+            onEntriesChange={setOutboundLinkLibrary}
+            onToast={pushToast}
+          />
         ) : (
           <PlansPage
             plans={plans}

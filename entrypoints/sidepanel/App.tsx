@@ -2,7 +2,7 @@ import { isDueToday, nextPendingChunk, planProgress } from '@/batch/plan';
 import type { BatchItem, BatchItemStatus, BatchSnapshot } from '@/batch/types';
 import { parseTargetUrls } from '@/batch/urls';
 import { TextLoop } from '@/components/core/text-loop';
-import { translate } from '@/i18n';
+import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
 import { sendToBackground } from '@/runtime/messages';
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
 import { BATCH_STORAGE_KEY, getBatch } from '@/storage/batch';
@@ -16,6 +16,7 @@ import { findMatchingFilterEntry, getFilterList } from '@/storage/filter-list';
 import { PLANS_STORAGE_KEY, type PlansMap, getPlans } from '@/storage/plans';
 import {
   DEFAULT_SETTINGS,
+  SETTINGS_STORAGE_KEY,
   extensionSettingsSchema,
   getActiveSite,
   getProviderApiKeys,
@@ -24,7 +25,12 @@ import {
   restrictStorageToTrustedContexts,
   setProviderApiKeys,
 } from '@/storage/settings';
-import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
+import type {
+  ExtensionSettings,
+  ProviderApiKeys,
+  SiteProfile,
+  UiLocale,
+} from '@/types';
 import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
 import { ChartLineUp } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
@@ -364,6 +370,7 @@ export default function App() {
         storedPlans,
       ]) => {
         setSettings(storedSettings);
+        setUiLocale(storedSettings.locale ?? DEFAULT_UI_LOCALE);
         setApiKeys(storedKeys);
         setBatch(storedBatch);
         setHistory(storedHistory);
@@ -380,6 +387,12 @@ export default function App() {
       if (changes[BATCH_STORAGE_KEY]) void getBatch().then(setBatch);
       if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
       if (changes[PLANS_STORAGE_KEY]) void getPlans().then(setPlans);
+      if (changes[SETTINGS_STORAGE_KEY]) {
+        void getSettings().then((nextSettings) => {
+          setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
+          setSettings(nextSettings);
+        });
+      }
     };
     chrome.storage.onChanged.addListener(onStorageChanged);
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
@@ -996,6 +1009,21 @@ export default function App() {
                 <option value="kie-gemini">
                   {translate('providerKieGemini')}
                 </option>
+              </select>
+            </label>
+            <label className="field">
+              <span>{translate('languageLabel')}</span>
+              <select
+                value={settings.locale ?? DEFAULT_UI_LOCALE}
+                disabled={batchIsActive}
+                onChange={(event) => {
+                  const locale = event.target.value as UiLocale;
+                  setUiLocale(locale);
+                  setSettings((current) => ({ ...current, locale }));
+                }}
+              >
+                <option value="zh-CN">{translate('languageChinese')}</option>
+                <option value="en">{translate('languageEnglish')}</option>
               </select>
             </label>
             <label className="field">

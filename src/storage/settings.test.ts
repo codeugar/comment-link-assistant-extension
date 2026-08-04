@@ -35,6 +35,7 @@ describe('extension settings', () => {
     expect(await getSettings()).toEqual(DEFAULT_SETTINGS);
     expect(DEFAULT_SETTINGS.sites).toHaveLength(1);
     expect(DEFAULT_SETTINGS.activeSiteId).toBe(DEFAULT_SETTINGS.sites[0]?.id);
+    expect(DEFAULT_SETTINGS.locale).toBe('zh-CN');
     expect(await getProviderApiKeys()).toEqual(DEFAULT_PROVIDER_API_KEYS);
   });
 
@@ -124,6 +125,7 @@ describe('extension settings', () => {
         },
       ],
       activeSiteId: 'site-1',
+      locale: 'zh-CN',
     });
     // Migration is persisted so later reads and writes see the new shape.
     expect(
@@ -141,7 +143,7 @@ describe('extension settings', () => {
     };
     await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
 
-    expect(await getSettings()).toEqual(next);
+    expect(await getSettings()).toEqual({ ...next, locale: 'zh-CN' });
   });
 
   it('upgrades the retired inline mode to a-tag-newline', async () => {

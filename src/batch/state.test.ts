@@ -329,13 +329,13 @@ describe('batch state', () => {
 
       expect(skipped).toMatchObject({ status: 'running', currentIndex: 1 });
       expect(skipped.items[0]).toMatchObject({
-        status: 'failed',
+        status,
         message,
         updatedAt: 3_000,
         prepared: null,
       });
       expect(skipped.items[0]?.events.at(-1)).toEqual({
-        status: 'failed',
+        status,
         message,
         at: 3_000,
       });
@@ -478,6 +478,8 @@ describe('batch retry', () => {
       'failed',
       'no_form',
       'validation_error',
+      'login_required',
+      'captcha_required',
       'stopped',
     ]);
   });

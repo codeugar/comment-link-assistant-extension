@@ -2666,6 +2666,148 @@ button.outbound-link-tag.is-selected {
   white-space: nowrap;
 }
 
+.outbound-library-page {
+  min-height: 100%;
+  background: rgba(255, 252, 245, 0.2);
+}
+
+.page-description {
+  margin: 0;
+  padding: 0 42px 18px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.outbound-library-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.surface-card {
+  margin: 18px 42px 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 252, 245, 0.62);
+}
+
+.outbound-library-editor {
+  padding: 18px;
+}
+
+.outbound-library-editor-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(140px, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.outbound-import-preview,
+.outbound-library-table-card {
+  padding: 18px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.section-heading p {
+  margin: 5px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.outbound-library-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--paper);
+}
+
+.search-field input {
+  width: 180px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+}
+
+.outbound-library-table {
+  width: 100%;
+}
+
+.outbound-library-table td strong,
+.outbound-library-table td small {
+  display: block;
+}
+
+.outbound-library-table td small {
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.table-actions {
+  display: flex;
+  gap: 5px;
+}
+
+@media (max-width: 1120px) {
+  .outbound-library-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .outbound-library-editor-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .page-description,
+  .surface-card {
+    margin-left: 18px;
+    margin-right: 18px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .surface-card {
+    padding: 14px;
+  }
+
+  .outbound-library-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .outbound-library-editor-form,
+  .outbound-library-filters,
+  .section-heading {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .search-field input {
+    width: 100%;
+  }
+}
+
 .url-preview {
   padding: 15px;
   border: 1px solid var(--line);

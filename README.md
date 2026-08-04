@@ -519,6 +519,8 @@ DeepSeek 和 KIE API Key 保存在 `chrome.storage.local`，并限制为可信�
 - pnpm
 - Chrome 或兼容 Manifest V3 的 Chromium 浏览器
 
+插件首次安装时默认使用简体中文。打开侧边栏的“设置”，在“界面语言”中可以切换为 English；语言选择会同步应用到侧边栏和运营看板，并保存在浏览器本地。
+
 ### 从源码构建
 
 ```bash

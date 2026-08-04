@@ -47,6 +47,14 @@ function isCsvHeader(cells: string[]): boolean {
   return cells.some((cell) => headers.has(cell.trim().toLowerCase()));
 }
 
+function looksLikeLooseHttpTarget(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    /^https?:\/\//i.test(trimmed) ||
+    /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
+  );
+}
+
 function firstUnquotedComma(line: string): number {
   let quoted = false;
   for (let index = 0; index < line.length; index += 1) {
@@ -92,7 +100,7 @@ export function parseDashboardTargetRows(text: string): TargetTextParseResult {
     const commaIndex = firstUnquotedComma(line);
     if (commaIndex < 0) {
       const values = line.split(/\s+/).filter(Boolean);
-      if (values.every((value) => /^https?:\/\//i.test(value))) {
+      if (values.every((value) => looksLikeLooseHttpTarget(value))) {
         candidates.push(...values.map((value) => ({ value, lineNumber })));
       } else {
         invalidLineNumbers.push(lineNumber);
@@ -111,7 +119,7 @@ export function parseDashboardTargetRows(text: string): TargetTextParseResult {
       continue;
     }
     if (isCsvHeader(parsed.cells)) continue;
-    const urls = parsed.cells.filter((cell) => /^https?:\/\//i.test(cell));
+    const urls = parsed.cells.filter((cell) => looksLikeLooseHttpTarget(cell));
     if (urls.length === 0) {
       invalidLineNumbers.push(lineNumber);
       continue;

@@ -20,6 +20,7 @@ import type {
 } from '@/page/types';
 import type { FilterEntryKind, FilterListEntry } from '@/storage/filter-list';
 import type {
+  OutboundLinkFollowStatus,
   OutboundLinkLibraryEntry,
   OutboundLinkTag,
 } from '@/storage/outbound-link-library';
@@ -90,12 +91,24 @@ export type PopupMessage =
   | { type: 'filter.add'; value: string; kind?: FilterEntryKind }
   | { type: 'filter.remove'; id: string }
   | { type: 'link-library.list' }
-  | { type: 'link-library.add'; url: string; tags?: OutboundLinkTag[] }
+  | {
+      type: 'link-library.add';
+      url: string;
+      domain?: string;
+      tags?: OutboundLinkTag[];
+      followStatus?: OutboundLinkFollowStatus;
+      loginRequired?: boolean | null;
+      captchaRequired?: boolean | null;
+    }
   | {
       type: 'link-library.update';
       id: string;
       url?: string;
+      domain?: string;
       tags?: OutboundLinkTag[];
+      followStatus?: OutboundLinkFollowStatus;
+      loginRequired?: boolean | null;
+      captchaRequired?: boolean | null;
     }
   | { type: 'link-library.remove'; id: string }
   | { type: 'dashboard.getSummary' }

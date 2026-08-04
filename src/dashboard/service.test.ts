@@ -77,6 +77,12 @@ describe('dashboard service', () => {
     ]);
   });
 
+  it('accepts bare domains and supplies https while preserving paths', () => {
+    expect(
+      parseDashboardTargetText('example.com/post\nwww.example.com/article')
+    ).toEqual(['https://example.com/post', 'https://www.example.com/article']);
+  });
+
   it('keeps the redirected active link attached to its plan target', async () => {
     const { service } = testService();
     const detail = await createTwoTargetPlan(service);

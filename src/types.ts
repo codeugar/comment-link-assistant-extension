@@ -2,6 +2,10 @@ export const COMMENT_PROVIDERS = ['deepseek', 'kie-gemini'] as const;
 
 export type CommentProvider = (typeof COMMENT_PROVIDERS)[number];
 
+export const UI_LOCALES = ['zh-CN', 'en'] as const;
+
+export type UiLocale = (typeof UI_LOCALES)[number];
+
 export const LINK_MODES = [
   'a-tag-newline',
   'prefer-website-field',
@@ -29,6 +33,8 @@ export interface ExtensionSettings {
   provider: CommentProvider;
   sites: SiteProfile[];
   activeSiteId: string;
+  /** Persisted UI language. Missing values from older settings default to zh-CN. */
+  locale?: UiLocale;
 }
 
 export interface ProviderApiKeys {

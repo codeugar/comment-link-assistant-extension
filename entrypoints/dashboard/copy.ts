@@ -1,3 +1,5 @@
+import { getUiLocale } from '@/i18n';
+
 const zh = {
   appName: '评论外链助手',
   dashboard: '运营看板',
@@ -28,9 +30,9 @@ const zh = {
   outboundLinkLibrary: '\u5916\u94fe\u5e93',
   outboundLinkLibraryTitle: '\u5916\u94fe\u5e93',
   outboundLinkLibraryDescription:
-    '\u624b\u5de5\u7ef4\u62a4\u7cbe\u786e URL\uff0c\u4e3a\u5916\u94fe\u6807\u8bb0 dofollow\u3001nofollow\u3001\u9700\u8981\u767b\u5f55\u6216\u4eba\u673a\u9a8c\u8bc1\u3002\u6807\u7b7e\u4ec5\u7528\u4e8e\u8bb0\u5f55\uff0c\u4e0d\u4f1a\u81ea\u52a8\u5f71\u54cd\u6279\u6b21\u8c03\u5ea6\u3002',
-  outboundLinkUrl: '\u5916\u94fe URL',
-  outboundLinkUrlPlaceholder: 'https://example.com/article',
+    '\u6309\u535a\u5ba2\u57df\u540d\u8bb0\u5f55 dofollow\u3001nofollow\u3001\u533f\u540d\u8bc4\u8bba\u548c CAPTCHA \u5c5e\u6027\uff0c\u652f\u6301\u5355\u6761\u7ef4\u62a4\u4e0e Excel/CSV/TXT \u6279\u91cf\u5bfc\u5165\u3002',
+  outboundLinkUrl: '\u535a\u5ba2\u7f51\u7ad9\u57df\u540d',
+  outboundLinkUrlPlaceholder: 'example.com',
   outboundLinkAdd: '\u6dfb\u52a0\u5916\u94fe',
   outboundLinkEntries: '\u5916\u94fe\uff08{0}\uff09',
   outboundLinkTags: '\u6807\u7b7e',
@@ -41,7 +43,7 @@ const zh = {
   outboundLinkTagLoginRequired: '\u9700\u8981\u767b\u5f55',
   outboundLinkTagCaptchaRequired: '\u4eba\u673a\u9a8c\u8bc1',
   outboundLinkNoTags: '\u65e0\u6807\u7b7e',
-  outboundLinkManualOnly: '\u624b\u5de5\u7ba1\u7406\u7cbe\u786e URL',
+  outboundLinkManualOnly: '\u6309\u57df\u540d\u7ba1\u7406',
   outboundLinkEmptyTitle: '\u6682\u65e0\u5916\u94fe\u8bb0\u5f55',
   outboundLinkEmptyHint:
     '\u6dfb\u52a0\u7ad9\u70b9\u540e\uff0c\u4e3a\u5b83\u6807\u8bb0\u5916\u94fe\u5c5e\u6027\u4e0e\u4eba\u5de5\u5904\u7406\u6761\u4ef6\u3002',
@@ -49,9 +51,11 @@ const zh = {
   outboundLinkUpdated: '\u5916\u94fe\u5df2\u66f4\u65b0',
   outboundLinkRemoved: '\u5df2\u4ece\u5916\u94fe\u5e93\u79fb\u9664',
   outboundLinkUrlInvalid:
-    '\u8bf7\u8f93\u5165\u6709\u6548\u7684 HTTP(S) URL\u3002',
-  outboundLinkDuplicate: '\u5916\u94fe\u5e93\u5df2\u6709\u8be5 URL\u3002',
-  outboundLinkAlreadyExists: '\u5916\u94fe\u5e93\u5df2\u6709\u8be5 URL\u3002',
+    '\u8bf7\u8f93\u5165\u6709\u6548\u7684\u57df\u540d\u6216 HTTP(S) URL\u3002',
+  outboundLinkDuplicate:
+    '\u5916\u94fe\u5e93\u5df2\u6709\u8be5\u57df\u540d\u3002',
+  outboundLinkAlreadyExists:
+    '\u5916\u94fe\u5e93\u5df2\u6709\u8be5\u57df\u540d\u3002',
   outboundLinkTagConflict:
     'Dofollow \u4e0e nofollow \u4e0d\u80fd\u540c\u65f6\u9009\u4e2d\u3002',
   outboundLinkNotFound:
@@ -62,6 +66,27 @@ const zh = {
   removeOutboundLinkEntry: '\u4ece\u5916\u94fe\u5e93\u79fb\u9664 {0}',
   cancelEdit: '\u53d6\u6d88\u7f16\u8f91',
   outboundLinkLoadFailed: '\u5916\u94fe\u5e93\u52a0\u8f7d\u5931\u8d25',
+  outboundLinkDomain: '\u535a\u5ba2\u7f51\u7ad9\u57df\u540d',
+  outboundLinkFollowStatus: '\u94fe\u63a5\u5c5e\u6027',
+  outboundLinkLoginRequired: '\u662f\u5426\u9700\u8981\u767b\u5f55',
+  outboundLinkCaptchaRequired: '\u662f\u5426 CAPTCHA',
+  outboundLinkStatDomains: '\u57df\u540d\u603b\u6570',
+  outboundLinkStatDofollow: 'Dofollow',
+  outboundLinkStatNofollow: 'Nofollow',
+  outboundLinkStatAnonymous: '\u533f\u540d\u8bc4\u8bba',
+  outboundLinkStatNoCaptcha: '\u65e0\u9700\u4eba\u673a\u9a8c\u8bc1',
+  outboundLinkImport: '\u6279\u91cf\u5bfc\u5165',
+  outboundLinkImportPreview: '\u5bfc\u5165\u9884\u89c8',
+  outboundLinkImportValidRows: '\u53ef\u5bfc\u5165',
+  outboundLinkImportInvalidRows: '\u9519\u8bef\u884c',
+  outboundLinkImportConfirm: '\u786e\u8ba4\u5bfc\u5165',
+  outboundLinkImportFailed: '\u6587\u4ef6\u89e3\u6790\u5931\u8d25',
+  outboundLinkImportCompleted: '\u5916\u94fe\u5e93\u5bfc\u5165\u5b8c\u6210',
+  outboundLinkImportRowError: '\u7b2c {0} \u884c\uff1a{1}',
+  outboundLinkDownloadTemplate: '\u4e0b\u8f7d\u6a21\u677f',
+  outboundLinkSearch: '\u641c\u7d22\u57df\u540d',
+  outboundLinkFilter: '\u7b5b\u9009\u5c5e\u6027',
+  outboundLinkFilterAll: '\u5168\u90e8',
   connected: '扩展已连接',
   disconnected: '扩展未连接',
   version: '版本',
@@ -184,8 +209,8 @@ const zh = {
   targetUrls: '目标博客 URL',
   targetUrlsPlaceholder: '每行粘贴一个 URL，最多 2,000 条',
   batchSize: '每批数量',
-  importFile: '导入 TXT / CSV',
-  fileHint: '支持 .txt 与 .csv，文件内容会追加到输入框。',
+  importFile: '导入 TXT / CSV / Excel',
+  fileHint: '支持 .txt、.csv、.xlsx 与 .xls，文件内容会追加到输入框。',
   preview: '批量预览',
   validLinks: '有效链接',
   duplicateLinks: '重复链接',
@@ -224,6 +249,8 @@ const zh = {
   configuredSites: '已配置推广网站',
   openSidePanel: '打开扩展侧边栏',
   language: '界面语言',
+  languageChinese: '简体中文',
+  languageEnglish: 'English',
   followsBrowser: '跟随浏览器',
   autoRefresh: '数据刷新',
   realtimeRefresh: '实时监听批次与看板变更',
@@ -288,9 +315,9 @@ const en: Record<keyof typeof zh, string> = {
   outboundLinkLibrary: 'Link library',
   outboundLinkLibraryTitle: 'Outbound link library',
   outboundLinkLibraryDescription:
-    'Maintain exact URLs manually and tag each link as dofollow, nofollow, login required, or CAPTCHA required. Tags are records only and do not change batch scheduling.',
-  outboundLinkUrl: 'Outbound link URL',
-  outboundLinkUrlPlaceholder: 'https://example.com/article',
+    'Track dofollow, nofollow, anonymous-comment, and CAPTCHA attributes by blog domain. Supports single-row editing and Excel/CSV/TXT imports.',
+  outboundLinkUrl: 'Blog domain',
+  outboundLinkUrlPlaceholder: 'example.com',
   outboundLinkAdd: 'Add link',
   outboundLinkEntries: 'Links ({0})',
   outboundLinkTags: 'Tags',
@@ -301,16 +328,16 @@ const en: Record<keyof typeof zh, string> = {
   outboundLinkTagLoginRequired: 'Login required',
   outboundLinkTagCaptchaRequired: 'CAPTCHA required',
   outboundLinkNoTags: 'No tags',
-  outboundLinkManualOnly: 'Manual exact-URL records',
+  outboundLinkManualOnly: 'Domain-level records',
   outboundLinkEmptyTitle: 'No outbound links yet',
   outboundLinkEmptyHint:
     'Add a site, then record its link attributes and manual handling requirements.',
   outboundLinkSaved: 'Saved to link library',
   outboundLinkUpdated: 'Outbound link updated',
   outboundLinkRemoved: 'Removed from link library',
-  outboundLinkUrlInvalid: 'Enter a valid HTTP(S) URL.',
-  outboundLinkDuplicate: 'That URL is already in the link library.',
-  outboundLinkAlreadyExists: 'That URL is already in the link library.',
+  outboundLinkUrlInvalid: 'Enter a valid domain or HTTP(S) URL.',
+  outboundLinkDuplicate: 'That domain is already in the link library.',
+  outboundLinkAlreadyExists: 'That domain is already in the link library.',
   outboundLinkTagConflict: 'Dofollow and nofollow cannot both be selected.',
   outboundLinkNotFound:
     'That outbound link no longer exists and was removed here.',
@@ -320,6 +347,27 @@ const en: Record<keyof typeof zh, string> = {
   removeOutboundLinkEntry: 'Remove {0} from link library',
   cancelEdit: 'Cancel edit',
   outboundLinkLoadFailed: 'Could not load the link library',
+  outboundLinkDomain: 'Blog domain',
+  outboundLinkFollowStatus: 'Link attribute',
+  outboundLinkLoginRequired: 'Login required',
+  outboundLinkCaptchaRequired: 'CAPTCHA required',
+  outboundLinkStatDomains: 'Total domains',
+  outboundLinkStatDofollow: 'Dofollow',
+  outboundLinkStatNofollow: 'Nofollow',
+  outboundLinkStatAnonymous: 'Anonymous comments',
+  outboundLinkStatNoCaptcha: 'No CAPTCHA',
+  outboundLinkImport: 'Import file',
+  outboundLinkImportPreview: 'Import preview',
+  outboundLinkImportValidRows: 'valid rows',
+  outboundLinkImportInvalidRows: 'invalid rows',
+  outboundLinkImportConfirm: 'Confirm import',
+  outboundLinkImportFailed: 'Could not parse the file',
+  outboundLinkImportCompleted: 'Link library import completed',
+  outboundLinkImportRowError: 'Row {0}: {1}',
+  outboundLinkDownloadTemplate: 'Download template',
+  outboundLinkSearch: 'Search domains',
+  outboundLinkFilter: 'Filter attributes',
+  outboundLinkFilterAll: 'All',
   connected: 'Extension connected',
   disconnected: 'Extension disconnected',
   version: 'Version',
@@ -442,8 +490,8 @@ const en: Record<keyof typeof zh, string> = {
   targetUrls: 'Target blog URLs',
   targetUrlsPlaceholder: 'Paste one URL per line, up to 2,000',
   batchSize: 'Links per batch',
-  importFile: 'Import TXT / CSV',
-  fileHint: 'Supports .txt and .csv. File contents are appended.',
+  importFile: 'Import TXT / CSV / Excel',
+  fileHint: 'Supports .txt, .csv, .xlsx, and .xls. File contents are appended.',
   preview: 'Batch preview',
   validLinks: 'Valid links',
   duplicateLinks: 'Duplicates',
@@ -485,6 +533,8 @@ const en: Record<keyof typeof zh, string> = {
   configuredSites: 'Configured promoting sites',
   openSidePanel: 'Open extension side panel',
   language: 'Language',
+  languageChinese: '简体中文',
+  languageEnglish: 'English',
   followsBrowser: 'Follows browser',
   autoRefresh: 'Data refresh',
   realtimeRefresh: 'Listens for batch and dashboard changes',
@@ -527,23 +577,14 @@ const en: Record<keyof typeof zh, string> = {
 export type CopyKey = keyof typeof zh;
 
 export function locale(): 'zh-CN' | 'en' {
-  const uiLanguage =
-    typeof chrome !== 'undefined' && chrome.i18n?.getUILanguage
-      ? chrome.i18n.getUILanguage()
-      : navigator.language;
-  return uiLanguage.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+  return getUiLocale();
 }
 
 export function t(
   key: CopyKey,
   substitutions: Array<string | number> = []
 ): string {
-  const chromeKey = `dashboard${key[0]?.toUpperCase()}${key.slice(1)}`;
-  const localized =
-    typeof chrome !== 'undefined' && chrome.i18n?.getMessage
-      ? chrome.i18n.getMessage(chromeKey, substitutions.map(String))
-      : '';
-  const template = localized || (locale() === 'zh-CN' ? zh[key] : en[key]);
+  const template = locale() === 'zh-CN' ? zh[key] : en[key];
   return substitutions.reduce<string>(
     (copy, value, index) => copy.replaceAll(`{${index}}`, String(value)),
     template

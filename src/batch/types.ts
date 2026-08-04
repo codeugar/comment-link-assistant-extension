@@ -228,6 +228,8 @@ const completedItemStatuses = new Set<BatchItemStatus>([
   'pending_moderation',
   'unconfirmed',
   'submitted',
+  'login_required',
+  'captcha_required',
   'no_form',
   'validation_error',
   'failed',

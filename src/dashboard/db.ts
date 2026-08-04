@@ -324,7 +324,16 @@ function normalizeHttpUrl(
   errorCode: 'PLAN_WEBSITE_URL_INVALID' | 'PLAN_TARGET_URL_INVALID'
 ): string {
   try {
-    const url = new URL(value.trim());
+    const trimmed = value.trim();
+    if (
+      !trimmed ||
+      (/^[a-z][a-z\d+.-]*:/i.test(trimmed) && !/^https?:\/\//i.test(trimmed))
+    ) {
+      throw new Error('URL_NOT_ALLOWED');
+    }
+    const url = new URL(
+      /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    );
     if (
       (url.protocol !== 'http:' && url.protocol !== 'https:') ||
       url.username ||
