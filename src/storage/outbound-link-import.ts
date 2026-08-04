@@ -1,10 +1,12 @@
 import {
   type OutboundLinkFollowStatus,
   normalizeOutboundLinkDomain,
+  normalizeOutboundLinkUrl,
 } from './outbound-link-library';
 
 export interface ParsedOutboundLinkImportRow {
   lineNumber: number;
+  url: string;
   domain: string;
   followStatus?: OutboundLinkFollowStatus;
   loginRequired?: boolean;
@@ -23,13 +25,15 @@ const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 type SpreadsheetModule = typeof import('xlsx');
 type SpreadsheetWorkbook = ReturnType<SpreadsheetModule['read']>;
 const HEADER_ALIASES = {
-  domain: new Set([
+  url: new Set([
     'domain',
     'host',
     'url',
     'website',
     'blog',
     '博客网站域名',
+    '博客文章url',
+    '博客文章链接',
     '域名',
     '网址',
   ]),
@@ -168,9 +172,9 @@ function parseRows(rawRows: unknown[][]): OutboundLinkImportResult {
     return index >= 0 ? index : fallback;
   };
   const columnIndexes = {
-    // A header can name only the required domain column. Missing optional
+    // A header can name only the required URL column. Missing optional
     // columns still follow the documented positional order.
-    domain: headerIndex('domain', 0),
+    url: headerIndex('url', 0),
     follow: headerIndex('follow', 1),
     login: headerIndex('login', 2),
     captcha: headerIndex('captcha', 3),
@@ -179,16 +183,23 @@ function parseRows(rawRows: unknown[][]): OutboundLinkImportResult {
   const parsed: ParsedOutboundLinkImportRow[] = [];
   for (const [index, row] of sourceRows.entries()) {
     const lineNumber = headerDetected ? index + 2 : index + 1;
-    const domainCell = row[columnIndexes.domain] ?? '';
-    if (!domainCell) {
-      parsed.push({ lineNumber, domain: '', error: 'DOMAIN_REQUIRED' });
+    const urlCell = row[columnIndexes.url] ?? '';
+    if (!urlCell) {
+      parsed.push({ lineNumber, url: '', domain: '', error: 'URL_REQUIRED' });
       continue;
     }
+    let url: string;
     let domain: string;
     try {
-      domain = normalizeOutboundLinkDomain(domainCell);
+      url = normalizeOutboundLinkUrl(urlCell);
+      domain = normalizeOutboundLinkDomain(url);
     } catch {
-      parsed.push({ lineNumber, domain: domainCell, error: 'DOMAIN_INVALID' });
+      parsed.push({
+        lineNumber,
+        url: urlCell,
+        domain: '',
+        error: 'URL_INVALID',
+      });
       continue;
     }
     const followCell =
@@ -205,11 +216,12 @@ function parseRows(rawRows: unknown[][]): OutboundLinkImportResult {
       (loginCell && loginValue === undefined) ||
       (captchaCell && captchaValue === undefined);
     if (invalidBoolean) {
-      parsed.push({ domain, lineNumber, error: 'ATTRIBUTE_INVALID' });
+      parsed.push({ url, domain, lineNumber, error: 'ATTRIBUTE_INVALID' });
       continue;
     }
     parsed.push({
       domain,
+      url,
       lineNumber,
       ...(followStatus ? { followStatus } : {}),
       ...(loginValue !== undefined ? { loginRequired: loginValue } : {}),

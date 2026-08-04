@@ -1,4 +1,4 @@
-import { normalizeOutboundLinkDomain } from '@/storage/outbound-link-library';
+import { normalizeOutboundLinkUrl } from '@/storage/outbound-link-library';
 import { parseDashboardTargetRows } from './target-import';
 
 export interface ParsedPlanUrls {
@@ -56,25 +56,25 @@ export function parsePlanUrls(text: string): ParsedPlanUrls {
   return { valid, duplicates, invalid };
 }
 
-export function outboundDomainToTargetUrl(domain: string): string {
-  return `https://${normalizeOutboundLinkDomain(domain)}`;
+export function outboundUrlToTargetUrl(url: string): string {
+  return normalizeOutboundLinkUrl(url);
 }
 
 /**
- * Append library domains without replacing user input. When the current text
+ * Append complete library URLs without replacing user input. When the current text
  * is valid, use the existing plan parser to normalize and deduplicate the
  * complete text. If it contains an invalid line, preserve that editable text
  * and only avoid adding URLs already recognized as valid.
  */
-export function appendOutboundDomainsToTargetText(
+export function appendOutboundUrlsToTargetText(
   currentText: string,
-  domains: readonly string[]
+  targetUrls: readonly string[]
 ): string {
   const urls = [
     ...new Set(
-      domains.flatMap((domain) => {
+      targetUrls.flatMap((url) => {
         try {
-          return [outboundDomainToTargetUrl(domain)];
+          return [outboundUrlToTargetUrl(url)];
         } catch {
           return [];
         }

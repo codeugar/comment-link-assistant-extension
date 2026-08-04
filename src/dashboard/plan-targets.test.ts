@@ -1,32 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appendOutboundDomainsToTargetText,
-  outboundDomainToTargetUrl,
+  appendOutboundUrlsToTargetText,
+  outboundUrlToTargetUrl,
   parsePlanUrls,
 } from './plan-targets';
 
 describe('dashboard plan target helpers', () => {
-  it('normalizes library domains into executable HTTPS targets', () => {
-    expect(outboundDomainToTargetUrl('https://www.Example.com/post')).toBe(
-      'https://example.com'
+  it('normalizes library entries while preserving the executable article path', () => {
+    expect(outboundUrlToTargetUrl('https://www.Example.com/post#reply')).toBe(
+      'https://www.example.com/post'
     );
   });
 
-  it('appends library domains using the existing target URL dedupe rules', () => {
+  it('appends complete library URLs using the existing target URL dedupe rules', () => {
     expect(
-      appendOutboundDomainsToTargetText(
+      appendOutboundUrlsToTargetText(
         'https://example.com/\nhttps://already.example/post',
-        ['example.com', 'new.example', 'https://new.example/article']
+        [
+          'example.com',
+          'https://new.example/article',
+          'https://new.example/another-article',
+        ]
       )
     ).toBe(
-      'https://example.com\nhttps://already.example/post\nhttps://new.example'
+      'https://example.com\nhttps://already.example/post\nhttps://new.example/article\nhttps://new.example/another-article'
     );
   });
 
   it('preserves editable invalid input while adding valid library targets', () => {
-    expect(
-      appendOutboundDomainsToTargetText('not a URL', ['example.com'])
-    ).toBe('not a URL\nhttps://example.com');
+    expect(appendOutboundUrlsToTargetText('not a URL', ['example.com'])).toBe(
+      'not a URL\nhttps://example.com'
+    );
   });
 
   it('reports duplicate and invalid target rows for the preview', () => {

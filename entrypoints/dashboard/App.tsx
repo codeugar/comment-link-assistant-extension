@@ -13,8 +13,8 @@ import {
 } from '@/dashboard/plan-flow';
 import {
   type ParsedPlanUrls,
-  appendOutboundDomainsToTargetText,
-  outboundDomainToTargetUrl,
+  appendOutboundUrlsToTargetText,
+  outboundUrlToTargetUrl,
   parsePlanUrls,
 } from '@/dashboard/plan-targets';
 import {
@@ -43,6 +43,7 @@ import {
   type OutboundLinkFollowStatus,
   type OutboundLinkLibraryEntry,
   type OutboundLinkTag,
+  normalizeOutboundLinkDomain,
   normalizeOutboundLinkUrl,
 } from '@/storage/outbound-link-library';
 import {
@@ -2676,7 +2677,11 @@ export function OutboundLinkSelectorDialog({
   const filteredEntries = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return needle
-      ? entries.filter((entry) => entry.domain.toLowerCase().includes(needle))
+      ? entries.filter(
+          (entry) =>
+            entry.url.toLowerCase().includes(needle) ||
+            entry.domain.toLowerCase().includes(needle)
+        )
       : entries;
   }, [entries, query]);
   const totalPages = Math.max(1, Math.ceil(filteredEntries.length / pageSize));
@@ -2850,11 +2855,12 @@ export function OutboundLinkSelectorDialog({
                             return next;
                           })
                         }
-                        aria-label={`${t('outboundLinkSelect')} ${entry.domain}`}
+                        aria-label={`${t('outboundLinkSelect')} ${entry.url}`}
                       />
                     </td>
                     <td>
-                      <strong>{entry.domain}</strong>
+                      <strong title={entry.url}>{entry.url}</strong>
+                      <small>{entry.domain}</small>
                     </td>
                     <td>{followStatusLabel(entry.followStatus)}</td>
                     <td>{nullableBooleanLabel(entry.loginRequired)}</td>
@@ -2934,7 +2940,7 @@ export function OutboundLinkLibraryPage({
 }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
-  const [domain, setDomain] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
   const [followStatus, setFollowStatus] =
     useState<OutboundLinkFollowStatus>('unknown');
   const [loginRequired, setLoginRequired] = useState<boolean | null>(null);
@@ -2952,7 +2958,12 @@ export function OutboundLinkLibraryPage({
   const filteredEntries = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return entries.filter((entry) => {
-      if (needle && !entry.domain.includes(needle)) return false;
+      if (
+        needle &&
+        !entry.url.toLowerCase().includes(needle) &&
+        !entry.domain.toLowerCase().includes(needle)
+      )
+        return false;
       if (filter === 'dofollow' && entry.followStatus !== 'dofollow')
         return false;
       if (filter === 'nofollow' && entry.followStatus !== 'nofollow')
@@ -3003,7 +3014,7 @@ export function OutboundLinkLibraryPage({
 
   const resetForm = () => {
     setEditingId(null);
-    setDomain('');
+    setLinkUrl('');
     setFollowStatus('unknown');
     setLoginRequired(null);
     setCaptchaRequired(null);
@@ -3011,7 +3022,7 @@ export function OutboundLinkLibraryPage({
 
   const beginEdit = (entry: OutboundLinkLibraryEntry) => {
     setEditingId(entry.id);
-    setDomain(entry.domain);
+    setLinkUrl(entry.url);
     setFollowStatus(entry.followStatus);
     setLoginRequired(entry.loginRequired);
     setCaptchaRequired(entry.captchaRequired);
@@ -3019,12 +3030,12 @@ export function OutboundLinkLibraryPage({
 
   const saveEntry = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!domain.trim() || busy) return;
+    if (!linkUrl.trim() || busy) return;
     setBusy(true);
     try {
-      const normalized = normalizeOutboundLinkUrl(domain);
+      const normalized = normalizeOutboundLinkUrl(linkUrl);
       const payload = {
-        domain: normalized,
+        url: normalized,
         followStatus,
         loginRequired,
         captchaRequired,
@@ -3032,15 +3043,24 @@ export function OutboundLinkLibraryPage({
       if (isPreviewMode()) {
         const now = Date.now();
         const existing = entries.find((entry) => entry.id === editingId);
+        const duplicate = entries.find(
+          (entry) => entry.id !== editingId && entry.url === normalized
+        );
+        if (duplicate) {
+          throw new Error('OUTBOUND_LINK_ENTRY_DUPLICATE');
+        }
         const next: OutboundLinkLibraryEntry = {
           id: existing?.id ?? `demo-outbound-link-${now}`,
           url: normalized,
+          domain: normalizeOutboundLinkDomain(normalized),
           tags: [
             ...(followStatus === 'unknown' ? [] : [followStatus]),
             ...(loginRequired === true ? ['login_required' as const] : []),
             ...(captchaRequired === true ? ['captcha_required' as const] : []),
           ],
-          ...payload,
+          followStatus: payload.followStatus,
+          loginRequired: payload.loginRequired,
+          captchaRequired: payload.captchaRequired,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
         };
@@ -3064,7 +3084,6 @@ export function OutboundLinkLibraryPage({
       } else {
         const result = await sendToBackground({
           type: 'link-library.add',
-          url: normalized,
           ...payload,
         });
         onEntriesChange((current) => [
@@ -3126,11 +3145,11 @@ export function OutboundLinkLibraryPage({
       for (const row of importResult.rows) {
         if (isPreviewMode()) {
           const now = Date.now();
-          const existing = entries.find((entry) => entry.domain === row.domain);
+          const existing = entries.find((entry) => entry.url === row.url);
           const next: OutboundLinkLibraryEntry = {
             id: existing?.id ?? `demo-outbound-link-${now}-${row.lineNumber}`,
             domain: row.domain,
-            url: row.domain,
+            url: row.url,
             tags: [
               ...(row.followStatus && row.followStatus !== 'unknown'
                 ? [row.followStatus]
@@ -3151,14 +3170,13 @@ export function OutboundLinkLibraryPage({
             updatedAt: now,
           };
           onEntriesChange((current) => [
-            ...current.filter((entry) => entry.domain !== row.domain),
+            ...current.filter((entry) => entry.url !== row.url),
             next,
           ]);
         } else {
           const result = await sendToBackground({
             type: 'link-library.add',
-            url: row.domain,
-            domain: row.domain,
+            url: row.url,
             ...(row.followStatus ? { followStatus: row.followStatus } : {}),
             ...(row.loginRequired !== undefined
               ? { loginRequired: row.loginRequired }
@@ -3196,7 +3214,7 @@ export function OutboundLinkLibraryPage({
   const downloadTemplate = () => {
     const blob = new Blob(
       [
-        '博客网站域名,是否Dofollow,是否需要登录,是否CAPTCHA\nexample.com,是,否,否\n',
+        '博客文章URL,是否Dofollow,是否需要登录,是否CAPTCHA\nhttps://example.com/blog/article,是,否,否\n',
       ],
       { type: 'text/csv;charset=utf-8' }
     );
@@ -3275,9 +3293,10 @@ export function OutboundLinkLibraryPage({
           <label className="form-field">
             <span>{t('outboundLinkDomain')}</span>
             <input
-              value={domain}
-              onChange={(event) => setDomain(event.target.value)}
-              placeholder="example.com"
+              value={linkUrl}
+              onChange={(event) => setLinkUrl(event.target.value)}
+              placeholder={t('outboundLinkUrlPlaceholder')}
+              inputMode="url"
             />
           </label>
           <label className="form-field">
@@ -3354,7 +3373,7 @@ export function OutboundLinkLibraryPage({
             <button
               type="submit"
               className="primary-button"
-              disabled={!domain.trim() || busy}
+              disabled={!linkUrl.trim() || busy}
             >
               <Plus size={17} aria-hidden />
               {editingId ? t('outboundLinkSave') : t('outboundLinkAdd')}
@@ -3512,11 +3531,12 @@ export function OutboundLinkLibraryPage({
                         type="checkbox"
                         checked={selectedIds.has(entry.id)}
                         onChange={() => onToggleSelected(entry.id)}
-                        aria-label={`${t('outboundLinkSelect')} ${entry.domain}`}
+                        aria-label={`${t('outboundLinkSelect')} ${entry.url}`}
                       />
                     </td>
                     <td>
-                      <strong>{entry.domain}</strong>
+                      <strong title={entry.url}>{entry.url}</strong>
+                      <small>{entry.domain}</small>
                       <small>
                         {t('outboundLinkUpdatedAt', [
                           formatShortDate(entry.updatedAt),
@@ -3529,14 +3549,14 @@ export function OutboundLinkLibraryPage({
                     <td>
                       <div className="table-actions">
                         <IconButton
-                          label={t('editOutboundLinkEntry', [entry.domain])}
+                          label={t('editOutboundLinkEntry', [entry.url])}
                           onClick={() => beginEdit(entry)}
                           disabled={busy}
                         >
                           <PencilSimple size={17} />
                         </IconButton>
                         <IconButton
-                          label={t('removeOutboundLinkEntry', [entry.domain])}
+                          label={t('removeOutboundLinkEntry', [entry.url])}
                           onClick={() => void removeEntry(entry)}
                           disabled={busy}
                         >
@@ -4347,9 +4367,9 @@ export function NewPlanDialog({
   ) => {
     try {
       setTargetText((current) =>
-        appendOutboundDomainsToTargetText(
+        appendOutboundUrlsToTargetText(
           current,
-          selectedEntries.map((entry) => entry.domain)
+          selectedEntries.map((entry) => entry.url)
         )
       );
       setSelectorOpen(false);
@@ -5086,7 +5106,7 @@ export default function App() {
         .filter((entry) => selectedOutboundLinkIds.has(entry.id))
         .flatMap((entry) => {
           try {
-            return [outboundDomainToTargetUrl(entry.domain)];
+            return [outboundUrlToTargetUrl(entry.url)];
           } catch {
             return [];
           }
