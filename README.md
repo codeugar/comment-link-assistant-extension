@@ -505,6 +505,14 @@ DeepSeek 和 KIE API Key 保存在 `chrome.storage.local`，并限制为可信�
 
 ## 安装方式
 
+### 安装已发布版本
+
+1. 打开项目的 [Releases](https://github.com/codeugar/comment-link-assistant-extension/releases) 页面。
+2. 在对应版本的 Assets 中点击 **Chrome extension ZIP** 下载扩展安装包。不要下载 **Source code (zip)** 或 **Source code (tar.gz)**，它们是未构建的源码，不包含 `manifest.json`。
+3. 解压下载的 ZIP 文件。
+4. 打开 `chrome://extensions/`，开启右上角的“开发者模式”。
+5. 点击“加载已解压的扩展程序”，选择解压后直接包含 `manifest.json` 的目录。
+
 ### 环境要求
 
 - Node.js 22 或更高版本
@@ -529,7 +537,7 @@ pnpm build
 .output/chrome-mv3/
 ```
 
-### 在 Chrome 中安装
+### 在 Chrome 中安装源码构建
 
 1. 打开 `chrome://extensions/`。
 2. 开启右上角的“开发者模式”。
