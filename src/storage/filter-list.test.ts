@@ -79,6 +79,30 @@ describe('filter list storage', () => {
     expect(result.created).toBe(true);
     expect(await getFilterList()).toEqual([result.entry]);
   });
+
+  it('normalizes and de-duplicates automatic domain filters', async () => {
+    const first = await addFilterListEntryWithResult({
+      kind: 'domain',
+      value: 'https://www.Example.com/post-a',
+      now: 1_000,
+    });
+    const duplicate = await addFilterListEntryWithResult({
+      kind: 'domain',
+      value: 'www.example.com',
+      now: 2_000,
+    });
+
+    expect(first).toMatchObject({
+      created: true,
+      entry: { kind: 'domain', value: 'example.com', createdAt: 1_000 },
+    });
+    expect(duplicate).toEqual({ entry: first.entry, created: false });
+    expect(await getFilterList()).toEqual([first.entry]);
+    expect(
+      await getMatchingFilterEntry('https://child.example.com/post-b')
+    ).toEqual(first.entry);
+  });
+
   it('serializes overlapping remove and add mutations', async () => {
     const stale = await addFilterListEntry({
       kind: 'domain',

@@ -7,7 +7,20 @@ import type {
   ScheduledBatchSummary,
   TargetHostSummary,
 } from '@/dashboard/model';
-import { parseDashboardTargetRows } from '@/dashboard/target-import';
+import {
+  type NewPlanSource,
+  shouldClearOutboundSelectionAfterPlanCreate,
+} from '@/dashboard/plan-flow';
+import {
+  type ParsedPlanUrls,
+  appendOutboundDomainsToTargetText,
+  outboundDomainToTargetUrl,
+  parsePlanUrls,
+} from '@/dashboard/plan-targets';
+import {
+  type PromotingSiteFormValues,
+  validatePromotingSiteInput,
+} from '@/dashboard/promoting-site';
 import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
 import {
   type DashboardSummaryView,
@@ -32,8 +45,12 @@ import {
   type OutboundLinkTag,
   normalizeOutboundLinkUrl,
 } from '@/storage/outbound-link-library';
-import { SETTINGS_STORAGE_KEY, getSettings } from '@/storage/settings';
-import type { ExtensionSettings } from '@/types';
+import {
+  SETTINGS_STORAGE_KEY,
+  getSettings,
+  setSettings as persistExtensionSettings,
+} from '@/storage/settings';
+import type { ExtensionSettings, LinkMode, SiteProfile } from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
 import {
   Archive,
@@ -91,6 +108,7 @@ import {
   loadDashboardSummary,
   loadPlans,
   loadSettings,
+  syncPreviewSettings,
 } from './api';
 import { locale, t } from './copy';
 import type {
@@ -112,12 +130,6 @@ interface Toast {
   id: number;
   kind: 'success' | 'error';
   message: string;
-}
-
-interface ParsedUrls {
-  valid: string[];
-  duplicates: string[];
-  invalid: string[];
 }
 
 const PAGE_SIZE = 100;
@@ -330,50 +342,6 @@ function friendlyReason(target: PlanTargetWithAttempts): string {
   if (target.status === 'validation_error') return t('validationReason');
   if (target.status === 'blocked') return t('unknownErrorReason');
   return target.latestMessage || t('genericFailureReason');
-}
-
-function parseUrlInput(text: string): ParsedUrls {
-  const parsedRows = parseDashboardTargetRows(text);
-  const valid: string[] = [];
-  const duplicates: string[] = [];
-  const invalid = parsedRows.invalidLineNumbers.map(
-    (lineNumber) => `line:${lineNumber}`
-  );
-  const seen = new Set<string>();
-  for (const { value: candidate } of parsedRows.candidates) {
-    try {
-      const trimmed = candidate.trim();
-      if (
-        /^[a-z][a-z\d+.-]*:/i.test(trimmed) &&
-        !/^https?:\/\//i.test(trimmed)
-      ) {
-        throw new Error('URL_NOT_ALLOWED');
-      }
-      const url = new URL(
-        /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
-      );
-      if (
-        !['http:', 'https:'].includes(url.protocol) ||
-        url.username ||
-        url.password ||
-        !url.hostname ||
-        candidate.length > 2_048
-      ) {
-        invalid.push(candidate);
-        continue;
-      }
-      url.hash = '';
-      const normalized = url.href.replace(/\/$/, '');
-      if (seen.has(normalized)) duplicates.push(candidate);
-      else {
-        seen.add(normalized);
-        valid.push(normalized);
-      }
-    } catch {
-      invalid.push(candidate);
-    }
-  }
-  return { valid, duplicates, invalid };
 }
 
 function batchCounts(batch: BatchSnapshot | null) {
@@ -1178,6 +1146,7 @@ function DashboardPage({
   onRunPlan,
   onOpenFailure,
   onBatchCommand,
+  onCreatePromotingSite,
 }: {
   summary: DashboardSummaryView;
   plans: Plan[];
@@ -1188,6 +1157,7 @@ function DashboardPage({
   onRunPlan: (planId: string, resume?: boolean) => void;
   onOpenFailure: (failure: RecentFailureSummary) => void;
   onBatchCommand: (type: 'batch.open-current' | 'batch.stop') => void;
+  onCreatePromotingSite: () => void;
 }) {
   const activeRun = summary.activeRun;
   const activePlan = activeRun
@@ -1203,6 +1173,16 @@ function DashboardPage({
         title={t('dashboardTitle')}
         refreshing={refreshing}
         onRefresh={onRefresh}
+        actions={
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={onCreatePromotingSite}
+          >
+            <Plus size={17} weight="bold" aria-hidden />
+            {t('addPromotingSite')}
+          </button>
+        }
       />
       <section className="metric-grid" aria-label={t('dashboardTitle')}>
         <MetricCard
@@ -2673,13 +2653,272 @@ function followStatusLabel(value: OutboundLinkFollowStatus): string {
   return locale() === 'zh-CN' ? '未知' : 'Unknown';
 }
 
-function OutboundLinkLibraryPage({
+export function OutboundLinkSelectorDialog({
+  open,
+  entries,
+  loading,
+  onClose,
+  onConfirm,
+  onOpenLibrary,
+}: {
+  open: boolean;
+  entries: OutboundLinkLibraryEntry[];
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: (entries: OutboundLinkLibraryEntry[]) => void;
+  onOpenLibrary: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const pageSize = 25;
+  const filteredEntries = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return needle
+      ? entries.filter((entry) => entry.domain.toLowerCase().includes(needle))
+      : entries;
+  }, [entries, query]);
+  const totalPages = Math.max(1, Math.ceil(filteredEntries.length / pageSize));
+  const visibleEntries = filteredEntries.slice(
+    (page - 1) * pageSize,
+    page * pageSize
+  );
+  const allPageSelected =
+    visibleEntries.length > 0 &&
+    visibleEntries.every((entry) => selectedIds.has(entry.id));
+  const somePageSelected = visibleEntries.some((entry) =>
+    selectedIds.has(entry.id)
+  );
+  const pageSelectRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const available = new Set(entries.map((entry) => entry.id));
+      const next = new Set([...current].filter((id) => available.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [entries]);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedIds(new Set());
+      setQuery('');
+      setPage(1);
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    globalThis.addEventListener('keydown', onKeyDown);
+    dialogRef.current?.focus();
+    return () => globalThis.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (pageSelectRef.current) {
+      pageSelectRef.current.indeterminate =
+        somePageSelected && !allPageSelected;
+    }
+  }, [allPageSelected, somePageSelected]);
+
+  const togglePage = () => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allPageSelected) {
+        visibleEntries.forEach((entry) => next.delete(entry.id));
+      } else {
+        visibleEntries.forEach((entry) => next.add(entry.id));
+      }
+      return next;
+    });
+  };
+
+  if (!open) return null;
+  return (
+    <div
+      className="dialog-backdrop selector-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <dialog
+        open
+        ref={dialogRef}
+        className="outbound-link-selector-dialog"
+        aria-modal="true"
+        aria-labelledby="outbound-link-selector-title"
+        tabIndex={-1}
+        aria-busy={loading}
+      >
+        <div className="drawer-heading">
+          <div>
+            <p className="page-eyebrow">{t('outboundLinkLibrary')}</p>
+            <h2 id="outbound-link-selector-title">{t('outboundLinkSelect')}</h2>
+          </div>
+          <IconButton label={t('close')} onClick={onClose}>
+            <X size={21} />
+          </IconButton>
+        </div>
+        <div className="outbound-link-selector-toolbar">
+          <label className="search-field">
+            <span className="sr-only">{t('outboundLinkSearch')}</span>
+            <MagnifyingGlass size={17} aria-hidden />
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+              placeholder={t('outboundLinkSearch')}
+            />
+          </label>
+          <label className="page-select-control">
+            <input
+              ref={pageSelectRef}
+              type="checkbox"
+              checked={allPageSelected}
+              onChange={togglePage}
+              disabled={loading || visibleEntries.length === 0}
+              aria-label={
+                allPageSelected
+                  ? t('outboundLinkClearCurrentPage')
+                  : t('outboundLinkSelectCurrentPage')
+              }
+            />
+            <span>
+              {allPageSelected
+                ? t('outboundLinkClearCurrentPage')
+                : t('outboundLinkSelectCurrentPage')}
+            </span>
+          </label>
+          <span className="selection-count" aria-live="polite">
+            {t('outboundLinkSelectedCount', [selectedIds.size])}
+          </span>
+        </div>
+        {loading ? (
+          <div className="inline-loading" aria-live="polite">
+            <SpinnerGap size={24} className="is-spinning" aria-hidden />
+            {t('loading')}
+          </div>
+        ) : visibleEntries.length === 0 ? (
+          <EmptyState
+            icon={LinkSimple}
+            title={t('outboundLinkEmptyTitle')}
+            description={t('outboundLinkSelectEmptyHint')}
+            action={
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onOpenLibrary}
+              >
+                {t('outboundLinkOpenLibrary')}
+              </button>
+            }
+          />
+        ) : (
+          <div className="table-scroll selector-table-scroll">
+            <table className="data-table outbound-library-table">
+              <thead>
+                <tr>
+                  <th className="outbound-link-select-column">
+                    <span className="sr-only">{t('outboundLinkSelect')}</span>
+                  </th>
+                  <th>{t('outboundLinkDomain')}</th>
+                  <th>{t('outboundLinkFollowStatus')}</th>
+                  <th>{t('outboundLinkLoginRequired')}</th>
+                  <th>{t('outboundLinkCaptchaRequired')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleEntries.map((entry) => (
+                  <tr key={entry.id}>
+                    <td className="outbound-link-select-column">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(entry.id)}
+                        onChange={() =>
+                          setSelectedIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(entry.id)) next.delete(entry.id);
+                            else next.add(entry.id);
+                            return next;
+                          })
+                        }
+                        aria-label={`${t('outboundLinkSelect')} ${entry.domain}`}
+                      />
+                    </td>
+                    <td>
+                      <strong>{entry.domain}</strong>
+                    </td>
+                    <td>{followStatusLabel(entry.followStatus)}</td>
+                    <td>{nullableBooleanLabel(entry.loginRequired)}</td>
+                    <td>{nullableBooleanLabel(entry.captchaRequired)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {totalPages > 1 ? (
+          <div className="pagination">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page <= 1}
+            >
+              {t('previousPage')}
+            </button>
+            <span>{t('pageOf', [page, totalPages])}</span>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() =>
+                setPage((current) => Math.min(totalPages, current + 1))
+              }
+              disabled={page >= totalPages}
+            >
+              {t('nextPage')}
+            </button>
+          </div>
+        ) : null}
+        <div className="dialog-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            {t('cancel')}
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={loading || selectedIds.size === 0}
+            onClick={() =>
+              onConfirm(entries.filter((entry) => selectedIds.has(entry.id)))
+            }
+          >
+            <Plus size={17} weight="bold" aria-hidden />
+            {t('outboundLinkAddToPlan')}
+          </button>
+        </div>
+      </dialog>
+    </div>
+  );
+}
+
+export function OutboundLinkLibraryPage({
   entries,
   loading,
   refreshing,
   onRefresh,
   onEntriesChange,
   onToast,
+  selectedIds,
+  onToggleSelected,
+  onCreatePlan,
 }: {
   entries: OutboundLinkLibraryEntry[];
   loading: boolean;
@@ -2689,6 +2928,9 @@ function OutboundLinkLibraryPage({
     updater: (current: OutboundLinkLibraryEntry[]) => OutboundLinkLibraryEntry[]
   ) => void;
   onToast: (message: string, kind?: Toast['kind']) => void;
+  selectedIds: ReadonlySet<string>;
+  onToggleSelected: (id: string) => void;
+  onCreatePlan: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
@@ -2726,9 +2968,23 @@ function OutboundLinkLibraryPage({
     (page - 1) * pageSize,
     page * pageSize
   );
+  const allPageSelected =
+    visibleEntries.length > 0 &&
+    visibleEntries.every((entry) => selectedIds.has(entry.id));
+  const somePageSelected = visibleEntries.some((entry) =>
+    selectedIds.has(entry.id)
+  );
+  const pageSelectRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
+
+  useEffect(() => {
+    if (pageSelectRef.current) {
+      pageSelectRef.current.indeterminate =
+        somePageSelected && !allPageSelected;
+    }
+  }, [allPageSelected, somePageSelected]);
 
   const stats = useMemo(
     () => ({
@@ -2924,6 +3180,17 @@ function OutboundLinkLibraryPage({
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleCurrentPage = () => {
+    const visibleIds = visibleEntries.map((entry) => entry.id);
+    if (allPageSelected) {
+      visibleIds.forEach((id) => onToggleSelected(id));
+      return;
+    }
+    visibleIds
+      .filter((id) => !selectedIds.has(id))
+      .forEach((id) => onToggleSelected(id));
   };
 
   const downloadTemplate = () => {
@@ -3178,6 +3445,39 @@ function OutboundLinkLibraryPage({
             </select>
           </div>
         </div>
+        <div className="outbound-library-selection-bar" aria-live="polite">
+          <label className="page-select-control">
+            <input
+              ref={pageSelectRef}
+              type="checkbox"
+              checked={allPageSelected}
+              onChange={toggleCurrentPage}
+              disabled={loading || visibleEntries.length === 0}
+              aria-label={
+                allPageSelected
+                  ? t('outboundLinkClearCurrentPage')
+                  : t('outboundLinkSelectCurrentPage')
+              }
+            />
+            <span>
+              {allPageSelected
+                ? t('outboundLinkClearCurrentPage')
+                : t('outboundLinkSelectCurrentPage')}
+            </span>
+          </label>
+          <span className="selection-count">
+            {t('outboundLinkSelectedCount', [selectedIds.size])}
+          </span>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onCreatePlan}
+            disabled={selectedIds.size === 0}
+          >
+            <Plus size={17} weight="bold" aria-hidden />
+            {t('newPlan')}
+          </button>
+        </div>
         {loading ? (
           <div className="inline-loading">
             <SpinnerGap size={24} className="is-spinning" aria-hidden />
@@ -3194,6 +3494,9 @@ function OutboundLinkLibraryPage({
             <table className="data-table outbound-library-table">
               <thead>
                 <tr>
+                  <th className="outbound-link-select-column">
+                    <span className="sr-only">{t('outboundLinkSelect')}</span>
+                  </th>
                   <th>{t('outboundLinkDomain')}</th>
                   <th>{t('outboundLinkFollowStatus')}</th>
                   <th>{t('outboundLinkLoginRequired')}</th>
@@ -3204,6 +3507,14 @@ function OutboundLinkLibraryPage({
               <tbody>
                 {visibleEntries.map((entry) => (
                   <tr key={entry.id}>
+                    <td className="outbound-link-select-column">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(entry.id)}
+                        onChange={() => onToggleSelected(entry.id)}
+                        aria-label={`${t('outboundLinkSelect')} ${entry.domain}`}
+                      />
+                    </td>
                     <td>
                       <strong>{entry.domain}</strong>
                       <small>
@@ -3264,6 +3575,261 @@ function OutboundLinkLibraryPage({
         ) : null}
       </section>
     </main>
+  );
+}
+
+export function CreatePromotingSiteDialog({
+  open,
+  settings,
+  busy,
+  onClose,
+  onCreate,
+}: {
+  open: boolean;
+  settings: ExtensionSettings;
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (values: PromotingSiteFormValues) => Promise<SiteProfile>;
+}) {
+  const [values, setValues] = useState<PromotingSiteFormValues>({
+    label: '',
+    websiteUrl: '',
+    displayName: '',
+    email: '',
+    linkMode: 'a-tag-newline',
+  });
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof PromotingSiteFormValues, string>>
+  >({});
+  const [formError, setFormError] = useState('');
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onClose();
+    };
+    globalThis.addEventListener('keydown', onKeyDown);
+    dialogRef.current?.focus();
+    return () => globalThis.removeEventListener('keydown', onKeyDown);
+  }, [busy, onClose, open]);
+
+  const updateValue = <Key extends keyof PromotingSiteFormValues>(
+    key: Key,
+    value: PromotingSiteFormValues[Key]
+  ) => {
+    setValues((current) => ({ ...current, [key]: value }));
+    setFieldErrors((current) => ({ ...current, [key]: undefined }));
+    setFormError('');
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    const validation = validatePromotingSiteInput(values, settings.sites);
+    setFieldErrors(validation.fieldErrors);
+    setFormError(
+      validation.formError === 'SITE_LIMIT'
+        ? t('promotingSiteLimit')
+        : validation.formError === 'SITE_DUPLICATE'
+          ? t('promotingSiteDuplicate')
+          : ''
+    );
+    if (!validation.site) return;
+
+    try {
+      await onCreate(values);
+      setValues({
+        label: '',
+        websiteUrl: '',
+        displayName: '',
+        email: '',
+        linkMode: 'a-tag-newline',
+      });
+      setFieldErrors({});
+      setFormError('');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setFormError(
+        message.includes('SITE_LIMIT')
+          ? t('promotingSiteLimit')
+          : message.includes('SITE_DUPLICATE')
+            ? t('promotingSiteDuplicate')
+            : t('promotingSiteCreateFailed')
+      );
+    }
+  };
+
+  const errorCopy = (error?: string): string => {
+    switch (error) {
+      case 'SITE_NAME_REQUIRED':
+        return t('promotingSiteNameRequired');
+      case 'SITE_NAME_TOO_LONG':
+        return t('promotingSiteNameTooLong');
+      case 'SITE_URL_REQUIRED':
+        return t('promotingSiteUrlRequired');
+      case 'SITE_URL_INVALID':
+        return t('promotingSiteUrlInvalid');
+      case 'SITE_EMAIL_INVALID':
+        return t('promotingSiteEmailInvalid');
+      default:
+        return '';
+    }
+  };
+
+  if (!open) return null;
+  return (
+    <div
+      className="dialog-backdrop site-create-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onClose();
+      }}
+    >
+      <dialog
+        open
+        ref={dialogRef}
+        className="create-promoting-site-dialog"
+        aria-modal="true"
+        aria-labelledby="create-promoting-site-title"
+        aria-busy={busy}
+        tabIndex={-1}
+      >
+        <form onSubmit={submit} noValidate>
+          <div className="drawer-heading">
+            <div>
+              <p className="page-eyebrow">{t('promotingWebsite')}</p>
+              <h2 id="create-promoting-site-title">{t('addPromotingSite')}</h2>
+            </div>
+            <IconButton label={t('close')} onClick={onClose} disabled={busy}>
+              <X size={21} />
+            </IconButton>
+          </div>
+          <p className="drawer-description">
+            {t('promotingSiteCreateDescription')}
+          </p>
+
+          <label className="form-field" htmlFor="promoting-site-label">
+            <span>{t('promotingSiteName')}</span>
+            <input
+              id="promoting-site-label"
+              value={values.label}
+              maxLength={100}
+              onChange={(event) => updateValue('label', event.target.value)}
+              placeholder={t('promotingSiteNamePlaceholder')}
+              aria-invalid={Boolean(fieldErrors.label)}
+              aria-describedby={
+                fieldErrors.label ? 'promoting-site-label-error' : undefined
+              }
+              disabled={busy}
+            />
+            {fieldErrors.label ? (
+              <p id="promoting-site-label-error" className="form-error">
+                {errorCopy(fieldErrors.label)}
+              </p>
+            ) : null}
+          </label>
+          <label className="form-field" htmlFor="promoting-site-url">
+            <span>{t('promotingSiteUrl')}</span>
+            <input
+              id="promoting-site-url"
+              value={values.websiteUrl}
+              maxLength={2_048}
+              onChange={(event) =>
+                updateValue('websiteUrl', event.target.value)
+              }
+              placeholder={t('promotingSiteUrlPlaceholder')}
+              inputMode="url"
+              aria-invalid={Boolean(fieldErrors.websiteUrl)}
+              aria-describedby={
+                fieldErrors.websiteUrl ? 'promoting-site-url-error' : undefined
+              }
+              disabled={busy}
+            />
+            {fieldErrors.websiteUrl ? (
+              <p id="promoting-site-url-error" className="form-error">
+                {errorCopy(fieldErrors.websiteUrl)}
+              </p>
+            ) : null}
+          </label>
+          <label className="form-field" htmlFor="promoting-site-display-name">
+            <span>{t('promotingSiteDisplayName')}</span>
+            <input
+              id="promoting-site-display-name"
+              value={values.displayName}
+              maxLength={200}
+              onChange={(event) =>
+                updateValue('displayName', event.target.value)
+              }
+              disabled={busy}
+            />
+          </label>
+          <label className="form-field" htmlFor="promoting-site-email">
+            <span>{t('promotingSiteEmail')}</span>
+            <input
+              id="promoting-site-email"
+              type="email"
+              value={values.email}
+              maxLength={320}
+              onChange={(event) => updateValue('email', event.target.value)}
+              aria-invalid={Boolean(fieldErrors.email)}
+              aria-describedby={
+                fieldErrors.email ? 'promoting-site-email-error' : undefined
+              }
+              disabled={busy}
+            />
+            {fieldErrors.email ? (
+              <p id="promoting-site-email-error" className="form-error">
+                {errorCopy(fieldErrors.email)}
+              </p>
+            ) : null}
+          </label>
+          <label className="form-field" htmlFor="promoting-site-link-mode">
+            <span>{t('promotingSiteLinkMode')}</span>
+            <select
+              id="promoting-site-link-mode"
+              value={values.linkMode}
+              onChange={(event) =>
+                updateValue('linkMode', event.target.value as LinkMode)
+              }
+              disabled={busy}
+            >
+              <option value="a-tag-newline">
+                {t('promotingSiteLinkModeATagNewline')}
+              </option>
+              <option value="prefer-website-field">
+                {t('promotingSiteLinkModeWebsiteField')}
+              </option>
+              <option value="comment-only">
+                {t('promotingSiteLinkModeCommentOnly')}
+              </option>
+            </select>
+          </label>
+
+          <div className="form-messages" aria-live="polite">
+            {formError ? <p className="form-error">{formError}</p> : null}
+          </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {t('cancel')}
+            </button>
+            <button type="submit" className="primary-button" disabled={busy}>
+              {busy ? (
+                <SpinnerGap size={18} className="is-spinning" aria-hidden />
+              ) : (
+                <Check size={18} weight="bold" aria-hidden />
+              )}
+              {busy ? t('addingPromotingSite') : t('addPromotingSite')}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </div>
   );
 }
 
@@ -3650,16 +4216,32 @@ function OutboundLinkLibraryDrawer({
   );
 }
 */
-function NewPlanDialog({
+export function NewPlanDialog({
   open,
   settings,
   busy,
+  source,
+  outboundLinkLibrary,
+  outboundLinkLibraryLoading,
+  initialTargetText = '',
+  initialSiteId,
+  newlyCreatedSiteId,
+  nestedDialogOpen = false,
   onClose,
   onCreate,
+  onCreatePromotingSite,
+  onOpenOutboundLibrary,
 }: {
   open: boolean;
   settings: ExtensionSettings;
   busy: boolean;
+  source: NewPlanSource;
+  outboundLinkLibrary: OutboundLinkLibraryEntry[];
+  outboundLinkLibraryLoading: boolean;
+  initialTargetText?: string;
+  initialSiteId?: string;
+  newlyCreatedSiteId?: string;
+  nestedDialogOpen?: boolean;
   onClose: () => void;
   onCreate: (input: {
     name: string;
@@ -3667,15 +4249,21 @@ function NewPlanDialog({
     targetText: string;
     chunkSize: number;
   }) => void;
+  onCreatePromotingSite: () => void;
+  onOpenOutboundLibrary: () => void;
 }) {
   const [name, setName] = useState('');
   const [siteId, setSiteId] = useState(settings.activeSiteId);
   const [targetText, setTargetText] = useState('');
   const [chunkSize, setChunkSize] = useState(30);
   const [fileName, setFileName] = useState('');
+  const [selectorOpen, setSelectorOpen] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const openedRef = useRef(false);
-  const parsed = useMemo(() => parseUrlInput(targetText), [targetText]);
+  const parsed = useMemo<ParsedPlanUrls>(
+    () => parsePlanUrls(targetText),
+    [targetText]
+  );
   const selectedSite = settings.sites.find((site) => site.id === siteId);
   const normalizedPromotingWebsiteUrl = useMemo(() => {
     if (!selectedSite?.websiteUrl.trim()) return null;
@@ -3702,19 +4290,31 @@ function NewPlanDialog({
     }
     if (openedRef.current) return;
     openedRef.current = true;
-    const nextSiteId = settings.activeSiteId || settings.sites[0]?.id || '';
+    setName('');
+    setTargetText(parsePlanUrls(initialTargetText).valid.join('\n'));
+    setChunkSize(30);
+    setFileName('');
+    setSelectorOpen(false);
+    const nextSiteId =
+      initialSiteId || settings.activeSiteId || settings.sites[0]?.id || '';
     setSiteId(nextSiteId);
-  }, [open, settings]);
+  }, [initialSiteId, initialTargetText, open, settings]);
+
+  useEffect(() => {
+    if (newlyCreatedSiteId) setSiteId(newlyCreatedSiteId);
+  }, [newlyCreatedSiteId]);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !selectorOpen && !nestedDialogOpen) {
+        onClose();
+      }
     };
     globalThis.addEventListener('keydown', onKeyDown);
     dialogRef.current?.focus();
     return () => globalThis.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [nestedDialogOpen, onClose, open, selectorOpen]);
   const readFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -3742,172 +4342,231 @@ function NewPlanDialog({
     });
   };
 
+  const importSelectedEntries = (
+    selectedEntries: OutboundLinkLibraryEntry[]
+  ) => {
+    try {
+      setTargetText((current) =>
+        appendOutboundDomainsToTargetText(
+          current,
+          selectedEntries.map((entry) => entry.domain)
+        )
+      );
+      setSelectorOpen(false);
+    } catch {
+      // Persisted rows are validated at the storage boundary. If a legacy row
+      // still fails normalization, ignore it and keep the plan form editable.
+      setSelectorOpen(false);
+    }
+  };
+
   if (!open) return null;
   return (
-    <div className="dialog-backdrop">
-      <dialog
-        open
-        ref={dialogRef}
-        className="new-plan-dialog"
-        aria-modal="true"
-        aria-labelledby="new-plan-title"
-        tabIndex={-1}
-      >
-        <form onSubmit={submit}>
-          <div className="drawer-heading">
-            <div>
-              <p className="page-eyebrow">{t('plans')}</p>
-              <h2 id="new-plan-title">{t('newPlan')}</h2>
+    <>
+      <div className="dialog-backdrop">
+        <dialog
+          open
+          ref={dialogRef}
+          className="new-plan-dialog"
+          data-source={source}
+          aria-busy={busy}
+          aria-modal="true"
+          aria-labelledby="new-plan-title"
+          tabIndex={-1}
+        >
+          <form onSubmit={submit}>
+            <div className="drawer-heading">
+              <div>
+                <p className="page-eyebrow">{t('plans')}</p>
+                <h2 id="new-plan-title">{t('newPlan')}</h2>
+              </div>
+              <IconButton label={t('close')} onClick={onClose}>
+                <X size={21} />
+              </IconButton>
             </div>
-            <IconButton label={t('close')} onClick={onClose}>
-              <X size={21} />
-            </IconButton>
-          </div>
 
-          <div className="new-plan-form-grid">
-            <label className="form-field">
-              <span>{t('planName')}</span>
-              <input
-                value={name}
-                maxLength={120}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={t('planNamePlaceholder')}
-              />
-            </label>
-            <label className="form-field">
-              <span>{t('promotingWebsite')}</span>
-              <select
-                value={siteId}
-                onChange={(event) => setSiteId(event.target.value)}
-              >
-                {settings.sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.label ||
-                      displayDomain(site.websiteUrl) ||
-                      t('unknownSite')}
+            <div className="new-plan-form-grid">
+              <label className="form-field">
+                <span>{t('planName')}</span>
+                <input
+                  value={name}
+                  maxLength={120}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder={t('planNamePlaceholder')}
+                />
+              </label>
+              <label className="form-field">
+                <span>{t('promotingWebsite')}</span>
+                <select
+                  value={siteId}
+                  onChange={(event) => {
+                    if (event.target.value === '__create-promoting-site__') {
+                      onCreatePromotingSite();
+                      return;
+                    }
+                    setSiteId(event.target.value);
+                  }}
+                >
+                  {settings.sites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.label ||
+                        displayDomain(site.websiteUrl) ||
+                        t('unknownSite')}
+                    </option>
+                  ))}
+                  <option value="__create-promoting-site__">
+                    {t('addPromotingSiteOption')}
                   </option>
-                ))}
-              </select>
-            </label>
-            <label className="form-field batch-size-field">
-              <span>{t('batchSize')}</span>
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={chunkSize}
-                onChange={(event) =>
-                  setChunkSize(
-                    Math.max(
-                      1,
-                      Math.min(200, Math.floor(Number(event.target.value) || 1))
+                </select>
+              </label>
+              <label className="form-field batch-size-field">
+                <span>{t('batchSize')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={chunkSize}
+                  onChange={(event) =>
+                    setChunkSize(
+                      Math.max(
+                        1,
+                        Math.min(
+                          200,
+                          Math.floor(Number(event.target.value) || 1)
+                        )
+                      )
                     )
-                  )
-                }
-              />
-            </label>
-          </div>
-
-          <label className="form-field">
-            <span>{t('targetUrls')}</span>
-            <textarea
-              value={targetText}
-              onChange={(event) => setTargetText(event.target.value)}
-              placeholder={t('targetUrlsPlaceholder')}
-              rows={9}
-            />
-          </label>
-          <div className="file-import-row">
-            <label className="file-button">
-              <UploadSimple size={18} aria-hidden />
-              <span>{t('importFile')}</span>
-              <input
-                type="file"
-                accept=".txt,.csv,.xlsx,.xls,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                onChange={readFile}
-              />
-            </label>
-            <span>{fileName || t('fileHint')}</span>
-          </div>
-
-          <section className="url-preview" aria-labelledby="url-preview-title">
-            <div className="url-preview-heading">
-              <h3 id="url-preview-title">{t('preview')}</h3>
-              <dl>
-                <div>
-                  <dt>{t('validLinks')}</dt>
-                  <dd>{parsed.valid.length}</dd>
-                </div>
-                <div>
-                  <dt>{t('duplicateLinks')}</dt>
-                  <dd>{parsed.duplicates.length}</dd>
-                </div>
-                <div className={parsed.invalid.length > 0 ? 'has-error' : ''}>
-                  <dt>{t('invalidLinks')}</dt>
-                  <dd>{parsed.invalid.length}</dd>
-                </div>
-                <div>
-                  <dt>{t('batches')}</dt>
-                  <dd>
-                    {Math.ceil(
-                      Math.min(2_000, parsed.valid.length) / chunkSize
-                    ) || 0}
-                  </dd>
-                </div>
-              </dl>
+                  }
+                />
+              </label>
             </div>
-            {parsed.valid.length > 0 ? (
-              <ol>
-                {parsed.valid.slice(0, 6).map((url, index) => (
-                  <li key={url}>
-                    <span>{index + 1}</span>
-                    <span title={url}>{displayTarget(url)}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p>{t('targetUrlsPlaceholder')}</p>
-            )}
-            {parsed.valid.length > 6 ? (
-              <small>{t('showMore', [parsed.valid.length - 6])}</small>
-            ) : null}
-          </section>
 
-          <div className="form-messages" aria-live="polite">
-            {!normalizedPromotingWebsiteUrl ? (
-              <p className="form-error">{t('invalidConfiguredWebsite')}</p>
-            ) : null}
-            {parsed.invalid.length > 0 ? (
-              <p className="form-error">{t('invalidInput')}</p>
-            ) : null}
-            {tooMany ? <p className="form-error">{t('tooManyLinks')}</p> : null}
-          </div>
+            <label className="form-field target-urls-field">
+              <span>{t('targetUrls')}</span>
+              <textarea
+                value={targetText}
+                onChange={(event) => setTargetText(event.target.value)}
+                placeholder={t('targetUrlsPlaceholder')}
+                rows={9}
+              />
+              <button
+                type="button"
+                className="secondary-button outbound-link-picker-button"
+                onClick={() => setSelectorOpen(true)}
+                disabled={busy}
+              >
+                <LinkSimple size={17} aria-hidden />
+                {t('outboundLinkSelect')}
+              </button>
+            </label>
+            <div className="file-import-row">
+              <label className="file-button">
+                <UploadSimple size={18} aria-hidden />
+                <span>{t('importFile')}</span>
+                <input
+                  type="file"
+                  accept=".txt,.csv,.xlsx,.xls,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  onChange={readFile}
+                />
+              </label>
+              <span>{fileName || t('fileHint')}</span>
+            </div>
 
-          <div className="dialog-actions">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-              disabled={busy}
+            <section
+              className="url-preview"
+              aria-labelledby="url-preview-title"
             >
-              {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              className="primary-button"
-              disabled={!canSubmit}
-            >
-              {busy ? (
-                <SpinnerGap size={18} className="is-spinning" aria-hidden />
+              <div className="url-preview-heading">
+                <h3 id="url-preview-title">{t('preview')}</h3>
+                <dl>
+                  <div>
+                    <dt>{t('validLinks')}</dt>
+                    <dd>{parsed.valid.length}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('duplicateLinks')}</dt>
+                    <dd>{parsed.duplicates.length}</dd>
+                  </div>
+                  <div className={parsed.invalid.length > 0 ? 'has-error' : ''}>
+                    <dt>{t('invalidLinks')}</dt>
+                    <dd>{parsed.invalid.length}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('batches')}</dt>
+                    <dd>
+                      {Math.ceil(
+                        Math.min(2_000, parsed.valid.length) / chunkSize
+                      ) || 0}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+              {parsed.valid.length > 0 ? (
+                <ol>
+                  {parsed.valid.slice(0, 6).map((url, index) => (
+                    <li key={url}>
+                      <span>{index + 1}</span>
+                      <span title={url}>{displayTarget(url)}</span>
+                    </li>
+                  ))}
+                </ol>
               ) : (
-                <Check size={18} weight="bold" aria-hidden />
+                <p>{t('targetUrlsPlaceholder')}</p>
               )}
-              {busy ? t('creatingPlan') : t('createPlan')}
-            </button>
-          </div>
-        </form>
-      </dialog>
-    </div>
+              {parsed.valid.length > 6 ? (
+                <small>{t('showMore', [parsed.valid.length - 6])}</small>
+              ) : null}
+            </section>
+
+            <div className="form-messages" aria-live="polite">
+              {!normalizedPromotingWebsiteUrl ? (
+                <p className="form-error">{t('invalidConfiguredWebsite')}</p>
+              ) : null}
+              {parsed.invalid.length > 0 ? (
+                <p className="form-error">{t('invalidInput')}</p>
+              ) : null}
+              {tooMany ? (
+                <p className="form-error">{t('tooManyLinks')}</p>
+              ) : null}
+            </div>
+
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onClose}
+                disabled={busy}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={!canSubmit}
+              >
+                {busy ? (
+                  <SpinnerGap size={18} className="is-spinning" aria-hidden />
+                ) : (
+                  <Check size={18} weight="bold" aria-hidden />
+                )}
+                {busy ? t('creatingPlan') : t('createPlan')}
+              </button>
+            </div>
+          </form>
+        </dialog>
+      </div>
+      <OutboundLinkSelectorDialog
+        open={selectorOpen}
+        entries={outboundLinkLibrary}
+        loading={outboundLinkLibraryLoading}
+        onClose={() => setSelectorOpen(false)}
+        onConfirm={importSelectedEntries}
+        onOpenLibrary={() => {
+          setSelectorOpen(false);
+          onOpenOutboundLibrary();
+        }}
+      />
+    </>
   );
 }
 
@@ -4390,7 +5049,18 @@ export default function App() {
   const [outboundLinkLibraryLoading, setOutboundLinkLibraryLoading] = useState(
     () => !isPreviewMode()
   );
+  const [selectedOutboundLinkIds, setSelectedOutboundLinkIds] = useState<
+    Set<string>
+  >(new Set());
   const [newPlanOpen, setNewPlanOpen] = useState(false);
+  const [newPlanInitialTargetText, setNewPlanInitialTargetText] = useState('');
+  const [newPlanSource, setNewPlanSource] = useState<NewPlanSource>('plans');
+  const [newPlanInitialSiteId, setNewPlanInitialSiteId] = useState<string>();
+  const [newlyCreatedSiteId, setNewlyCreatedSiteId] = useState<string>();
+  const [createPromotingSiteOpen, setCreatePromotingSiteOpen] = useState(false);
+  const [createPromotingSiteReturn, setCreatePromotingSiteReturn] = useState<
+    'dashboard' | 'new-plan' | null
+  >(null);
   const [planToRename, setPlanToRename] = useState<Plan | null>(null);
   const [selectedError, setSelectedError] =
     useState<PlanTargetWithAttempts | null>(null);
@@ -4401,6 +5071,40 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const refreshToken = useRef(0);
   const outboundLinkLibraryLoadToken = useRef(0);
+
+  useEffect(() => {
+    const available = new Set(outboundLinkLibrary.map((entry) => entry.id));
+    setSelectedOutboundLinkIds((current) => {
+      const next = new Set([...current].filter((id) => available.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [outboundLinkLibrary]);
+
+  const selectedOutboundTargetText = useMemo(
+    () =>
+      outboundLinkLibrary
+        .filter((entry) => selectedOutboundLinkIds.has(entry.id))
+        .flatMap((entry) => {
+          try {
+            return [outboundDomainToTargetUrl(entry.domain)];
+          } catch {
+            return [];
+          }
+        })
+        .join('\n'),
+    [outboundLinkLibrary, selectedOutboundLinkIds]
+  );
+
+  const openNewPlan = useCallback(
+    (source: NewPlanSource, initialTargetText = '', initialSiteId?: string) => {
+      setNewPlanSource(source);
+      setNewPlanInitialTargetText(initialTargetText);
+      setNewPlanInitialSiteId(initialSiteId);
+      setNewlyCreatedSiteId(undefined);
+      setNewPlanOpen(true);
+    },
+    []
+  );
 
   const refreshOutboundLinkLibrary = useCallback(async () => {
     const token = ++outboundLinkLibraryLoadToken.current;
@@ -4418,9 +5122,8 @@ export default function App() {
         setOutboundLinkLibrary(result.data);
       }
     } catch {
-      if (token === outboundLinkLibraryLoadToken.current) {
-        setOutboundLinkLibrary([]);
-      }
+      // Keep the last successful library snapshot so a transient failure does
+      // not discard rows or the user's cross-page selection.
     } finally {
       if (token === outboundLinkLibraryLoadToken.current) {
         setOutboundLinkLibraryLoading(false);
@@ -4641,6 +5344,45 @@ export default function App() {
       type === 'batch.stop' ? t('stoppedSuccess') : undefined
     );
 
+  const openPromotingSiteDialog = useCallback(
+    (returnTarget: 'dashboard' | 'new-plan') => {
+      setCreatePromotingSiteReturn(returnTarget);
+      setCreatePromotingSiteOpen(true);
+    },
+    []
+  );
+
+  const createPromotingSite = async (
+    values: PromotingSiteFormValues
+  ): Promise<SiteProfile> => {
+    const validation = validatePromotingSiteInput(values, settings.sites);
+    if (!validation.site) {
+      throw new Error(validation.formError ?? 'SITE_INPUT_INVALID');
+    }
+    const nextSettings = isPreviewMode()
+      ? {
+          ...settings,
+          sites: [...settings.sites, validation.site],
+          activeSiteId: validation.site.id,
+        }
+      : await persistExtensionSettings({
+          ...settings,
+          sites: [...settings.sites, validation.site],
+          activeSiteId: validation.site.id,
+        });
+    if (isPreviewMode()) syncPreviewSettings(nextSettings);
+    setSettings(nextSettings);
+    setCreatePromotingSiteOpen(false);
+    pushToast(t('promotingSiteCreated'));
+    if (createPromotingSiteReturn === 'dashboard') {
+      openNewPlan('dashboard', '', validation.site.id);
+    } else if (createPromotingSiteReturn === 'new-plan') {
+      setNewlyCreatedSiteId(validation.site.id);
+    }
+    setCreatePromotingSiteReturn(null);
+    return validation.site;
+  };
+
   const createPlan = async (input: {
     name: string;
     siteId: string;
@@ -4654,6 +5396,9 @@ export default function App() {
         ...input,
       });
       setNewPlanOpen(false);
+      if (shouldClearOutboundSelectionAfterPlanCreate(newPlanSource)) {
+        setSelectedOutboundLinkIds(new Set());
+      }
       pushToast(t('planCreated'));
       await refresh();
       navigate({ page: 'plans', planId: created.id });
@@ -4818,6 +5563,7 @@ export default function App() {
             onRunPlan={runPlan}
             onOpenFailure={openRecentFailure}
             onBatchCommand={runBatchCommand}
+            onCreatePromotingSite={() => openPromotingSiteDialog('dashboard')}
           />
         ) : route.page === 'moderation' ? (
           <ModerationRecheckPage />
@@ -4826,9 +5572,24 @@ export default function App() {
             entries={outboundLinkLibrary}
             loading={outboundLinkLibraryLoading}
             refreshing={refreshing}
-            onRefresh={() => refresh()}
+            onRefresh={() => {
+              void refresh();
+              void refreshOutboundLinkLibrary();
+            }}
             onEntriesChange={setOutboundLinkLibrary}
             onToast={pushToast}
+            selectedIds={selectedOutboundLinkIds}
+            onToggleSelected={(id) =>
+              setSelectedOutboundLinkIds((current) => {
+                const next = new Set(current);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })
+            }
+            onCreatePlan={() =>
+              openNewPlan('outbound-library', selectedOutboundTargetText)
+            }
           />
         ) : (
           <PlansPage
@@ -4841,7 +5602,7 @@ export default function App() {
             outboundLinkLibrary={outboundLinkLibrary}
             outboundLinkLibraryLoading={outboundLinkLibraryLoading}
             onRefresh={() => refresh()}
-            onNewPlan={() => setNewPlanOpen(true)}
+            onNewPlan={() => openNewPlan('plans')}
             onRenamePlan={setPlanToRename}
             onOpenFailure={setSelectedError}
             onRecheckTarget={recheckTarget}
@@ -4876,8 +5637,39 @@ export default function App() {
         open={newPlanOpen}
         settings={settings}
         busy={busyAction === 'create'}
+        source={newPlanSource}
+        outboundLinkLibrary={outboundLinkLibrary}
+        outboundLinkLibraryLoading={outboundLinkLibraryLoading}
+        initialTargetText={newPlanInitialTargetText}
+        initialSiteId={newPlanInitialSiteId}
+        newlyCreatedSiteId={newlyCreatedSiteId}
+        nestedDialogOpen={createPromotingSiteOpen}
         onClose={() => setNewPlanOpen(false)}
         onCreate={createPlan}
+        onCreatePromotingSite={() => openPromotingSiteDialog('new-plan')}
+        onOpenOutboundLibrary={() => {
+          setNewPlanOpen(false);
+          navigate({ page: 'outbound' });
+        }}
+      />
+      <CreatePromotingSiteDialog
+        open={createPromotingSiteOpen}
+        settings={settings}
+        busy={busyAction === 'create-promoting-site'}
+        onClose={() => {
+          if (busyAction !== 'create-promoting-site') {
+            setCreatePromotingSiteOpen(false);
+            setCreatePromotingSiteReturn(null);
+          }
+        }}
+        onCreate={async (values) => {
+          setBusyAction('create-promoting-site');
+          try {
+            return await createPromotingSite(values);
+          } finally {
+            setBusyAction(null);
+          }
+        }}
       />
       <RenamePlanDialog
         plan={planToRename}

@@ -189,6 +189,90 @@ describe('batch runner', () => {
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
   });
 
+  it('adds a gate domain and filters a later same-domain target in the batch', async () => {
+    const filteredDomains = new Set<string>();
+    const batch = updateBatchProgress(
+      initialBatch(
+        'https://www.example.com/post-a\nhttps://blog.example.com/post-b'
+      ),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://www.example.com/post-a',
+        status: 'complete',
+      })),
+      analyzeTab: vi.fn(async () => analysis('login_required')),
+      addDomainFilter: vi.fn(async (url: string) => {
+        filteredDomains.add(new URL(url).hostname.replace(/^www\./, ''));
+      }),
+      isTargetFiltered: vi.fn(async (url: string) => {
+        const hostname = new URL(url).hostname.replace(/^www\./, '');
+        return Array.from(filteredDomains).some(
+          (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+        );
+      }),
+    });
+
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('continue');
+    expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+      'https://www.example.com/post-a'
+    );
+    expect(context.read()).toMatchObject({
+      status: 'running',
+      currentIndex: 1,
+      items: [{ status: 'login_required' }, { status: 'queued' }],
+    });
+
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
+    expect(context.read()).toMatchObject({
+      status: 'completed',
+      items: [
+        { status: 'login_required' },
+        { status: 'filtered', message: 'FILTER_LIST_MATCHED' },
+      ],
+    });
+    expect(context.deps.createWorkerTab).not.toHaveBeenCalled();
+  });
+
+  it('continues the batch when automatic domain filtering fails', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(
+        'https://www.example.com/post-a\nhttps://blog.example.com/post-b'
+      ),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const context = dependencies(batch, {
+      getWorkerTab: vi.fn(async () => ({
+        id: 7,
+        url: 'https://www.example.com/post-a',
+        status: 'complete',
+      })),
+      analyzeTab: vi.fn(async () => analysis('captcha_required')),
+      addDomainFilter: vi.fn(async () => {
+        throw new Error('FILTER_WRITE_FAILED');
+      }),
+    });
+
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('continue');
+    expect(context.read()).toMatchObject({
+      status: 'running',
+      currentIndex: 1,
+      items: [{ status: 'captcha_required' }, { status: 'queued' }],
+    });
+
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
+    expect(context.deps.navigateWorkerTab).toHaveBeenCalledWith(
+      7,
+      'https://blog.example.com/post-b',
+      'batch-1'
+    );
+    expect(context.read()?.items[1]).toMatchObject({ status: 'opening' });
+  });
+
   it.each(['login_required', 'captcha_required'] as const)(
     'skips a known %s domain before opening it',
     async (gate) => {
@@ -198,6 +282,7 @@ describe('batch runner', () => {
           captchaRequired: gate === 'captcha_required',
         })),
         observeTargetLibrary: vi.fn(async () => undefined),
+        addDomainFilter: vi.fn(async () => undefined),
       });
 
       expect(await advanceBatchStep(context.deps)).toBe('wait');
@@ -218,6 +303,9 @@ describe('batch runner', () => {
           [gate === 'login_required' ? 'loginRequired' : 'captchaRequired']:
             true,
         }
+      );
+      expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+        'https://blog.example/post'
       );
     }
   );
@@ -1078,6 +1166,7 @@ describe('batch runner', () => {
       );
       const context = dependencies(batch, {
         analyzeTab: vi.fn(async () => analysis(readiness)),
+        addDomainFilter: vi.fn(async () => undefined),
       });
 
       await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
@@ -1087,6 +1176,9 @@ describe('batch runner', () => {
         currentIndex: 1,
         items: [{ status: readiness }],
       });
+      expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+        'https://blog.example/post'
+      );
     }
   );
 
@@ -1146,6 +1238,7 @@ describe('batch runner', () => {
           url: redirectUrl,
           status: 'complete',
         })),
+        addDomainFilter: vi.fn(async () => undefined),
       });
 
       await advanceBatchStep(context.deps);
@@ -1155,6 +1248,9 @@ describe('batch runner', () => {
         items: [{ status: expectedStatus }],
       });
       expect(context.deps.analyzeTab).not.toHaveBeenCalled();
+      expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+        'https://blog.example/post'
+      );
     }
   );
 
@@ -1516,6 +1612,7 @@ describe('batch runner', () => {
         status: 'complete',
       })),
       analyzeTab: vi.fn(async () => loginAnalysis),
+      addDomainFilter: vi.fn(async () => undefined),
     });
 
     await advanceBatchStep(context.deps);
@@ -1525,6 +1622,9 @@ describe('batch runner', () => {
       items: [{ status: 'unconfirmed', prepared: null }],
     });
     expect(context.deps.verifyTabSubmission).not.toHaveBeenCalled();
+    expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+      'https://blog.example/post'
+    );
   });
 
   it('skips after a CAPTCHA appears before the click occurs', async () => {
@@ -1549,6 +1649,7 @@ describe('batch runner', () => {
     };
     const context = dependencies(batch, {
       clickPreparedTabSubmission: vi.fn(async () => preClickGate),
+      addDomainFilter: vi.fn(async () => undefined),
     });
 
     await advanceBatchStep(context.deps);
@@ -1556,6 +1657,9 @@ describe('batch runner', () => {
       status: 'completed',
       items: [{ status: 'captcha_required', prepared: null }],
     });
+    expect(context.deps.addDomainFilter).toHaveBeenCalledWith(
+      'https://blog.example/post'
+    );
   });
 
   it('does not repeat a generation POST left in an uncertain state', async () => {

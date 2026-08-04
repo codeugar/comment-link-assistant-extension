@@ -520,7 +520,7 @@ const demoBatch: BatchSnapshot = {
   updatedAt: now,
 };
 
-const demoSettings: ExtensionSettings = {
+let demoSettings: ExtensionSettings = {
   ...createDefaultSettings(),
   provider: 'deepseek',
   activeSiteId: 'site-seed-audio',
@@ -533,6 +533,11 @@ const demoSettings: ExtensionSettings = {
     linkMode: 'prefer-website-field',
   })),
 };
+
+/** Keep preview plan creation on the same settings state shown by the UI. */
+export function syncPreviewSettings(settings: ExtensionSettings): void {
+  if (isPreviewMode()) demoSettings = settings;
+}
 
 export function isPreviewMode(): boolean {
   if (new URLSearchParams(globalThis.location?.search ?? '').has('preview')) {

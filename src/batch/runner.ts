@@ -21,7 +21,10 @@ import {
   verifyTabSubmission,
 } from '@/runtime/page-commands';
 import { getBatch, setBatch } from '@/storage/batch';
-import { isTargetFiltered } from '@/storage/filter-list';
+import {
+  addFilterListEntryWithResult,
+  isTargetFiltered,
+} from '@/storage/filter-list';
 import { getProviderApiKeys } from '@/storage/settings';
 import { type ProviderApiKeys, usesInlineAnchor } from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
@@ -110,6 +113,12 @@ export interface BatchRunnerDependencies {
    */
   isTargetFiltered?(url: string): Promise<boolean>;
   /**
+   * Adds the target's normalized domain to the persisted filter list after a
+   * manual gate. Optional for isolated runner callers; production uses the
+   * filter-list storage adapter below.
+   */
+  addDomainFilter?(url: string): Promise<void>;
+  /**
    * Domain-level outbound-link observations. Kept optional for isolated
    * runners and migration tests; production uses the storage adapter.
    */
@@ -174,6 +183,9 @@ const defaultDependencies: BatchRunnerDependencies = {
     return verifyTabSubmission(tabId, prepared, expectedUrl);
   },
   isTargetFiltered,
+  async addDomainFilter(url) {
+    await addFilterListEntryWithResult({ value: url, kind: 'domain' });
+  },
   getTargetLibraryGateState,
   observeTargetLibrary,
   now: Date.now,
@@ -223,6 +235,19 @@ async function observeTargetLibrarySafely(
   } catch {
     // Library observations are telemetry. A storage or migration failure must
     // never strand the execution queue or turn a gate into a batch failure.
+  }
+}
+
+async function addDomainFilterSafely(
+  dependencies: BatchRunnerDependencies,
+  url: string
+): Promise<void> {
+  try {
+    await dependencies.addDomainFilter?.(url);
+  } catch {
+    // Automatic filtering is a best-effort guardrail. A storage or
+    // normalization failure must not change the manual-gate outcome or strand
+    // the execution queue.
   }
 }
 
@@ -485,13 +510,13 @@ async function saveManualGate(
   dependencies: BatchRunnerDependencies,
   clicked = false
 ): Promise<BatchStepResult> {
-  await observeTargetLibrarySafely(
-    dependencies,
-    batch.items[batch.currentIndex]!.url,
-    {
+  const targetUrl = batch.items[batch.currentIndex]!.url;
+  await Promise.all([
+    observeTargetLibrarySafely(dependencies, targetUrl, {
       [status === 'login_required' ? 'loginRequired' : 'captchaRequired']: true,
-    }
-  );
+    }),
+    addDomainFilterSafely(dependencies, targetUrl),
+  ]);
   const next = completeCurrentItem(
     batch,
     clicked ? 'unconfirmed' : status,
