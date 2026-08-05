@@ -94,6 +94,12 @@ const RENDERED_COMMENT_SELECTOR = [
 ].join(', ');
 const DOM_SETTLE_MS = 50;
 const SUBMIT_ENABLE_TIMEOUT_MS = 750;
+// Post-click verification polls for decisive evidence (rendered promoted link,
+// WordPress receipt, moderation/error copy) instead of checking once: slow or
+// AJAX comment sections insert the comment seconds after the success banner
+// renders. The window must stay under the 120s page-command timeout.
+const SUBMIT_VERIFY_POLL_INTERVAL_MS = 1_000;
+const SUBMIT_VERIFY_WINDOW_MS = 90_000;
 const MAX_FEEDBACK_MESSAGES = 20;
 const MAX_FEEDBACK_MESSAGE_LENGTH = 500;
 const PREPARATION_TTL_MS = 2 * 60_000;
@@ -1395,7 +1401,10 @@ function comparablePageUrl(value: string): string {
   return url.href;
 }
 
-function readPageFeedbackMessages(document: Document): string[] {
+function readPageFeedbackMessages(
+  document: Document,
+  scope?: (element: Element) => boolean
+): string[] {
   const selectors = [
     '[role="alert"]',
     '[role="status"]',
@@ -1428,12 +1437,13 @@ function readPageFeedbackMessages(document: Document): string[] {
       if (!semanticElements.has(candidate)) genericElements.add(candidate);
     }
   }
+  const inScope = scope ?? (() => true);
   const semanticMessages = Array.from(semanticElements)
-    .filter(isVisible)
+    .filter((element) => isVisible(element) && inScope(element))
     .map((element) => normalizeWhitespace(visibleTextContent(element)))
     .filter(Boolean);
   const genericMessages = Array.from(genericElements)
-    .filter(isVisible)
+    .filter((element) => isVisible(element) && inScope(element))
     .map((element) => normalizeWhitespace(visibleTextContent(element)))
     .filter(
       (message) =>
@@ -1583,8 +1593,26 @@ function hasExcludedRenderedCommentContext(element: Element): boolean {
   return false;
 }
 
-function readNewPageFeedbackMessages(
-  document: Document,
+// The comment form's container (and any ancestor that reads as a comment
+// region) is where a genuine validation error renders. Late-loading page
+// chrome — newsletter widgets, static "Required fields are marked *" notes —
+// lives outside it and must not be able to fail a submission.
+function buildCommentScope(document: Document): (element: Element) => boolean {
+  const editor = findEditor(document);
+  const container = editor ? findContainer(editor) : null;
+  return (element) => {
+    if (container?.contains(element)) return true;
+    let current: Element | null = element;
+    while (current) {
+      if (current.matches(COMMENT_REGION_SELECTOR)) return true;
+      current = current.parentElement;
+    }
+    return false;
+  };
+}
+
+function diffNewFeedbackMessages(
+  messages: string[],
   baseline?: PageSubmissionBaseline
 ): string[] {
   const previousCounts = new Map<string, number>();
@@ -1593,7 +1621,7 @@ function readNewPageFeedbackMessages(
   }
 
   const newMessages: string[] = [];
-  for (const message of readPageFeedbackMessages(document)) {
+  for (const message of messages) {
     const exactMatches = previousCounts.get(message) ?? 0;
     if (exactMatches > 0) {
       previousCounts.set(message, exactMatches - 1);
@@ -1614,6 +1642,13 @@ function readNewPageFeedbackMessages(
     newMessages.push(message);
   }
   return newMessages;
+}
+
+function readNewPageFeedbackMessages(
+  document: Document,
+  baseline?: PageSubmissionBaseline
+): string[] {
+  return diffNewFeedbackMessages(readPageFeedbackMessages(document), baseline);
 }
 
 // WordPress redirects a comment held for moderation to
@@ -1706,7 +1741,12 @@ export function verifySubmissionDocument(
   );
   const pendingFeedback = feedbackChanged && PENDING_COPY.test(feedback);
   const successFeedback = feedbackChanged && SUCCESS_COPY.test(feedback);
-  const errorFeedback = feedbackChanged && ERROR_COPY.test(feedback);
+  const scopedFeedback = diffNewFeedbackMessages(
+    readPageFeedbackMessages(document, buildCommentScope(document)),
+    baseline
+  ).join(' ');
+  const errorFeedback =
+    scopedFeedback.length > 0 && ERROR_COPY.test(scopedFeedback);
   const bodyCopy = document.body
     ? normalizeWhitespace(renderedPageText(document.body))
     : '';
@@ -1742,6 +1782,17 @@ export function verifySubmissionDocument(
       clickOccurred: true,
     });
   }
+  // A WordPress redirect carrying a fresh `#comment-<id>` anchor proves the
+  // server accepted and published the comment, even when the rendered list is
+  // paginated onto another comment page or still loading.
+  if (receipt === 'published') {
+    return finalize({
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
+      fingerprint,
+      clickOccurred: true,
+    });
+  }
   // WordPress moderation receipts and fresh moderation feedback prove server
   // acceptance, but intentionally do not claim the comment is public yet.
   if (receipt === 'pending_moderation' || pendingFeedback) {
@@ -1758,7 +1809,7 @@ export function verifySubmissionDocument(
   if (errorFeedback && !successFeedback && !renderedTargetWebsite) {
     return finalize({
       status: 'validation_error',
-      message: feedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
+      message: scopedFeedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
       fingerprint,
       clickOccurred: true,
     });
@@ -1774,45 +1825,35 @@ export function verifySubmissionDocument(
   });
 }
 
-function waitForPageResponse(
+// Re-runs the full verdict until it is decisive or the window closes. Success
+// copy alone is deliberately not an exit condition: banners routinely render
+// before the comment node (and its promoted link) are inserted, and a verdict
+// taken at that moment reads as a false `unconfirmed`.
+async function pollSubmissionVerdict(
   document: Document,
-  timeoutMs: number,
-  baseline: PageSubmissionBaseline
-): Promise<void> {
-  if (timeoutMs <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const view = document.defaultView;
-    const Observer = view?.MutationObserver;
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      observer?.disconnect();
-      resolve();
-    };
-    const observer = Observer
-      ? new Observer(() => {
-          const feedback = readNewPageFeedbackMessages(document, baseline).join(
-            ' '
-          );
-          if (
-            SUCCESS_COPY.test(feedback) ||
-            PENDING_COPY.test(feedback) ||
-            ERROR_COPY.test(feedback)
-          ) {
-            finish();
-          }
-        })
-      : null;
-    if (observer && document.body) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-    }
-    (view?.setTimeout ?? setTimeout)(finish, timeoutMs);
-  });
+  prepared: PreparedPageSubmission,
+  waitMs: number
+): Promise<PageSubmissionResult> {
+  const targetUrl = extractPromotedUrl(prepared.comment) ?? undefined;
+  const view = document.defaultView;
+  const deadline = Date.now() + Math.max(waitMs, 0);
+  for (;;) {
+    const result = verifySubmissionDocument(
+      document,
+      prepared.fingerprint,
+      prepared.baseline,
+      targetUrl,
+      prepared.expected.url
+    );
+    const remaining = deadline - Date.now();
+    if (result.status !== 'unconfirmed' || remaining <= 0) return result;
+    await new Promise<void>((resolve) => {
+      (view?.setTimeout ?? setTimeout)(
+        resolve,
+        Math.min(SUBMIT_VERIFY_POLL_INTERVAL_MS, remaining)
+      );
+    });
+  }
 }
 
 export async function prepareSubmissionDocument(
@@ -2001,7 +2042,7 @@ export async function prepareSubmissionDocument(
 export async function clickPreparedSubmissionDocument(
   document: Document,
   prepared: PreparedPageSubmission,
-  waitMs = 6_000
+  waitMs = SUBMIT_VERIFY_WINDOW_MS
 ): Promise<PageSubmissionResult> {
   const analysis: PageAnalysis = {
     page: buildPageContext(document),
@@ -2078,14 +2119,7 @@ export async function clickPreparedSubmissionDocument(
 
   try {
     submit.click();
-    await waitForPageResponse(document, waitMs, prepared.baseline);
-    return verifySubmissionDocument(
-      document,
-      prepared.fingerprint,
-      prepared.baseline,
-      extractPromotedUrl(prepared.comment) ?? undefined,
-      prepared.expected.url
-    );
+    return await pollSubmissionVerdict(document, prepared, waitMs);
   } finally {
     releaseDomSubmission(document, prepared.domToken);
   }
@@ -2094,7 +2128,7 @@ export async function clickPreparedSubmissionDocument(
 export async function fillAndSubmitDocument(
   document: Document,
   input: PageSubmissionInput,
-  waitMs = 6_000,
+  waitMs = SUBMIT_VERIFY_WINDOW_MS,
   expected?: PageSubmissionExpectation
 ): Promise<PageSubmissionResult> {
   const preparation = await prepareSubmissionDocument(

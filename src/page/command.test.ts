@@ -174,7 +174,7 @@ describe('page command validation', () => {
     });
   });
 
-  it('keeps a new WordPress comment anchor unconfirmed without the promoted URL', async () => {
+  it('confirms a new WordPress comment anchor as published without the promoted URL', async () => {
     const origin = document.location.origin;
     document.defaultView?.history.replaceState(
       {},
@@ -193,8 +193,8 @@ describe('page command validation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'unconfirmed',
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        status: 'published',
+        message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
       },
     });
     document.defaultView?.history.replaceState({}, '', '/');

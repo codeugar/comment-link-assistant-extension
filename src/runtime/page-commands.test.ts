@@ -370,7 +370,7 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it('does not confirm a new WordPress comment anchor from the URL alone', async () => {
+  it('confirms a new WordPress comment anchor when in-page verification stays unconfirmed', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       baseline: { feedbackMessages: [], renderedComment: false },
@@ -385,6 +385,13 @@ describe('page command runtime', () => {
       },
     });
     const executeScript = vi.fn();
+    const onUpdated = {
+      addListener: vi.fn(
+        (listener: (tabId: number, changeInfo: { status?: string }) => void) =>
+          listener(42, { status: 'complete' })
+      ),
+      removeListener: vi.fn(),
+    };
     vi.stubGlobal('chrome', {
       tabs: {
         get: vi.fn().mockResolvedValue({
@@ -393,6 +400,7 @@ describe('page command runtime', () => {
           status: 'loading',
         }),
         sendMessage,
+        onUpdated,
       },
       scripting: { executeScript },
     });
@@ -400,7 +408,8 @@ describe('page command runtime', () => {
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article')
     ).resolves.toMatchObject({
-      status: 'unconfirmed',
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
       clickOccurred: true,
     });
 
@@ -509,6 +518,13 @@ describe('page command runtime', () => {
         result,
       });
     const executeScript = vi.fn().mockResolvedValue([]);
+    const onUpdated = {
+      addListener: vi.fn(
+        (listener: (tabId: number, changeInfo: { status?: string }) => void) =>
+          listener(42, { status: 'complete' })
+      ),
+      removeListener: vi.fn(),
+    };
     vi.stubGlobal('chrome', {
       tabs: {
         get: vi.fn().mockResolvedValue({
@@ -517,6 +533,7 @@ describe('page command runtime', () => {
           status: 'loading',
         }),
         sendMessage,
+        onUpdated,
       },
       scripting: { executeScript },
     });

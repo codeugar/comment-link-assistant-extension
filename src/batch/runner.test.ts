@@ -1269,15 +1269,22 @@ describe('batch runner', () => {
       fingerprint: prepared.fingerprint,
       clickOccurred: true,
     };
+    let clock = 3;
     const context = dependencies(batch, {
       verifyTabSubmission: vi.fn(async () => submitted),
+      now: () => clock,
     });
 
     await advanceBatchStep(context.deps);
+    // An unconfirmed verdict is retried while the verify window is open …
+    clock = 30_000;
+    await expect(advanceBatchStep(context.deps)).resolves.toBe('wait');
+    // … and only becomes terminal once the window closes.
+    clock = 200_000;
     await advanceBatchStep(context.deps);
 
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
-    expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(1);
+    expect(context.deps.verifyTabSubmission).toHaveBeenCalledTimes(2);
     expect(context.read()).toMatchObject({
       status: 'completed',
       workerTabId: 7,
@@ -1296,16 +1303,18 @@ describe('batch runner', () => {
       },
       3
     );
+    let clock = 120_004;
     const context = dependencies(batch, {
       getWorkerTab: vi.fn(async () => ({
         id: 7,
         url: 'https://blog.example/post',
         status: 'loading',
       })),
-      now: () => 30_004,
+      now: () => clock,
     });
 
     await advanceBatchStep(context.deps);
+    clock = 320_005;
     await advanceBatchStep(context.deps);
 
     expect(context.deps.clickPreparedTabSubmission).not.toHaveBeenCalled();
@@ -1385,7 +1394,7 @@ describe('batch runner', () => {
       verifyTabSubmission: vi.fn(async () => {
         throw new Error('PAGE_COMMAND_TIMEOUT');
       }),
-      now: () => 100_000,
+      now: () => 200_000,
     });
 
     await advanceBatchStep(context.deps);
@@ -1448,6 +1457,7 @@ describe('batch runner', () => {
     );
     const context = dependencies(batch, {
       verifyTabSubmission: vi.fn(async () => unconfirmed),
+      now: () => 200_000,
     });
 
     await advanceBatchStep(context.deps);

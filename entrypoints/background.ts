@@ -4,7 +4,12 @@ import { runHistoryRetry } from '@/batch/history-retry';
 import { isDueToday, markChunkDone, splitIntoChunks } from '@/batch/plan';
 import { runPlanNext } from '@/batch/plan-runner';
 import { BATCH_RECOVERY_ALARM, armBatchRecoveryAlarm } from '@/batch/recovery';
-import { type BatchStepResult, runBatchUntilBlocked } from '@/batch/runner';
+import {
+  type BatchRunnerDependencies,
+  type BatchStepResult,
+  defaultDependencies as defaultRunnerDependencies,
+  runBatchUntilBlocked,
+} from '@/batch/runner';
 import {
   createBatch,
   filterQueuedItems,
@@ -113,6 +118,21 @@ let runnerPromise: Promise<void> | null = null;
 let rerunRequested = false;
 let localWakeTimer: number | undefined;
 let stopRequested = false;
+// Cancels the in-flight LLM generation when the user stops the batch. Page
+// commands have no cancellation channel; their late results are dropped by the
+// guarded setBatch below instead.
+let runnerAbort = new AbortController();
+
+// The stop handler persists the terminal `stopped` snapshot without waiting
+// for the in-flight step. Until that step's runner settles, its progress
+// writes must not resurrect the batch.
+const runnerDependencies: BatchRunnerDependencies = {
+  ...defaultRunnerDependencies,
+  setBatch: async (batch) =>
+    stopRequested ? batch : defaultRunnerDependencies.setBatch(batch),
+  generateComment: (keys, input) =>
+    generateComment(keys, input, { signal: runnerAbort.signal }),
+};
 let dashboardPlanOperationTail: Promise<void> = Promise.resolve();
 let batchRetryOperationTail: Promise<void> = Promise.resolve();
 let pendingModerationRecheckPromise: Promise<ModerationRecheckLastRun> | null =
@@ -533,7 +553,7 @@ function requestBatchWake(): void {
     while (rerunRequested) {
       rerunRequested = false;
       await reconcileBatchWake(
-        await runBatchUntilBlocked(undefined, () => stopRequested)
+        await runBatchUntilBlocked(runnerDependencies, () => stopRequested)
       );
     }
   })()
@@ -544,6 +564,22 @@ function requestBatchWake(): void {
       runnerPromise = null;
       if (rerunRequested) requestBatchWake();
     });
+}
+
+// Start/continue explicitly countermand a prior stop. While the stopped
+// runner's last step is still in flight, the wake is chained behind it so the
+// fresh run never races the old step's (dropped) writes.
+function wakeCountermandingStop(): void {
+  const activeRunner = runnerPromise;
+  if (stopRequested && activeRunner) {
+    void activeRunner.finally(() => {
+      stopRequested = false;
+      requestBatchWake();
+    });
+    return;
+  }
+  stopRequested = false;
+  requestBatchWake();
 }
 
 async function prepareComment(): Promise<PopupMessageResult> {
@@ -649,6 +685,9 @@ async function startBatchFromBackground(
     batch = updateBatchProgress(batch, { websiteProfile: profile });
   }
   batch = filterQueuedItems(batch, filteredUrls);
+  // A stale stop intent (a stop whose cleanup was interrupted) must not be
+  // consumed by this fresh run's first wake and kill it instantly.
+  await clearBatchStopIntent();
   await setBatch(batch);
   if (trackStandalone) {
     try {
@@ -659,7 +698,7 @@ async function startBatchFromBackground(
       throw error;
     }
   }
-  if (wake) requestBatchWake();
+  if (wake) wakeCountermandingStop();
   return batch;
 }
 
@@ -685,9 +724,10 @@ async function startBatch(
 async function continueBatch(): Promise<PopupMessageResult> {
   const batch = await getBatch();
   if (!batch) throw new Error('BATCH_NOT_FOUND');
+  await clearBatchStopIntent();
   const next = resumeBatch(batch);
   if (next !== batch) await setBatch(next);
-  requestBatchWake();
+  wakeCountermandingStop();
   return { type: 'batch.continue', data: next };
 }
 
@@ -700,13 +740,18 @@ async function skipCurrentBatchManualGate(): Promise<PopupMessageResult> {
   return { type: 'batch.skip-current', data: next };
 }
 
+// Writes the terminal `stopped` snapshot and answers immediately instead of
+// awaiting the in-flight step (which can block for minutes on an unabortable
+// page command). The guarded runner setBatch drops that step's late writes,
+// and `stopRequested` stays raised until the runner actually settles.
 async function stopCurrentBatch(): Promise<PopupMessageResult> {
   stopRequested = true;
   rerunRequested = false;
+  const activeRunner = runnerPromise;
+  runnerAbort.abort();
+  runnerAbort = new AbortController();
   try {
     await requestBatchStop();
-    const activeRunner = runnerPromise;
-    if (activeRunner) await activeRunner;
     const batch = await getBatch();
     if (!batch) {
       await clearBatchStopIntent();
@@ -715,7 +760,12 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
     const next = stopBatch(batch);
     if (next !== batch) await setBatch(next);
     // #11 keeps the worker tab open at terminal — no closeTerminalBatchWorker.
-    await dashboardService.syncActiveBatch(next);
+    try {
+      await dashboardService.syncActiveBatch(next);
+    } catch {
+      // The stop must stay terminal even when the dashboard sync fails; the
+      // recovery alarm re-syncs on a later tick.
+    }
     await clearBatchStopIntent();
     if (localWakeTimer !== undefined) clearTimeout(localWakeTimer);
     localWakeTimer = undefined;
@@ -724,7 +774,13 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
     await chrome.alarms.clear(BATCH_RECOVERY_ALARM);
     return { type: 'batch.stop', data: next };
   } finally {
-    stopRequested = false;
+    if (activeRunner) {
+      void activeRunner.finally(() => {
+        stopRequested = false;
+      });
+    } else {
+      stopRequested = false;
+    }
   }
 }
 
