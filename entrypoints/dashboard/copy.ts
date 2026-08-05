@@ -83,6 +83,12 @@ const zh = {
   outboundLinkImportFailed: '\u6587\u4ef6\u89e3\u6790\u5931\u8d25',
   outboundLinkImportCompleted: '\u5916\u94fe\u5e93\u5bfc\u5165\u5b8c\u6210',
   outboundLinkImportRowError: '\u7b2c {0} \u884c\uff1a{1}',
+  outboundLinkImportErrorUrlRequired:
+    '\u7f3a\u5c11\u535a\u5ba2\u6587\u7ae0 URL',
+  outboundLinkImportErrorUrlInvalid:
+    '\u535a\u5ba2\u6587\u7ae0 URL \u65e0\u6548',
+  outboundLinkImportErrorAttributeInvalid:
+    '\u94fe\u63a5\u5c5e\u6027\u683c\u5f0f\u65e0\u6548',
   outboundLinkDownloadTemplate: '\u4e0b\u8f7d\u6a21\u677f',
   outboundLinkSearch: '\u641c\u7d22\u94fe\u63a5\u6216\u57df\u540d',
   outboundLinkFilter: '\u7b5b\u9009\u5c5e\u6027',
@@ -397,6 +403,9 @@ const en: Record<keyof typeof zh, string> = {
   outboundLinkImportFailed: 'Could not parse the file',
   outboundLinkImportCompleted: 'Link library import completed',
   outboundLinkImportRowError: 'Row {0}: {1}',
+  outboundLinkImportErrorUrlRequired: 'Missing blog article URL',
+  outboundLinkImportErrorUrlInvalid: 'Invalid blog article URL',
+  outboundLinkImportErrorAttributeInvalid: 'Invalid link attribute value',
   outboundLinkDownloadTemplate: 'Download template',
   outboundLinkSearch: 'Search links or domains',
   outboundLinkFilter: 'Filter attributes',

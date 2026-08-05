@@ -2906,6 +2906,21 @@ function outboundLinkLibraryErrorCopy(error: unknown): string {
   return t('actionFailed');
 }
 
+const OUTBOUND_LINK_IMPORT_PREVIEW_ROW_LIMIT = 50;
+
+function outboundLinkImportRowErrorCopy(code: string | undefined): string {
+  switch (code) {
+    case 'URL_REQUIRED':
+      return t('outboundLinkImportErrorUrlRequired');
+    case 'URL_INVALID':
+      return t('outboundLinkImportErrorUrlInvalid');
+    case 'ATTRIBUTE_INVALID':
+      return t('outboundLinkImportErrorAttributeInvalid');
+    default:
+      return code ?? t('actionFailed');
+  }
+}
+
 function nullableBooleanLabel(value: boolean | null): string {
   if (value === true) return locale() === 'zh-CN' ? '是' : 'Yes';
   if (value === false) return locale() === 'zh-CN' ? '否' : 'No';
@@ -3675,13 +3690,56 @@ export function OutboundLinkLibraryPage({
               </button>
             </div>
           </div>
+          {importResult.rows.length > 0 ? (
+            <div className="table-scroll">
+              <table className="data-table outbound-import-preview-table">
+                <thead>
+                  <tr>
+                    <th>{t('outboundLinkDomain')}</th>
+                    <th>{t('outboundLinkFollowStatus')}</th>
+                    <th>{t('outboundLinkLoginRequired')}</th>
+                    <th>{t('outboundLinkCaptchaRequired')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importResult.rows
+                    .slice(0, OUTBOUND_LINK_IMPORT_PREVIEW_ROW_LIMIT)
+                    .map((row) => (
+                      <tr key={row.lineNumber}>
+                        <td>
+                          <strong title={row.url}>{row.url}</strong>
+                          <small>{row.domain}</small>
+                        </td>
+                        <td>
+                          {followStatusLabel(row.followStatus ?? 'unknown')}
+                        </td>
+                        <td>
+                          {nullableBooleanLabel(row.loginRequired ?? null)}
+                        </td>
+                        <td>
+                          {nullableBooleanLabel(row.captchaRequired ?? null)}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {importResult.rows.length > OUTBOUND_LINK_IMPORT_PREVIEW_ROW_LIMIT ? (
+            <small>
+              {t('showMore', [
+                importResult.rows.length -
+                  OUTBOUND_LINK_IMPORT_PREVIEW_ROW_LIMIT,
+              ])}
+            </small>
+          ) : null}
           {importResult.invalidRows.length > 0 ? (
             <ul className="form-messages">
               {importResult.invalidRows.slice(0, 20).map((row) => (
                 <li key={row.lineNumber}>
                   {t('outboundLinkImportRowError', [
                     row.lineNumber,
-                    row.error ?? '',
+                    outboundLinkImportRowErrorCopy(row.error),
                   ])}
                 </li>
               ))}
