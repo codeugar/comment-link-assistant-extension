@@ -136,7 +136,7 @@ export interface BatchRunnerDependencies {
 
 export type BatchStepResult = 'continue' | 'wait';
 
-const defaultDependencies: BatchRunnerDependencies = {
+export const defaultDependencies: BatchRunnerDependencies = {
   getBatch,
   setBatch,
   getProviderApiKeys,

@@ -105,11 +105,12 @@ interface ProviderRequest {
 
 export async function generateComment(
   keys: ProviderApiKeys,
-  input: GenerateCommentInput
+  input: GenerateCommentInput,
+  options?: { signal?: AbortSignal }
 ): Promise<string> {
   const prompt = buildPrompt(input);
   const request = providerRequest(keys, input.provider, prompt);
-  const content = await requestProvider(request);
+  const content = await requestProvider(request, options?.signal);
   return parseComment(content, input.linkMode, input.websiteProfile);
 }
 
@@ -168,7 +169,14 @@ function providerRequest(
   };
 }
 
-async function requestProvider(request: ProviderRequest): Promise<string> {
+function stopAbortError(): DOMException {
+  return new DOMException('COMMENT_GENERATION_ABORTED', 'AbortError');
+}
+
+async function requestProvider(
+  request: ProviderRequest,
+  signal?: AbortSignal
+): Promise<string> {
   const keepWorkerAlive = () => {
     try {
       void chrome.runtime.getPlatformInfo().catch(() => undefined);
@@ -185,11 +193,16 @@ async function requestProvider(request: ProviderRequest): Promise<string> {
         })();
   try {
     for (let attempt = 0; attempt < MAX_REQUEST_ATTEMPTS; attempt += 1) {
+      if (signal?.aborted) throw stopAbortError();
       // Each attempt gets its own abort deadline: a single slow response must
       // not burn the budget of the retries after it. The timer stays armed
       // through the body read so a stalled (streaming) body is still bounded.
+      // An external stop signal (batch stop) aborts the attempt immediately
+      // and is never retried.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+      const onExternalAbort = () => controller.abort();
+      signal?.addEventListener('abort', onExternalAbort, { once: true });
       try {
         let response: Response;
         try {
@@ -203,6 +216,7 @@ async function requestProvider(request: ProviderRequest): Promise<string> {
             signal: controller.signal,
           });
         } catch (error) {
+          if (signal?.aborted) throw stopAbortError();
           // A per-attempt timeout is retryable like any network failure; only
           // the final attempt's abort surfaces as COMMENT_GENERATION_TIMEOUT.
           if (attempt < MAX_REQUEST_ATTEMPTS - 1) {
@@ -234,6 +248,7 @@ async function requestProvider(request: ProviderRequest): Promise<string> {
         return content;
       } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onExternalAbort);
       }
     }
     throw new Error('COMMENT_GENERATION_FAILED');

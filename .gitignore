@@ -16,3 +16,4 @@ workbook-previews/
 # One-off local research/report scripts
 build_report*.mjs
 scan_comments*.py
+.claude/worktrees/
