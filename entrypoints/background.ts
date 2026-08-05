@@ -1438,11 +1438,14 @@ async function exportDataBackup(): Promise<DataBackupFile> {
   );
 }
 
-// Validates the file, then replaces every section in one go. Each section is
-// independently schema-validated by parseDataBackupFile before any storage
-// write happens, so a malformed file never leaves the extension half-restored.
+// Validates the file, then replaces every section. The dashboard import runs
+// first: it re-validates referential integrity and writes inside a single
+// IndexedDB transaction, so a rejected backup fails before anything at all is
+// written. The chrome.storage sections were already schema-validated by
+// parseDataBackupFile, so their write after that point cannot be rejected.
 async function importDataBackup(raw: unknown): Promise<void> {
   const backup = parseDataBackupFile(raw);
+  await dashboardRepository.importAll(backup.data.dashboard);
   await chrome.storage.local.set({
     [SETTINGS_STORAGE_KEY]: backup.data.settings,
     [PROVIDER_API_KEYS_STORAGE_KEY]: backup.data.providerApiKeys,
@@ -1450,12 +1453,14 @@ async function importDataBackup(raw: unknown): Promise<void> {
     [FILTER_LIST_STORAGE_KEY]: backup.data.filterList,
     [HISTORY_STORAGE_KEY]: backup.data.batchHistory,
   });
-  await dashboardRepository.importAll(backup.data.dashboard);
   await clearFirstRunPending();
   await dashboardService.bumpRevision();
 }
 
-async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
+async function dispatch(
+  message: PopupMessage,
+  sender?: chrome.runtime.MessageSender
+): Promise<PopupMessageResult> {
   if (message.type === 'page.analyze') {
     return { type: message.type, data: await analyzeCurrentPage() };
   }
@@ -1655,13 +1660,26 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
     return { type: message.type, data: result };
   }
   if (message.type === 'data-backup.export') {
+    assertTrustedUiSender(sender);
     return { type: message.type, data: await exportDataBackup() };
   }
   if (message.type === 'data-backup.import') {
+    assertTrustedUiSender(sender);
     await importDataBackup(message.backup);
     return { type: message.type, data: { imported: true } };
   }
   throw new Error('BACKGROUND_MESSAGE_UNSUPPORTED');
+}
+
+// The backup surface moves plaintext API keys and rewrites every store, so it
+// only answers the extension's own pages — never a content script, whose
+// sender.url is the arbitrary page it runs in.
+function assertTrustedUiSender(
+  sender: chrome.runtime.MessageSender | undefined
+): void {
+  if (!sender?.url?.startsWith(chrome.runtime.getURL(''))) {
+    throw new Error('BACKGROUND_MESSAGE_UNSUPPORTED');
+  }
 }
 
 async function handleWorkerTabRemoved(tabId: number): Promise<void> {
@@ -1676,10 +1694,10 @@ export default defineBackground({
     void configureSidePanel(chrome.sidePanel);
 
     chrome.runtime.onMessage.addListener(
-      (message: PopupMessage, _sender, sendResponse: SendResponse) => {
+      (message: PopupMessage, sender, sendResponse: SendResponse) => {
         void storageReady
           .then(() => ensureDashboardReady())
-          .then(() => dispatch(message))
+          .then(() => dispatch(message, sender))
           .then((data) => sendResponse({ ok: true, data }))
           .catch((error: unknown) => {
             sendResponse({
