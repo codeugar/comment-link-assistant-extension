@@ -13,6 +13,8 @@ node_modules/
 outputs/
 workbook-previews/
 
+e2e/artifacts/
+
 # One-off local research/report scripts
 build_report*.mjs
 scan_comments*.py
