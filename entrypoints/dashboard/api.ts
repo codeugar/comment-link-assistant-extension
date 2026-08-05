@@ -9,8 +9,12 @@ import type {
 import type { DashboardSummaryView } from '@/runtime/messages';
 import { sendToBackground } from '@/runtime/messages';
 import { getBatch } from '@/storage/batch';
-import { createDefaultSettings, getSettings } from '@/storage/settings';
-import type { ExtensionSettings } from '@/types';
+import {
+  createDefaultSettings,
+  getProviderApiKeys,
+  getSettings,
+} from '@/storage/settings';
+import type { ExtensionSettings, ProviderApiKeys } from '@/types';
 import type {
   DashboardMessage,
   DashboardRequestResult,
@@ -534,9 +538,19 @@ let demoSettings: ExtensionSettings = {
   })),
 };
 
+let demoApiKeys: ProviderApiKeys = {
+  deepseekApiKey: '',
+  kieApiKey: '',
+};
+
 /** Keep preview plan creation on the same settings state shown by the UI. */
 export function syncPreviewSettings(settings: ExtensionSettings): void {
   if (isPreviewMode()) demoSettings = settings;
+}
+
+/** Keep preview settings edits on the same API key state shown by the UI. */
+export function syncPreviewApiKeys(apiKeys: ProviderApiKeys): void {
+  if (isPreviewMode()) demoApiKeys = apiKeys;
 }
 
 export function isPreviewMode(): boolean {
@@ -650,6 +664,11 @@ export async function loadPlans(): Promise<Plan[]> {
 export async function loadSettings(): Promise<ExtensionSettings> {
   if (isPreviewMode()) return demoSettings;
   return getSettings();
+}
+
+export async function loadProviderApiKeys(): Promise<ProviderApiKeys> {
+  if (isPreviewMode()) return demoApiKeys;
+  return getProviderApiKeys();
 }
 
 export async function loadActiveBatch(): Promise<BatchSnapshot | null> {

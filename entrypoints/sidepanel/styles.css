@@ -228,30 +228,14 @@ h2 {
   line-height: 1.45;
 }
 
-/* The settings heading has no step number, so the 26px track would squeeze
-   its text into a one-word-per-line column. */
-.settings-panel .section-heading {
-  grid-template-columns: 1fr;
-}
-
 .step-number {
   padding-top: 4px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
 }
 
 .field {
   display: grid;
   gap: 5px;
   min-width: 0;
-}
-
-.field-wide {
-  grid-column: 1 / -1;
 }
 
 .field > span {
@@ -280,15 +264,6 @@ select:focus,
 textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(211, 75, 44, 0.12);
-}
-
-.security-note {
-  margin: 12px 0;
-  border-left: 2px solid var(--green);
-  padding-left: 9px;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.45;
 }
 
 .field-hint {
@@ -940,14 +915,6 @@ textarea:focus {
     font-size: 0;
   }
 
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .field-wide {
-    grid-column: auto;
-  }
-
   .site-flow-heading {
     align-items: start;
     flex-direction: column;
@@ -1082,25 +1049,6 @@ textarea:focus {
   flex: none;
   align-items: center;
   gap: 6px;
-}
-.site-manager {
-  display: grid;
-  gap: 4px;
-}
-
-.site-manager-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.site-manager-controls select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.site-manager-controls .text-button {
-  flex: 0 0 auto;
 }
 
 .plan-due-banners {

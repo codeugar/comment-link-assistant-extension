@@ -21,6 +21,7 @@ import { findMatchingFilterEntry, getFilterList } from '@/storage/filter-list';
 import { PLANS_STORAGE_KEY, type PlansMap, getPlans } from '@/storage/plans';
 import {
   DEFAULT_SETTINGS,
+  PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
   extensionSettingsSchema,
   getActiveSite,
@@ -28,14 +29,8 @@ import {
   getSettings,
   setSettings as persistSettings,
   restrictStorageToTrustedContexts,
-  setProviderApiKeys,
 } from '@/storage/settings';
-import type {
-  ExtensionSettings,
-  ProviderApiKeys,
-  SiteProfile,
-  UiLocale,
-} from '@/types';
+import type { ExtensionSettings, ProviderApiKeys } from '@/types';
 import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
 import { ChartLineUp } from '@phosphor-icons/react';
 import { useEffect, useMemo, useState } from 'react';
@@ -342,7 +337,6 @@ export default function App() {
     kieApiKey: '',
   });
   const [loaded, setLoaded] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState<BusyState>('idle');
   const [batch, setBatch] = useState<BatchSnapshot | null>(null);
   const [targetText, setTargetText] = useState('');
@@ -403,6 +397,9 @@ export default function App() {
       }
       if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
       if (changes[PLANS_STORAGE_KEY]) void getPlans().then(setPlans);
+      if (changes[PROVIDER_API_KEYS_STORAGE_KEY]) {
+        void getProviderApiKeys().then(setApiKeys);
+      }
       if (changes[SETTINGS_STORAGE_KEY]) {
         const changedSettings = extensionSettingsSchema.safeParse(
           changes[SETTINGS_STORAGE_KEY].newValue
@@ -499,57 +496,8 @@ export default function App() {
       : batch.currentIndex
     : 0;
 
-  const updateProvider = (provider: ExtensionSettings['provider']) =>
-    setSettings((current) => ({ ...current, provider }));
-
   const selectActiveSite = (siteId: string) =>
     setSettings((current) => ({ ...current, activeSiteId: siteId }));
-
-  const updateActiveSiteField = <Key extends keyof SiteProfile>(
-    key: Key,
-    value: SiteProfile[Key]
-  ) =>
-    setSettings((current) => ({
-      ...current,
-      sites: current.sites.map((site) =>
-        site.id === current.activeSiteId ? { ...site, [key]: value } : site
-      ),
-    }));
-
-  const addSite = () =>
-    setSettings((current) => {
-      const site: SiteProfile = {
-        id: globalThis.crypto.randomUUID(),
-        label: '',
-        websiteUrl: '',
-        displayName: '',
-        email: '',
-        linkMode: 'a-tag-newline',
-      };
-      return {
-        ...current,
-        sites: [...current.sites, site],
-        activeSiteId: site.id,
-      };
-    });
-
-  const removeActiveSite = () =>
-    setSettings((current) => {
-      if (current.sites.length <= 1) return current;
-      const remaining = current.sites.filter(
-        (site) => site.id !== current.activeSiteId
-      );
-      return {
-        ...current,
-        sites: remaining,
-        activeSiteId: remaining[0]?.id ?? current.activeSiteId,
-      };
-    });
-
-  const updateApiKey = <Key extends keyof ProviderApiKeys>(
-    key: Key,
-    value: ProviderApiKeys[Key]
-  ) => setApiKeys((current) => ({ ...current, [key]: value }));
 
   async function persistConfiguration(permissionUrls?: string[]) {
     const normalized = extensionSettingsSchema.parse({
@@ -579,30 +527,9 @@ export default function App() {
       const granted = await requestBatchOriginPermissions(permissionUrls);
       if (!granted) throw new Error('ORIGIN_PERMISSION_DENIED');
     }
-    const normalizedKeys = await setProviderApiKeys(apiKeys);
     await persistSettings(normalized);
     setSettings(normalized);
-    setApiKeys(normalizedKeys);
     return normalized;
-  }
-
-  async function saveConfiguration() {
-    setError('');
-    setNotice('');
-    try {
-      await persistConfiguration();
-      setWebsiteProfile(null);
-      setNotice(translate('settingsSaved'));
-    } catch (caught) {
-      const raw = caught instanceof Error ? caught.message : String(caught);
-      if (
-        raw.includes('websiteUrl') ||
-        raw.includes('WEBSITE_URL') ||
-        raw.toLowerCase().includes('invalid url')
-      ) {
-        setError(translate('invalidWebsiteUrl'));
-      } else setError(translate('settingsSaveFailed'));
-    }
   }
 
   async function prepareBatch() {
@@ -625,7 +552,6 @@ export default function App() {
         return;
       }
       if (!configured) {
-        setSettingsOpen(true);
         setError(translate('missingSettings'));
         return;
       }
@@ -851,24 +777,15 @@ export default function App() {
           <h1>{translate('extensionName')}</h1>
         </div>
         <div className="masthead-actions">
-          {!settingsOpen ? (
-            <button
-              type="button"
-              className="dashboard-link"
-              aria-label={translate('openDashboard')}
-              title={translate('openDashboard')}
-              onClick={openDashboard}
-            >
-              <ChartLineUp size={15} weight="bold" aria-hidden="true" />
-              {translate('openDashboard')}
-            </button>
-          ) : null}
           <button
             type="button"
-            className="text-button"
-            onClick={() => setSettingsOpen((open) => !open)}
+            className="dashboard-link"
+            aria-label={translate('openDashboard')}
+            title={translate('openDashboard')}
+            onClick={openDashboard}
           >
-            {translate(settingsOpen ? 'backToQueue' : 'openSettings')}
+            <ChartLineUp size={15} weight="bold" aria-hidden="true" />
+            {translate('openDashboard')}
           </button>
         </div>
       </header>
@@ -882,9 +799,7 @@ export default function App() {
         </span>
       </div>
 
-      {!settingsOpen &&
-      !batchIsActive &&
-      (duePlans.length > 0 || ranTodayPlans.length > 0) ? (
+      {!batchIsActive && (duePlans.length > 0 || ranTodayPlans.length > 0) ? (
         <section className="plan-due-banners" aria-live="polite">
           {duePlans.map((plan) => {
             const { done, total } = planProgress(plan);
@@ -918,198 +833,7 @@ export default function App() {
         </section>
       ) : null}
 
-      {settingsOpen ? (
-        <section
-          className="panel settings-panel"
-          aria-labelledby="settings-title"
-        >
-          <div className="section-heading">
-            <div>
-              <h2 id="settings-title">{translate('settingsTitle')}</h2>
-              <p>{translate('settingsDescription')}</p>
-            </div>
-          </div>
-
-          <div className="form-grid">
-            <label className="field field-wide">
-              <span>{translate('deepSeekApiKeyLabel')}</span>
-              <input
-                type="password"
-                value={apiKeys.deepseekApiKey}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateApiKey('deepseekApiKey', event.target.value)
-                }
-                placeholder={translate('deepSeekApiKeyPlaceholder')}
-                autoComplete="off"
-              />
-            </label>
-            <label className="field field-wide">
-              <span>{translate('kieApiKeyLabel')}</span>
-              <input
-                type="password"
-                value={apiKeys.kieApiKey}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateApiKey('kieApiKey', event.target.value)
-                }
-                placeholder={translate('kieApiKeyPlaceholder')}
-                autoComplete="off"
-              />
-            </label>
-            <div className="field field-wide site-manager">
-              <span>{translate('siteSelectorLabel')}</span>
-              <div className="site-manager-controls">
-                <select
-                  value={settings.activeSiteId}
-                  disabled={batchIsActive}
-                  onChange={(event) => {
-                    selectActiveSite(event.target.value);
-                    setWebsiteProfile(null);
-                  }}
-                >
-                  {settings.sites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.label ||
-                        displayTarget(site.websiteUrl) ||
-                        translate('siteUnnamed')}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={batchIsActive}
-                  onClick={addSite}
-                >
-                  {translate('siteAdd')}
-                </button>
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={batchIsActive || settings.sites.length <= 1}
-                  onClick={removeActiveSite}
-                >
-                  {translate('siteRemove')}
-                </button>
-              </div>
-            </div>
-            <label className="field field-wide">
-              <span>{translate('siteLabelField')}</span>
-              <input
-                value={activeSite.label}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateActiveSiteField('label', event.target.value)
-                }
-                placeholder={translate('siteLabelPlaceholder')}
-              />
-            </label>
-            <label className="field field-wide">
-              <span>{translate('websiteUrlLabel')}</span>
-              <input
-                value={activeSite.websiteUrl}
-                disabled={batchIsActive}
-                onChange={(event) => {
-                  updateActiveSiteField('websiteUrl', event.target.value);
-                  setWebsiteProfile(null);
-                }}
-                placeholder={translate('websiteUrlPlaceholder')}
-                inputMode="url"
-              />
-            </label>
-            <label className="field">
-              <span>{translate('providerLabel')}</span>
-              <select
-                value={settings.provider}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateProvider(
-                    event.target.value as ExtensionSettings['provider']
-                  )
-                }
-              >
-                <option value="deepseek">
-                  {translate('providerDeepSeek')}
-                </option>
-                <option value="kie-gemini">
-                  {translate('providerKieGemini')}
-                </option>
-              </select>
-            </label>
-            <label className="field">
-              <span>{translate('languageLabel')}</span>
-              <select
-                value={settings.locale ?? DEFAULT_UI_LOCALE}
-                disabled={batchIsActive}
-                onChange={(event) => {
-                  const locale = event.target.value as UiLocale;
-                  setUiLocale(locale);
-                  setSettings((current) => ({ ...current, locale }));
-                }}
-              >
-                <option value="zh-CN">{translate('languageChinese')}</option>
-                <option value="en">{translate('languageEnglish')}</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>{translate('linkModeLabel')}</span>
-              <select
-                value={activeSite.linkMode}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateActiveSiteField(
-                    'linkMode',
-                    event.target.value as SiteProfile['linkMode']
-                  )
-                }
-              >
-                <option value="a-tag-newline">
-                  {translate('linkModeATagNewline')}
-                </option>
-                <option value="prefer-website-field">
-                  {translate('linkModePreferWebsiteField')}
-                </option>
-                <option value="comment-only">
-                  {translate('linkModeCommentOnly')}
-                </option>
-              </select>
-            </label>
-            <label className="field">
-              <span>{translate('displayNameLabel')}</span>
-              <input
-                value={activeSite.displayName}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateActiveSiteField('displayName', event.target.value)
-                }
-                placeholder={translate('displayNamePlaceholder')}
-              />
-            </label>
-            <label className="field">
-              <span>{translate('emailLabel')}</span>
-              <input
-                type="email"
-                value={activeSite.email}
-                disabled={batchIsActive}
-                onChange={(event) =>
-                  updateActiveSiteField('email', event.target.value)
-                }
-                placeholder={translate('emailPlaceholder')}
-              />
-            </label>
-          </div>
-          <p className="security-note">{translate('apiKeySecurityNote')}</p>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={batchIsActive || busy !== 'idle'}
-            onClick={saveConfiguration}
-          >
-            {translate('saveSettings')}
-          </button>
-        </section>
-      ) : !batch ? (
+      {!batch ? (
         <>
           <section className="panel workspace-panel">
             <div className="section-heading">
@@ -1496,115 +1220,107 @@ export default function App() {
         </section>
       )}
 
-      {!settingsOpen ? (
-        <section
-          className="panel history-panel"
-          aria-labelledby="history-title"
-        >
-          <details className="history-section">
-            <summary>
-              <h3 id="history-title">{translate('batchHistoryTitle')}</h3>
-            </summary>
-            {history.length === 0 ? (
-              <p className="history-empty">{translate('batchHistoryEmpty')}</p>
-            ) : (
-              <ul className="history-list">
-                {history.map((entry) => {
-                  const failedItems = entry.items.filter((item) =>
-                    isFailedHistoryStatus(item.status)
-                  );
-                  return (
-                    <li key={entry.id}>
-                      <details className="history-entry">
-                        <summary>
-                          <span className="history-entry-site">
-                            {entry.settings.siteLabel ||
-                              displayTarget(entry.settings.websiteUrl)}
-                          </span>
-                          <small>
-                            {translate('batchSummary', [
-                              String(entry.counts.published ?? 0),
-                              String(entry.counts.pendingModeration ?? 0),
-                              String(
-                                entry.counts.unconfirmed ??
-                                  entry.counts.submitted ??
-                                  0
-                              ),
-                              String(entry.counts.failed),
-                            ])}
-                          </small>
-                          <time
-                            dateTime={new Date(entry.archivedAt).toISOString()}
-                          >
-                            {formatEventTime(entry.archivedAt)}
-                          </time>
-                        </summary>
-                        {entry.counts.failed > 0 ? (
-                          <button
-                            type="button"
-                            className="secondary-button full-width-button"
-                            disabled={busy !== 'idle' || batchIsActive}
-                            onClick={() => retryFromHistory(entry.id)}
-                          >
-                            {translate('batchHistoryRetryFailed')}
-                          </button>
-                        ) : null}
-                        <ul className="history-failed-list">
-                          {failedItems.map((item) => {
-                            const failureDetail = failureDetailFor(item);
-                            return (
-                              <li
-                                key={item.url}
-                                className="history-failed-item"
-                              >
-                                <div className="history-failed-copy">
-                                  <span title={item.url}>
-                                    {displayTarget(item.url)}
-                                  </span>
-                                  <small>
-                                    {batchItemStatusCopy(item.status)}
-                                  </small>
-                                  {failureDetail?.friendly ? (
-                                    <p>{failureDetail.friendly}</p>
-                                  ) : null}
-                                  {failureDetail ? (
-                                    <code>{failureDetail.message}</code>
-                                  ) : null}
-                                </div>
-                                <div className="history-failed-actions">
-                                  {failureDetail ? (
-                                    <button
-                                      type="button"
-                                      className="text-button"
-                                      onClick={() => copyDiagnostics(item)}
-                                    >
-                                      {translate('copyDiagnostics')}
-                                    </button>
-                                  ) : null}
+      <section className="panel history-panel" aria-labelledby="history-title">
+        <details className="history-section">
+          <summary>
+            <h3 id="history-title">{translate('batchHistoryTitle')}</h3>
+          </summary>
+          {history.length === 0 ? (
+            <p className="history-empty">{translate('batchHistoryEmpty')}</p>
+          ) : (
+            <ul className="history-list">
+              {history.map((entry) => {
+                const failedItems = entry.items.filter((item) =>
+                  isFailedHistoryStatus(item.status)
+                );
+                return (
+                  <li key={entry.id}>
+                    <details className="history-entry">
+                      <summary>
+                        <span className="history-entry-site">
+                          {entry.settings.siteLabel ||
+                            displayTarget(entry.settings.websiteUrl)}
+                        </span>
+                        <small>
+                          {translate('batchSummary', [
+                            String(entry.counts.published ?? 0),
+                            String(entry.counts.pendingModeration ?? 0),
+                            String(
+                              entry.counts.unconfirmed ??
+                                entry.counts.submitted ??
+                                0
+                            ),
+                            String(entry.counts.failed),
+                          ])}
+                        </small>
+                        <time
+                          dateTime={new Date(entry.archivedAt).toISOString()}
+                        >
+                          {formatEventTime(entry.archivedAt)}
+                        </time>
+                      </summary>
+                      {entry.counts.failed > 0 ? (
+                        <button
+                          type="button"
+                          className="secondary-button full-width-button"
+                          disabled={busy !== 'idle' || batchIsActive}
+                          onClick={() => retryFromHistory(entry.id)}
+                        >
+                          {translate('batchHistoryRetryFailed')}
+                        </button>
+                      ) : null}
+                      <ul className="history-failed-list">
+                        {failedItems.map((item) => {
+                          const failureDetail = failureDetailFor(item);
+                          return (
+                            <li key={item.url} className="history-failed-item">
+                              <div className="history-failed-copy">
+                                <span title={item.url}>
+                                  {displayTarget(item.url)}
+                                </span>
+                                <small>
+                                  {batchItemStatusCopy(item.status)}
+                                </small>
+                                {failureDetail?.friendly ? (
+                                  <p>{failureDetail.friendly}</p>
+                                ) : null}
+                                {failureDetail ? (
+                                  <code>{failureDetail.message}</code>
+                                ) : null}
+                              </div>
+                              <div className="history-failed-actions">
+                                {failureDetail ? (
                                   <button
                                     type="button"
                                     className="text-button"
-                                    disabled={busy !== 'idle' || batchIsActive}
-                                    onClick={() =>
-                                      retryFromHistory(entry.id, [item.url])
-                                    }
+                                    onClick={() => copyDiagnostics(item)}
                                   >
-                                    {translate('batchHistoryRetryUrl')}
+                                    {translate('copyDiagnostics')}
                                   </button>
-                                </div>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </details>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </details>
-        </section>
-      ) : null}
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  disabled={busy !== 'idle' || batchIsActive}
+                                  onClick={() =>
+                                    retryFromHistory(entry.id, [item.url])
+                                  }
+                                >
+                                  {translate('batchHistoryRetryUrl')}
+                                </button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </details>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </details>
+      </section>
 
       {notice ? <p className="toast success-toast">{notice}</p> : null}
       {error ? <p className="toast error-toast">{error}</p> : null}

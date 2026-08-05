@@ -47,11 +47,21 @@ import {
   normalizeOutboundLinkUrl,
 } from '@/storage/outbound-link-library';
 import {
+  PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
+  extensionSettingsSchema,
+  getActiveSite,
   getSettings,
   setSettings as persistExtensionSettings,
+  setProviderApiKeys,
 } from '@/storage/settings';
-import type { ExtensionSettings, LinkMode, SiteProfile } from '@/types';
+import type {
+  ExtensionSettings,
+  LinkMode,
+  ProviderApiKeys,
+  SiteProfile,
+  UiLocale,
+} from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
 import {
   Archive,
@@ -108,7 +118,9 @@ import {
   loadActiveBatch,
   loadDashboardSummary,
   loadPlans,
+  loadProviderApiKeys,
   loadSettings,
+  syncPreviewApiKeys,
   syncPreviewSettings,
 } from './api';
 import { locale, t } from './copy';
@@ -2249,25 +2261,97 @@ function PlansPage({
   );
 }
 
-function SettingsDrawer({
+export function SettingsDrawer({
   open,
   settings,
+  apiKeys,
   onClose,
+  onSave,
 }: {
   open: boolean;
   settings: ExtensionSettings;
+  apiKeys: ProviderApiKeys;
   onClose: () => void;
+  onSave: (
+    settings: ExtensionSettings,
+    apiKeys: ProviderApiKeys
+  ) => Promise<void>;
 }) {
   const drawerRef = useRef<HTMLDialogElement>(null);
+  const [draftSettings, setDraftSettings] = useState(settings);
+  const [draftApiKeys, setDraftApiKeys] = useState(apiKeys);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
   useEffect(() => {
     if (!open) return;
+    setDraftSettings(settings);
+    setDraftApiKeys(apiKeys);
+    setFormError('');
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !saving) onClose();
     };
     globalThis.addEventListener('keydown', onKeyDown);
     drawerRef.current?.focus();
     return () => globalThis.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+    // Draft state is only re-seeded when the drawer transitions to open, so
+    // unrelated settings refreshes elsewhere in the app do not clobber
+    // in-progress edits. Intentionally omit `settings`/`apiKeys` deps.
+  }, [open]);
+
+  const activeSite = getActiveSite(draftSettings);
+
+  const updateDraftProvider = (provider: ExtensionSettings['provider']) =>
+    setDraftSettings((current) => ({ ...current, provider }));
+
+  const selectDraftActiveSite = (siteId: string) =>
+    setDraftSettings((current) => ({ ...current, activeSiteId: siteId }));
+
+  const updateDraftSiteField = <Key extends keyof SiteProfile>(
+    key: Key,
+    value: SiteProfile[Key]
+  ) =>
+    setDraftSettings((current) => ({
+      ...current,
+      sites: current.sites.map((site) =>
+        site.id === current.activeSiteId ? { ...site, [key]: value } : site
+      ),
+    }));
+
+  const addDraftSite = () =>
+    setDraftSettings((current) => {
+      const site: SiteProfile = {
+        id: globalThis.crypto.randomUUID(),
+        label: '',
+        websiteUrl: '',
+        displayName: '',
+        email: '',
+        linkMode: 'a-tag-newline',
+      };
+      return {
+        ...current,
+        sites: [...current.sites, site],
+        activeSiteId: site.id,
+      };
+    });
+
+  const removeDraftActiveSite = () =>
+    setDraftSettings((current) => {
+      if (current.sites.length <= 1) return current;
+      const remaining = current.sites.filter(
+        (site) => site.id !== current.activeSiteId
+      );
+      return {
+        ...current,
+        sites: remaining,
+        activeSiteId: remaining[0]?.id ?? current.activeSiteId,
+      };
+    });
+
+  const updateDraftApiKey = <Key extends keyof ProviderApiKeys>(
+    key: Key,
+    value: ProviderApiKeys[Key]
+  ) => setDraftApiKeys((current) => ({ ...current, [key]: value }));
 
   const openSidePanel = async () => {
     if (isPreviewMode() || !chrome.sidePanel?.open) return;
@@ -2277,13 +2361,46 @@ function SettingsDrawer({
     }
   };
 
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setFormError('');
+    try {
+      const normalized = extensionSettingsSchema.parse({
+        ...draftSettings,
+        sites: draftSettings.sites.map((site) => ({
+          ...site,
+          websiteUrl: site.websiteUrl.trim()
+            ? normalizeWebsiteUrl(site.websiteUrl)
+            : '',
+        })),
+      });
+      await onSave(normalized, draftApiKeys);
+      setDraftSettings(normalized);
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      if (
+        raw.includes('websiteUrl') ||
+        raw.includes('WEBSITE_URL') ||
+        raw.toLowerCase().includes('invalid url')
+      ) {
+        setFormError(translate('invalidWebsiteUrl'));
+      } else {
+        setFormError(translate('settingsSaveFailed'));
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!open) return null;
   return (
     <div
       className="drawer-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget && !saving) onClose();
       }}
     >
       <dialog
@@ -2292,83 +2409,230 @@ function SettingsDrawer({
         className="settings-drawer"
         aria-modal="true"
         aria-labelledby="settings-drawer-title"
+        aria-busy={saving}
         tabIndex={-1}
       >
-        <div className="drawer-heading">
-          <div>
-            <p className="page-eyebrow">{t('settings')}</p>
-            <h2 id="settings-drawer-title">{t('settingsTitle')}</h2>
+        <form onSubmit={handleSubmit} noValidate>
+          <div className="drawer-heading">
+            <div>
+              <p className="page-eyebrow">{t('settings')}</p>
+              <h2 id="settings-drawer-title">{t('settingsTitle')}</h2>
+            </div>
+            <IconButton label={t('close')} onClick={onClose} disabled={saving}>
+              <X size={21} />
+            </IconButton>
           </div>
-          <IconButton label={t('close')} onClick={onClose}>
-            <X size={21} />
-          </IconButton>
-        </div>
-        <p className="drawer-description">{t('settingsDescription')}</p>
-        <dl className="settings-summary">
-          <div>
-            <dt>
-              <Database size={19} aria-hidden />
-              {t('provider')}
-            </dt>
-            <dd>
-              {settings.provider === 'deepseek' ? 'DeepSeek' : 'KIE Gemini'}
-            </dd>
-          </div>
-          <div>
-            <dt>
-              <GlobeHemisphereWest size={19} aria-hidden />
-              {t('configuredSites')}
-            </dt>
-            <dd>{settings.sites.length}</dd>
-          </div>
-          <div>
-            <dt>
-              <FileText size={19} aria-hidden />
-              {t('language')}
-            </dt>
-            <dd>
-              {settings.locale === 'en'
-                ? t('languageEnglish')
-                : t('languageChinese')}
-            </dd>
-          </div>
-          <div>
-            <dt>
-              <ArrowClockwise size={19} aria-hidden />
-              {t('autoRefresh')}
-            </dt>
-            <dd>{t('realtimeRefresh')}</dd>
-          </div>
-        </dl>
-        <section className="settings-sites">
-          <h3>{t('configuredSites')}</h3>
-          <ul>
-            {settings.sites.map((site) => (
-              <li key={site.id}>
-                <span className="table-site-mark">
-                  <LinkSimple size={15} aria-hidden />
-                </span>
-                <span>
-                  <strong>
+          <p className="drawer-description">{t('settingsDescription')}</p>
+
+          <label className="form-field" htmlFor="settings-provider">
+            <span>{translate('providerLabel')}</span>
+            <select
+              id="settings-provider"
+              value={draftSettings.provider}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftProvider(
+                  event.target.value as ExtensionSettings['provider']
+                )
+              }
+            >
+              <option value="deepseek">{translate('providerDeepSeek')}</option>
+              <option value="kie-gemini">
+                {translate('providerKieGemini')}
+              </option>
+            </select>
+          </label>
+          <label className="form-field" htmlFor="settings-deepseek-key">
+            <span>{translate('deepSeekApiKeyLabel')}</span>
+            <input
+              id="settings-deepseek-key"
+              type="password"
+              value={draftApiKeys.deepseekApiKey}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftApiKey('deepseekApiKey', event.target.value)
+              }
+              placeholder={translate('deepSeekApiKeyPlaceholder')}
+              autoComplete="off"
+            />
+          </label>
+          <label className="form-field" htmlFor="settings-kie-key">
+            <span>{translate('kieApiKeyLabel')}</span>
+            <input
+              id="settings-kie-key"
+              type="password"
+              value={draftApiKeys.kieApiKey}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftApiKey('kieApiKey', event.target.value)
+              }
+              placeholder={translate('kieApiKeyPlaceholder')}
+              autoComplete="off"
+            />
+          </label>
+          <p className="website-field-hint">
+            {translate('apiKeySecurityNote')}
+          </p>
+
+          <label className="form-field" htmlFor="settings-site-select">
+            <span>{translate('siteSelectorLabel')}</span>
+            <div className="settings-site-row">
+              <select
+                id="settings-site-select"
+                value={draftSettings.activeSiteId}
+                disabled={saving}
+                onChange={(event) => selectDraftActiveSite(event.target.value)}
+              >
+                {draftSettings.sites.map((site) => (
+                  <option key={site.id} value={site.id}>
                     {site.label ||
                       displayDomain(site.websiteUrl) ||
-                      t('unknownSite')}
-                  </strong>
-                  <small>{site.websiteUrl || '—'}</small>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-        <button
-          type="button"
-          className="primary-button drawer-primary-action"
-          onClick={openSidePanel}
-          disabled={isPreviewMode()}
-        >
-          <ArrowSquareOut size={18} aria-hidden />
-          {t('openSidePanel')}
-        </button>
+                      translate('siteUnnamed')}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                disabled={saving || draftSettings.sites.length >= 20}
+                onClick={addDraftSite}
+              >
+                <Plus size={15} weight="bold" aria-hidden />
+                {translate('siteAdd')}
+              </button>
+              <button
+                type="button"
+                className="danger-text-button"
+                disabled={saving || draftSettings.sites.length <= 1}
+                onClick={removeDraftActiveSite}
+              >
+                <Trash size={15} aria-hidden />
+                {translate('siteRemove')}
+              </button>
+            </div>
+          </label>
+          <label className="form-field" htmlFor="settings-site-label">
+            <span>{translate('siteLabelField')}</span>
+            <input
+              id="settings-site-label"
+              value={activeSite.label}
+              maxLength={100}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftSiteField('label', event.target.value)
+              }
+              placeholder={translate('siteLabelPlaceholder')}
+            />
+          </label>
+          <label className="form-field" htmlFor="settings-site-url">
+            <span>{translate('websiteUrlLabel')}</span>
+            <input
+              id="settings-site-url"
+              value={activeSite.websiteUrl}
+              maxLength={2_048}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftSiteField('websiteUrl', event.target.value)
+              }
+              placeholder={translate('websiteUrlPlaceholder')}
+              inputMode="url"
+            />
+          </label>
+          <label className="form-field" htmlFor="settings-site-display-name">
+            <span>{translate('displayNameLabel')}</span>
+            <input
+              id="settings-site-display-name"
+              value={activeSite.displayName}
+              maxLength={200}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftSiteField('displayName', event.target.value)
+              }
+              placeholder={translate('displayNamePlaceholder')}
+            />
+          </label>
+          <label className="form-field" htmlFor="settings-site-email">
+            <span>{translate('emailLabel')}</span>
+            <input
+              id="settings-site-email"
+              type="email"
+              value={activeSite.email}
+              maxLength={320}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftSiteField('email', event.target.value)
+              }
+              placeholder={translate('emailPlaceholder')}
+            />
+          </label>
+          <label className="form-field" htmlFor="settings-site-link-mode">
+            <span>{translate('linkModeLabel')}</span>
+            <select
+              id="settings-site-link-mode"
+              value={activeSite.linkMode}
+              disabled={saving}
+              onChange={(event) =>
+                updateDraftSiteField(
+                  'linkMode',
+                  event.target.value as SiteProfile['linkMode']
+                )
+              }
+            >
+              <option value="a-tag-newline">
+                {translate('linkModeATagNewline')}
+              </option>
+              <option value="prefer-website-field">
+                {translate('linkModePreferWebsiteField')}
+              </option>
+              <option value="comment-only">
+                {translate('linkModeCommentOnly')}
+              </option>
+            </select>
+          </label>
+
+          <label className="form-field" htmlFor="settings-locale">
+            <span>{t('language')}</span>
+            <select
+              id="settings-locale"
+              value={draftSettings.locale ?? DEFAULT_UI_LOCALE}
+              disabled={saving}
+              onChange={(event) => {
+                const nextLocale = event.target.value as UiLocale;
+                setUiLocale(nextLocale);
+                setDraftSettings((current) => ({
+                  ...current,
+                  locale: nextLocale,
+                }));
+              }}
+            >
+              <option value="zh-CN">{t('languageChinese')}</option>
+              <option value="en">{t('languageEnglish')}</option>
+            </select>
+          </label>
+
+          <div className="form-messages" aria-live="polite">
+            {formError ? <p className="form-error">{formError}</p> : null}
+          </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={openSidePanel}
+              disabled={isPreviewMode() || saving}
+            >
+              <ArrowSquareOut size={18} aria-hidden />
+              {t('openSidePanel')}
+            </button>
+            <button type="submit" className="primary-button" disabled={saving}>
+              {saving ? (
+                <SpinnerGap size={18} className="is-spinning" aria-hidden />
+              ) : (
+                <Check size={18} weight="bold" aria-hidden />
+              )}
+              {translate('saveSettings')}
+            </button>
+          </div>
+        </form>
       </dialog>
     </div>
   );
@@ -5057,6 +5321,10 @@ export default function App() {
     sites: [],
     locale: DEFAULT_UI_LOCALE,
   });
+  const [apiKeys, setApiKeys] = useState<ProviderApiKeys>({
+    deepseekApiKey: '',
+    kieApiKey: '',
+  });
   const [batch, setBatch] = useState<BatchSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -5168,11 +5436,12 @@ export default function App() {
     else setRefreshing(true);
     setLoadError('');
     try {
-      const [nextSummary, nextPlans, nextSettings, nextBatch] =
+      const [nextSummary, nextPlans, nextSettings, nextApiKeys, nextBatch] =
         await Promise.all([
           loadDashboardSummary(),
           loadPlans(),
           loadSettings(),
+          loadProviderApiKeys(),
           loadActiveBatch(),
         ]);
       if (token !== refreshToken.current) return;
@@ -5180,6 +5449,7 @@ export default function App() {
       setPlans(nextPlans);
       setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
       setSettings(nextSettings);
+      setApiKeys(nextApiKeys);
       setBatch(nextBatch);
     } catch (error) {
       if (token !== refreshToken.current) return;
@@ -5228,6 +5498,11 @@ export default function App() {
           setUiLocale(nextSettings.locale ?? DEFAULT_UI_LOCALE);
           setSettings(nextSettings);
         });
+      }
+      if (changes[PROVIDER_API_KEYS_STORAGE_KEY]) {
+        loadProviderApiKeys()
+          .then(setApiKeys)
+          .catch(() => undefined);
       }
       if (changes[OUTBOUND_LINK_LIBRARY_STORAGE_KEY]) {
         void refreshOutboundLinkLibrary();
@@ -5401,6 +5676,25 @@ export default function App() {
     }
     setCreatePromotingSiteReturn(null);
     return validation.site;
+  };
+
+  const saveExtensionSettings = async (
+    nextSettings: ExtensionSettings,
+    nextApiKeys: ProviderApiKeys
+  ): Promise<void> => {
+    const savedSettings = isPreviewMode()
+      ? nextSettings
+      : await persistExtensionSettings(nextSettings);
+    const savedApiKeys = isPreviewMode()
+      ? nextApiKeys
+      : await setProviderApiKeys(nextApiKeys);
+    if (isPreviewMode()) {
+      syncPreviewSettings(savedSettings);
+      syncPreviewApiKeys(savedApiKeys);
+    }
+    setSettings(savedSettings);
+    setApiKeys(savedApiKeys);
+    pushToast(translate('settingsSaved'));
   };
 
   const createPlan = async (input: {
@@ -5651,7 +5945,9 @@ export default function App() {
       <SettingsDrawer
         open={settingsOpen}
         settings={settings}
+        apiKeys={apiKeys}
         onClose={() => setSettingsOpen(false)}
+        onSave={saveExtensionSettings}
       />
       <NewPlanDialog
         open={newPlanOpen}

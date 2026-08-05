@@ -114,7 +114,7 @@
     "message": "The comment could not be submitted"
   },
   "missingSettings": {
-    "message": "Complete the required settings first."
+    "message": "Complete the required settings in the dashboard first (provider API key and promoting site)."
   },
   "invalidWebsiteUrl": {
     "message": "Enter a valid HTTP or HTTPS website URL."
@@ -375,10 +375,10 @@
     "message": "This comment widget is hosted on another origin and requires manual posting."
   },
   "displayNameRequiredForTarget": {
-    "message": "This form requires a display name. Add one in Settings before the next batch."
+    "message": "This form requires a display name. Add one in the dashboard's settings before the next batch."
   },
   "emailRequiredForTarget": {
-    "message": "This form requires an email. Add one in Settings before the next batch."
+    "message": "This form requires an email. Add one in the dashboard's settings before the next batch."
   },
   "formNeedsReview": {
     "message": "A possible form was found, but its fields could not be mapped safely. Nothing was submitted."

@@ -2012,85 +2012,22 @@ input[type="checkbox"] {
   font-size: 13px;
 }
 
-.settings-summary {
-  display: grid;
-  gap: 1px;
-  overflow: hidden;
-  margin-bottom: 26px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--line);
-}
-
-.settings-summary > div {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  background-color: rgba(246, 241, 230, 0.94);
-  background-image: url("/dashboard-paper.webp");
-}
-
-.settings-summary dt {
+.settings-site-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--ink-soft);
-  font-size: 12px;
 }
 
-.settings-summary dd {
-  padding-left: 27px;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.settings-sites {
-  margin-bottom: 24px;
-}
-
-.settings-sites h3 {
-  margin-bottom: 11px;
-  font-size: 15px;
-}
-
-.settings-sites ul {
-  display: grid;
-  gap: 7px;
-}
-
-.settings-sites li {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 10px;
-  padding: 9px;
-  border-bottom: 1px solid var(--line);
-}
-
-.settings-sites li > span:last-child {
-  display: grid;
+.settings-site-row select {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.settings-sites strong,
-.settings-sites small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.settings-site-row .secondary-button,
+.settings-site-row .danger-text-button {
+  flex: 0 0 auto;
 }
 
-.settings-sites strong {
-  font-size: 13px;
-}
-
-.settings-sites small {
-  color: var(--ink-faint);
-  font-size: 11px;
-}
-
-.drawer-primary-action {
-  width: 100%;
-}
 .filter-list-drawer {
   width: min(520px, 100vw);
 }

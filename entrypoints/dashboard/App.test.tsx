@@ -1,5 +1,5 @@
 import type { OutboundLinkLibraryEntry } from '@/storage/outbound-link-library';
-import type { ExtensionSettings, SiteProfile } from '@/types';
+import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
 import { act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import {
   CreatePromotingSiteDialog,
   NewPlanDialog,
   OutboundLinkLibraryPage,
+  SettingsDrawer,
 } from './App';
 
 let container: HTMLDivElement;
@@ -309,5 +310,98 @@ describe('dashboard library and plan flow components', () => {
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'New site', websiteUrl: 'example.com' })
     );
+  });
+});
+
+describe('settings drawer', () => {
+  const apiKeys: ProviderApiKeys = {
+    deepseekApiKey: 'existing-key',
+    kieApiKey: '',
+  };
+
+  it('prefills the provider, API keys, and active site, and proposes edits on save', async () => {
+    const onSave = vi.fn<
+      (settings: ExtensionSettings, apiKeys: ProviderApiKeys) => Promise<void>
+    >(async () => undefined);
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const deepseekInput = container.querySelector<HTMLInputElement>(
+      '#settings-deepseek-key'
+    );
+    expect(deepseekInput?.value).toBe('existing-key');
+    const siteLabelInput = container.querySelector<HTMLInputElement>(
+      '#settings-site-label'
+    );
+    expect(siteLabelInput?.value).toBe(site.label);
+    const siteUrlInput =
+      container.querySelector<HTMLInputElement>('#settings-site-url');
+    expect(siteUrlInput?.value).toBe(site.websiteUrl);
+
+    await enterInput(siteLabelInput as HTMLInputElement, 'Renamed site');
+    await click(button('保存设置'));
+
+    await vi.waitFor(() => {
+      expect(onSave).toHaveBeenCalled();
+    });
+    const [savedSettings, savedApiKeys] = onSave.mock.calls[0] as [
+      ExtensionSettings,
+      ProviderApiKeys,
+    ];
+    expect(
+      savedSettings.sites.find((candidate) => candidate.id === site.id)?.label
+    ).toBe('Renamed site');
+    expect(savedApiKeys.deepseekApiKey).toBe('existing-key');
+  });
+
+  it('disables removing the last site and re-enables it once another exists', async () => {
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={vi.fn(async () => undefined)}
+        />
+      );
+    });
+
+    expect(button('删除网站').disabled).toBe(true);
+    await click(button('新增网站'));
+    expect(button('删除网站').disabled).toBe(false);
+  });
+
+  it('shows an inline error and keeps the drawer open when saving fails', async () => {
+    const onSave = vi.fn(async () => {
+      throw new Error('SAVE_FAILED');
+    });
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      );
+    });
+
+    await click(button('保存设置'));
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('设置无法保存');
+    });
+    expect(container.querySelector('.settings-drawer')).not.toBeNull();
   });
 });
