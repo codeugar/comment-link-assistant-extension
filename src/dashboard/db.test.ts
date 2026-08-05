@@ -685,3 +685,79 @@ describe('DashboardRepository execution semantics', () => {
     expect(await repo.listPlans()).toHaveLength(2);
   });
 });
+
+describe('DashboardRepository export/import backup', () => {
+  it('exports every store and importAll restores an identical snapshot into a fresh database', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(planInput());
+    await completedFirstBatch(detail, repo);
+    await repo.setMeta('probe', { ok: true }, 5_000);
+
+    const exported = await repo.exportAll();
+    expect(exported.plans).toHaveLength(1);
+    expect(exported.batches.length).toBeGreaterThan(0);
+    expect(exported.targets.length).toBeGreaterThan(0);
+    expect(exported.runs.length).toBeGreaterThan(0);
+    expect(exported.attempts.length).toBeGreaterThan(0);
+    expect(exported.meta.some((record) => record.key === 'probe')).toBe(true);
+
+    const target = repository();
+    await target.repo.importAll(exported);
+    const reimported = await target.repo.exportAll();
+    expect(reimported.plans).toEqual(exported.plans);
+    expect(reimported.batches).toEqual(exported.batches);
+    expect(reimported.targets).toEqual(exported.targets);
+    expect(reimported.runs).toEqual(exported.runs);
+    expect(reimported.attempts).toEqual(exported.attempts);
+    expect(reimported.meta).toEqual(exported.meta);
+  });
+
+  it('replaces all existing data rather than merging with it', async () => {
+    const { repo } = repository();
+    await repo.createPlan(planInput({ name: 'Stale plan' }));
+    expect(await repo.listPlans()).toHaveLength(1);
+
+    await repo.importAll({
+      plans: [],
+      batches: [],
+      targets: [],
+      runs: [],
+      attempts: [],
+      meta: [],
+    });
+
+    expect(await repo.listPlans()).toHaveLength(0);
+  });
+
+  it('rejects a backup with dangling references before writing anything', async () => {
+    const { repo } = repository();
+    await repo.createPlan(planInput({ name: 'Keep me' }));
+
+    await expect(
+      repo.importAll({
+        plans: [],
+        batches: [
+          {
+            id: 'orphan-batch',
+            planId: 'missing-plan',
+            sequence: 1,
+            status: 'pending',
+            targetCount: 0,
+            processedCount: 0,
+            submittedCount: 0,
+            failedCount: 0,
+            unknownCount: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        targets: [],
+        runs: [],
+        attempts: [],
+        meta: [],
+      })
+    ).rejects.toThrow(DashboardDataError);
+
+    expect(await repo.listPlans()).toHaveLength(1);
+  });
+});

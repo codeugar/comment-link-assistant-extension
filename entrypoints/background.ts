@@ -72,8 +72,20 @@ import {
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
 import { configureSidePanel } from '@/runtime/side-panel';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
-import { archiveBatch, getBatchHistory } from '@/storage/batch-history';
 import {
+  HISTORY_STORAGE_KEY,
+  archiveBatch,
+  getBatchHistory,
+} from '@/storage/batch-history';
+import {
+  type DataBackupFile,
+  buildDataBackup,
+  clearFirstRunPending,
+  markFirstRunPending,
+  parseDataBackupFile,
+} from '@/storage/data-backup';
+import {
+  FILTER_LIST_STORAGE_KEY,
   addFilterListEntry,
   addFilterListEntryWithResult,
   findMatchingFilterEntry,
@@ -82,6 +94,7 @@ import {
   removeFilterListEntry,
 } from '@/storage/filter-list';
 import {
+  OUTBOUND_LINK_LIBRARY_STORAGE_KEY,
   addOutboundLinkLibraryEntry,
   getOutboundLinkLibrary,
   removeOutboundLinkLibraryEntry,
@@ -96,6 +109,8 @@ import {
   setPlans,
 } from '@/storage/plans';
 import {
+  PROVIDER_API_KEYS_STORAGE_KEY,
+  SETTINGS_STORAGE_KEY,
   buildBatchSettingsSnapshot,
   getActiveSite,
   getProviderApiKeys,
@@ -1390,6 +1405,56 @@ async function deleteDashboardTarget(
   }
 }
 
+// Gathers every piece of locally stored user data into the versioned backup
+// envelope. IndexedDB access stays on this side of the runtime (the same side
+// DashboardService/dashboardRepository already live on) so the dashboard page
+// never opens the database directly; it always goes through this message.
+async function exportDataBackup(): Promise<DataBackupFile> {
+  const [
+    settings,
+    providerApiKeys,
+    outboundLinkLibrary,
+    filterList,
+    batchHistory,
+    dashboard,
+  ] = await Promise.all([
+    getSettings(),
+    getProviderApiKeys(),
+    getOutboundLinkLibrary(),
+    getFilterList(),
+    getBatchHistory(),
+    dashboardRepository.exportAll(),
+  ]);
+  return buildDataBackup(
+    {
+      settings,
+      providerApiKeys,
+      outboundLinkLibrary,
+      filterList,
+      batchHistory,
+      dashboard,
+    },
+    chrome.runtime.getManifest().version
+  );
+}
+
+// Validates the file, then replaces every section in one go. Each section is
+// independently schema-validated by parseDataBackupFile before any storage
+// write happens, so a malformed file never leaves the extension half-restored.
+async function importDataBackup(raw: unknown): Promise<void> {
+  const backup = parseDataBackupFile(raw);
+  await chrome.storage.local.set({
+    [SETTINGS_STORAGE_KEY]: backup.data.settings,
+    [PROVIDER_API_KEYS_STORAGE_KEY]: backup.data.providerApiKeys,
+    [OUTBOUND_LINK_LIBRARY_STORAGE_KEY]: backup.data.outboundLinkLibrary,
+    [FILTER_LIST_STORAGE_KEY]: backup.data.filterList,
+    [HISTORY_STORAGE_KEY]: backup.data.batchHistory,
+  });
+  await dashboardRepository.importAll(backup.data.dashboard);
+  await clearFirstRunPending();
+  await dashboardService.bumpRevision();
+}
+
 async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
   if (message.type === 'page.analyze') {
     return { type: message.type, data: await analyzeCurrentPage() };
@@ -1589,6 +1654,13 @@ async function dispatch(message: PopupMessage): Promise<PopupMessageResult> {
     );
     return { type: message.type, data: result };
   }
+  if (message.type === 'data-backup.export') {
+    return { type: message.type, data: await exportDataBackup() };
+  }
+  if (message.type === 'data-backup.import') {
+    await importDataBackup(message.backup);
+    return { type: message.type, data: { imported: true } };
+  }
   throw new Error('BACKGROUND_MESSAGE_UNSUPPORTED');
 }
 
@@ -1644,9 +1716,15 @@ export default defineBackground({
       requestBatchWake();
       void armConfiguredModerationRecheckAlarm();
     });
-    chrome.runtime.onInstalled.addListener(() => {
+    chrome.runtime.onInstalled.addListener((details) => {
       requestBatchWake();
       void armConfiguredModerationRecheckAlarm();
+      if (details.reason === 'install') {
+        // Lets the dashboard offer to import a backup on its next load,
+        // covering the "reinstalled from a different folder" migration path
+        // where the extension ID (and therefore all local storage) changed.
+        void markFirstRunPending();
+      }
     });
 
     void storageReady

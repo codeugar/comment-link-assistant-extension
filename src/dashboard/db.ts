@@ -4,6 +4,7 @@ import {
   type AttemptError,
   type BatchRunStart,
   type CreatePlanInput,
+  type DashboardBackupData,
   type DashboardBatchStatus,
   type DashboardMeta,
   type DashboardRunKind,
@@ -714,6 +715,23 @@ function validateLegacyBundle(bundle: LegacyImportBundle): void {
     )
   ) {
     throw new DashboardDataError('MIGRATION_INVALID');
+  }
+}
+
+// A full-database restore reuses the legacy bundle's referential-integrity
+// checks (plans/batches/targets/runs/attempts) and additionally verifies the
+// meta store, which the legacy bundle never carried.
+function validateDashboardBackupData(data: DashboardBackupData): void {
+  validateLegacyBundle(data);
+  const metaKeys = new Set<string>();
+  for (const record of data.meta) {
+    if (!record.key || metaKeys.has(record.key)) {
+      throw new DashboardDataError(
+        'MIGRATION_INVALID',
+        'MIGRATION_INVALID:meta'
+      );
+    }
+    metaKeys.add(record.key);
   }
 }
 
@@ -2582,6 +2600,96 @@ export class DashboardRepository {
           updatedAt: at,
         } satisfies DashboardMeta);
         return { imported: true, counts };
+      }
+    );
+  }
+
+  /** Reads every object store as plain arrays for the full data-backup export. */
+  async exportAll(): Promise<DashboardBackupData> {
+    return this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planBatches,
+        DASHBOARD_STORE_NAMES.planTargets,
+        DASHBOARD_STORE_NAMES.runs,
+        DASHBOARD_STORE_NAMES.attempts,
+        DASHBOARD_STORE_NAMES.meta,
+      ],
+      'readonly',
+      async (transaction) => {
+        const [plans, batches, targets, runs, attempts, meta] =
+          await Promise.all([
+            requestResult<Plan[]>(
+              transaction.objectStore(DASHBOARD_STORE_NAMES.plans).getAll()
+            ),
+            requestResult<PlanBatch[]>(
+              transaction
+                .objectStore(DASHBOARD_STORE_NAMES.planBatches)
+                .getAll()
+            ),
+            requestResult<PlanTarget[]>(
+              transaction
+                .objectStore(DASHBOARD_STORE_NAMES.planTargets)
+                .getAll()
+            ),
+            requestResult<Run[]>(
+              transaction.objectStore(DASHBOARD_STORE_NAMES.runs).getAll()
+            ),
+            requestResult<Attempt[]>(
+              transaction.objectStore(DASHBOARD_STORE_NAMES.attempts).getAll()
+            ),
+            requestResult<DashboardMeta[]>(
+              transaction.objectStore(DASHBOARD_STORE_NAMES.meta).getAll()
+            ),
+          ]);
+        return { plans, batches, targets, runs, attempts, meta };
+      }
+    );
+  }
+
+  /**
+   * Replaces every object store with the given backup data. This is a
+   * destructive, all-or-nothing restore used by the data-backup import flow:
+   * validation runs before any store is touched, and every store is cleared
+   * and repopulated inside a single transaction.
+   */
+  async importAll(data: DashboardBackupData): Promise<void> {
+    validateDashboardBackupData(data);
+    await this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planBatches,
+        DASHBOARD_STORE_NAMES.planTargets,
+        DASHBOARD_STORE_NAMES.runs,
+        DASHBOARD_STORE_NAMES.attempts,
+        DASHBOARD_STORE_NAMES.meta,
+      ],
+      'readwrite',
+      async (transaction) => {
+        const planStore = transaction.objectStore(DASHBOARD_STORE_NAMES.plans);
+        const batchStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planBatches
+        );
+        const targetStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planTargets
+        );
+        const runStore = transaction.objectStore(DASHBOARD_STORE_NAMES.runs);
+        const attemptStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.attempts
+        );
+        const metaStore = transaction.objectStore(DASHBOARD_STORE_NAMES.meta);
+        planStore.clear();
+        batchStore.clear();
+        targetStore.clear();
+        runStore.clear();
+        attemptStore.clear();
+        metaStore.clear();
+        for (const plan of data.plans) planStore.put(plan);
+        for (const batch of data.batches) batchStore.put(batch);
+        for (const target of data.targets) targetStore.put(target);
+        for (const run of data.runs) runStore.put(run);
+        for (const attempt of data.attempts) attemptStore.put(attempt);
+        for (const record of data.meta) metaStore.put(record);
       }
     );
   }

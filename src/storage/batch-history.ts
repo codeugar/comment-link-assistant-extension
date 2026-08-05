@@ -69,7 +69,9 @@ const historyEntrySchema: z.ZodType<BatchHistoryEntry> = z
   })
   .strict();
 
-const historySchema = z.array(historyEntrySchema).max(MAX_HISTORY_ENTRIES);
+export const batchHistorySchema = z
+  .array(historyEntrySchema)
+  .max(MAX_HISTORY_ENTRIES);
 
 export function isFailedHistoryStatus(status: BatchItemStatus): boolean {
   return failedItemStatuses.has(status);
@@ -116,7 +118,7 @@ function toHistoryEntry(
 export function parseStoredBatchHistory(
   value: unknown
 ): BatchHistoryEntry[] | null {
-  const parsed = historySchema.safeParse(migrateLegacyBatchHistory(value));
+  const parsed = batchHistorySchema.safeParse(migrateLegacyBatchHistory(value));
   return parsed.success ? parsed.data : null;
 }
 
@@ -167,7 +169,7 @@ export async function getBatchHistory(): Promise<BatchHistoryEntry[]> {
   const stored = await chrome.storage.local.get(HISTORY_STORAGE_KEY);
   const value = stored[HISTORY_STORAGE_KEY];
   const migrated = migrateLegacyBatchHistory(value);
-  const parsed = historySchema.safeParse(migrated);
+  const parsed = batchHistorySchema.safeParse(migrated);
   if (!parsed.success) return [];
   if (migrated !== value) {
     await chrome.storage.local.set({ [HISTORY_STORAGE_KEY]: parsed.data });

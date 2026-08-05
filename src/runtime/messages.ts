@@ -18,6 +18,7 @@ import type {
   PageSubmissionResult,
   PageSubmissionTarget,
 } from '@/page/types';
+import type { DataBackupFile } from '@/storage/data-backup';
 import type { FilterEntryKind, FilterListEntry } from '@/storage/filter-list';
 import type {
   OutboundLinkFollowStatus,
@@ -154,7 +155,9 @@ export type PopupMessage =
       type: 'comment.submit';
       comment: string;
       target: PageSubmissionTarget;
-    };
+    }
+  | { type: 'data-backup.export' }
+  | { type: 'data-backup.import'; backup: unknown };
 
 export interface PreparedComment {
   analysis: PageAnalysis;
@@ -211,7 +214,9 @@ export type PopupMessageResult =
   | {
       type: 'plan.runNext' | 'plan.resume' | 'plan.retryTargets';
       data: BatchSnapshot;
-    };
+    }
+  | { type: 'data-backup.export'; data: DataBackupFile }
+  | { type: 'data-backup.import'; data: { imported: true } };
 
 export type BackgroundResponse =
   | { ok: true; data: PopupMessageResult }

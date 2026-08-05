@@ -9,6 +9,7 @@ import type {
 import type { DashboardSummaryView } from '@/runtime/messages';
 import { sendToBackground } from '@/runtime/messages';
 import { getBatch } from '@/storage/batch';
+import type { DataBackupFile } from '@/storage/data-backup';
 import {
   createDefaultSettings,
   getProviderApiKeys,
@@ -674,4 +675,48 @@ export async function loadProviderApiKeys(): Promise<ProviderApiKeys> {
 export async function loadActiveBatch(): Promise<BatchSnapshot | null> {
   if (isPreviewMode()) return demoBatch;
   return getBatch();
+}
+
+/**
+ * Backup export/import always goes through the background service worker,
+ * the same side of the runtime that owns the dashboard's IndexedDB
+ * (DashboardService/DashboardRepository never open in the dashboard page
+ * itself). The preview build has no background worker to talk to, so it
+ * echoes the in-memory demo state instead.
+ */
+export async function exportDataBackup(): Promise<DataBackupFile> {
+  if (isPreviewMode()) {
+    return {
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      appVersion: 'preview',
+      data: {
+        settings: demoSettings,
+        providerApiKeys: demoApiKeys,
+        outboundLinkLibrary: [],
+        filterList: [],
+        batchHistory: [],
+        dashboard: {
+          plans: demoPlans,
+          batches: [],
+          targets: [],
+          runs: [],
+          attempts: [],
+          meta: [],
+        },
+      },
+    };
+  }
+  const result = await sendToBackground({ type: 'data-backup.export' });
+  return result.data;
+}
+
+export async function importDataBackup(backup: DataBackupFile): Promise<void> {
+  if (isPreviewMode()) {
+    demoSettings = backup.data.settings;
+    demoApiKeys = backup.data.providerApiKeys;
+    demoPlans = backup.data.dashboard.plans;
+    return;
+  }
+  await sendToBackground({ type: 'data-backup.import', backup });
 }

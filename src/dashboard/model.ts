@@ -289,6 +289,17 @@ export interface LegacyImportResult {
   };
 }
 
+/** A full snapshot of every IndexedDB object store, used by the data-backup
+ * export/import feature to migrate a dashboard's entire history. */
+export interface DashboardBackupData {
+  plans: Plan[];
+  batches: PlanBatch[];
+  targets: PlanTarget[];
+  runs: Run[];
+  attempts: Attempt[];
+  meta: DashboardMeta[];
+}
+
 export type FailedPlanTargetStatus = 'no_form' | 'validation_error' | 'failed';
 
 const failedStatuses = new Set<PlanTargetStatus>([

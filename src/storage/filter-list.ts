@@ -45,7 +45,9 @@ const filterEntrySchema: z.ZodType<FilterListEntry> = z
   })
   .strict();
 
-const filterListSchema = z.array(filterEntrySchema).max(MAX_FILTER_ENTRIES);
+export const filterListSchema = z
+  .array(filterEntrySchema)
+  .max(MAX_FILTER_ENTRIES);
 
 // chrome.storage.local has no compare-and-swap transaction. Keep every
 // read-modify-write mutation in one in-memory queue so an overlapping add or
