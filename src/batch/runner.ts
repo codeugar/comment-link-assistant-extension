@@ -45,11 +45,15 @@ const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
 const TARGET_LOAD_GRACE_MS = 30_000;
+// A submit that navigates gets a longer load grace than ordinary opens: the
+// redirect target must finish loading before its verdict means anything, and
+// heavy blog pages with long comment threads routinely need more than 30s.
+const SUBMIT_NAVIGATION_LOAD_GRACE_MS = 120_000;
 // Post-submit verification races the content-script re-injection against a
-// still-loading page, so a failed attempt is usually transient. The recovery
-// alarm ticks every 30s; this window guarantees at least two more attempts
-// before the item is written off as unconfirmed.
-const VERIFY_RETRY_WINDOW_MS = 90_000;
+// still-loading page, so both a thrown attempt and an `unconfirmed` verdict
+// are usually transient. The recovery alarm ticks every 30s; this window
+// guarantees several more attempts before the item is written off.
+const VERIFY_RETRY_WINDOW_MS = 180_000;
 // Heavy / slow pages keep their tab in `loading` far longer than it takes their
 // server-rendered comment form to appear. Because analyze is now load-tolerant,
 // we hand off to analysis on an on-target tab after this short settle instead of
@@ -1239,7 +1243,7 @@ async function advanceDispatchedClick(
   if (!tab) return reopenVerificationTarget(batch, dependencies);
   if (
     tab?.status === 'loading' &&
-    dependencies.now() - item.updatedAt < TARGET_LOAD_GRACE_MS
+    dependencies.now() - item.updatedAt < SUBMIT_NAVIGATION_LOAD_GRACE_MS
   ) {
     return 'wait';
   }
@@ -1319,6 +1323,15 @@ async function verifyDispatchedComment(
       item.prepared.expected.url,
       batch.id
     );
+    // An `unconfirmed` verdict on a page that may still be rendering is not
+    // terminal: leave the batch unwritten (item.updatedAt keeps anchoring the
+    // window) and re-verify on later wakes until the window closes.
+    if (
+      result.status === 'unconfirmed' &&
+      dependencies.now() - item.updatedAt < VERIFY_RETRY_WINDOW_MS
+    ) {
+      return 'wait';
+    }
     return saveSubmissionResult(batch, result, dependencies, true);
   } catch (error) {
     // A tab that left the submission page is a real signal and stays terminal.

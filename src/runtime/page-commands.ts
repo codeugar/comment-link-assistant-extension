@@ -418,9 +418,13 @@ export async function verifyTabSubmission(
   >,
   expectedUrl: string
 ): Promise<PageSubmissionResult> {
+  // Verifying a half-loaded page is how a published comment gets misread as a
+  // failure; the in-page verdict poll only starts once the load settles.
+  await waitForTabLoad(tabId);
   const current = await chrome.tabs.get(tabId).catch(() => null);
-  // A WordPress moderation receipt is authoritative. A bare #comment-ID is
-  // only an acceptance receipt, so public display still requires a DOM URL.
+  // Both WordPress redirect receipts are authoritative: `unapproved` proves
+  // moderation acceptance, a fresh `#comment-<id>` anchor proves publication —
+  // even when the rendered comment list is paginated or still loading.
   const receipt = current
     ? getWordPressSubmitReceipt(current.url ?? '', expectedUrl)
     : null;
@@ -443,10 +447,18 @@ export async function verifyTabSubmission(
     if (receipt === 'pending_moderation' && result.status !== 'published') {
       return pendingModerationSubmission(prepared.fingerprint);
     }
+    if (receipt === 'published' && result.status === 'unconfirmed') {
+      return publishedSubmission(prepared.fingerprint);
+    }
     return result;
   } catch (error) {
-    if (receipt !== 'pending_moderation') throw error;
-    return pendingModerationSubmission(prepared.fingerprint);
+    if (receipt === 'pending_moderation') {
+      return pendingModerationSubmission(prepared.fingerprint);
+    }
+    if (receipt === 'published') {
+      return publishedSubmission(prepared.fingerprint);
+    }
+    throw error;
   }
 }
 
@@ -541,10 +553,16 @@ export async function submitCurrentPage(
         if (receipt === 'pending_moderation' && result.status !== 'published') {
           return pendingModerationSubmission(preparation.prepared.fingerprint);
         }
+        if (receipt === 'published' && result.status === 'unconfirmed') {
+          return publishedSubmission(preparation.prepared.fingerprint);
+        }
         return result;
       } catch {
         if (receipt === 'pending_moderation') {
           return pendingModerationSubmission(preparation.prepared.fingerprint);
+        }
+        if (receipt === 'published') {
+          return publishedSubmission(preparation.prepared.fingerprint);
         }
         return unconfirmedSubmission(preparation.prepared.fingerprint);
       }
@@ -607,6 +625,15 @@ function pendingModerationSubmission(
   return {
     status: 'pending_moderation',
     message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
+    fingerprint,
+    clickOccurred: true,
+  };
+}
+
+function publishedSubmission(fingerprint: string): PageSubmissionResult {
+  return {
+    status: 'published',
+    message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
     fingerprint,
     clickOccurred: true,
   };
