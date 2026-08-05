@@ -275,7 +275,8 @@ const zh = {
   diagnosticsCopied: '诊断信息已复制',
   copied: '已复制',
   settingsTitle: '看板设置',
-  settingsDescription: '看板读取扩展当前配置，运行设置仍由侧边栏统一管理。',
+  settingsDescription:
+    '配置服务商、API Key、推广网站与界面语言，保存后侧边栏批次会立即生效。',
   provider: '评论生成服务',
   configuredSites: '已配置推广网站',
   openSidePanel: '打开扩展侧边栏',
@@ -593,7 +594,7 @@ const en: Record<keyof typeof zh, string> = {
   copied: 'Copied',
   settingsTitle: 'Dashboard settings',
   settingsDescription:
-    'The dashboard reads your extension configuration. Run settings remain in the side panel.',
+    'Configure the provider, API keys, promoting sites, and interface language. Side panel batches use these settings as soon as you save.',
   provider: 'Comment service',
   configuredSites: 'Configured promoting sites',
   openSidePanel: 'Open extension side panel',

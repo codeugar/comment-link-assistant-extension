@@ -41,17 +41,6 @@ async function clickButton(label: string): Promise<void> {
   });
 }
 
-async function enterInputValue(input: HTMLInputElement, value: string) {
-  const setValue = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    'value'
-  )?.set;
-  await act(async () => {
-    setValue?.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-}
-
 async function enterTextareaValue(
   textarea: HTMLTextAreaElement,
   value: string
@@ -156,19 +145,22 @@ describe('filter-list preflight', () => {
   });
 });
 describe('side panel navigation', () => {
-  it('opens on the target queue and uses a separate settings page', async () => {
+  it('shows only the target queue, with no settings screen to toggle to', async () => {
     await renderSidePanel();
 
     expect(container.textContent).toContain('batchSetupTitle');
     expect(container.textContent).not.toContain('settingsTitle');
+    expect(
+      Array.from(container.querySelectorAll('button')).some(
+        (candidate) => candidate.textContent?.trim() === 'openSettings'
+      )
+    ).toBe(false);
+  });
 
-    await clickButton('openSettings');
-    expect(container.textContent).toContain('settingsTitle');
-    expect(container.textContent).not.toContain('batchSetupTitle');
+  it('always shows a prominent open-dashboard action', async () => {
+    await renderSidePanel();
 
-    await clickButton('backToQueue');
-    expect(container.textContent).toContain('batchSetupTitle');
-    expect(container.textContent).not.toContain('settingsTitle');
+    expect(container.querySelector('.dashboard-link')).not.toBeNull();
   });
 
   it('opens the full dashboard in an extension tab', async () => {
@@ -186,39 +178,79 @@ describe('side panel navigation', () => {
     });
   });
 
-  it('saves incomplete settings and stays on the settings page', async () => {
+  it('directs an unconfigured batch attempt to the dashboard instead of a local settings screen', async () => {
     await renderSidePanel();
-    await clickButton('openSettings');
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, 'https://blog.example/post');
 
-    const websiteInput = container.querySelector<HTMLInputElement>(
-      'input[placeholder="websiteUrlPlaceholder"]'
-    );
-    expect(websiteInput).not.toBeNull();
-    if (!websiteInput) return;
-    await enterInputValue(websiteInput, 'https:seed-audio1.com');
-
-    await clickButton('saveSettings');
+    await clickButton('prepareBatch');
 
     await vi.waitFor(() => {
-      expect(container.textContent).toContain('settingsSaved');
+      expect(container.textContent).toContain('missingSettings');
     });
-    expect(container.textContent).toContain('settingsTitle');
-    expect(container.textContent).not.toContain('batchSetupTitle');
+    expect(container.textContent).not.toContain('settingsTitle');
   });
 
-  it('shows a settings-specific message when local saving fails', async () => {
-    await renderSidePanel();
-    await clickButton('openSettings');
-    vi.spyOn(chrome.storage.local, 'set').mockRejectedValueOnce(
-      new Error('STORAGE_WRITE_FAILED')
-    );
-
-    await clickButton('saveSettings');
-
-    await vi.waitFor(() => {
-      expect(container.textContent).toContain('settingsSaveFailed');
+  it('picks up API keys saved elsewhere (e.g. the dashboard) without a reload', async () => {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: {
+        provider: 'deepseek',
+        websiteUrl: 'https://product.example',
+        displayName: '',
+        email: '',
+        linkMode: 'prefer-website-field',
+      },
     });
-    expect(container.textContent).not.toContain('commentFailed');
+    vi.spyOn(chrome.permissions, 'request').mockImplementation(
+      (async () => true) as never
+    );
+    const sendMessage = vi
+      .spyOn(chrome.runtime, 'sendMessage')
+      .mockImplementation((async (message: unknown) => {
+        const typed = message as { type: string };
+        if (typed.type !== 'batch.preview') {
+          throw new Error('UNEXPECTED_MESSAGE');
+        }
+        return {
+          ok: true,
+          data: {
+            type: 'batch.preview',
+            data: {
+              url: 'https://product.example/',
+              title: 'Title',
+              description: 'Description',
+            },
+          },
+        };
+      }) as never);
+
+    await renderSidePanel();
+    const targetEditor =
+      container.querySelector<HTMLTextAreaElement>('.target-editor');
+    if (!targetEditor) throw new Error('TARGET_EDITOR_NOT_FOUND');
+    await enterTextareaValue(targetEditor, 'https://blog.example/post');
+    await clickButton('prepareBatch');
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('missingSettings');
+    });
+
+    await act(async () => {
+      await chrome.storage.local.set({
+        [PROVIDER_API_KEYS_STORAGE_KEY]: {
+          deepseekApiKey: 'deepseek-key',
+          kieApiKey: '',
+        },
+      });
+    });
+
+    await clickButton('prepareBatch');
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'batch.preview' })
+      );
+    });
   });
 
   it('shows the current configured model after an older batch completes', async () => {
@@ -1026,12 +1058,6 @@ describe('multi-site profiles', () => {
     activeSiteId: 'seed',
   };
 
-  function findButton(label: string): HTMLButtonElement | undefined {
-    return Array.from(container.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent?.trim() === label
-    );
-  }
-
   async function selectOption(select: HTMLSelectElement, value: string) {
     const setValue = Object.getOwnPropertyDescriptor(
       HTMLSelectElement.prototype,
@@ -1056,64 +1082,6 @@ describe('multi-site profiles', () => {
         : {}),
     });
   }
-
-  it('switches the edited fields when the settings site selector changes', async () => {
-    await seed();
-    await renderSidePanel();
-    await clickButton('openSettings');
-
-    const websiteInput = container.querySelector<HTMLInputElement>(
-      'input[placeholder="websiteUrlPlaceholder"]'
-    );
-    expect(websiteInput?.value).toBe('https://seedaudio.example');
-
-    const siteSelect = container.querySelector<HTMLSelectElement>(
-      '.site-manager select'
-    );
-    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
-    await selectOption(siteSelect, 'muse');
-
-    expect(websiteInput?.value).toBe('https://museimage.example');
-  });
-
-  it('disables remove for a single site and enables it after adding one', async () => {
-    await renderSidePanel();
-    await clickButton('openSettings');
-
-    expect(findButton('siteRemove')?.disabled).toBe(true);
-    await clickButton('siteAdd');
-    expect(findButton('siteRemove')?.disabled).toBe(false);
-  });
-
-  it('persists an edited multi-site configuration on save', async () => {
-    await seed();
-    await renderSidePanel();
-    await clickButton('openSettings');
-
-    const siteSelect = container.querySelector<HTMLSelectElement>(
-      '.site-manager select'
-    );
-    if (!siteSelect) throw new Error('SITE_SELECT_NOT_FOUND');
-    await selectOption(siteSelect, 'muse');
-    const labelInput = container.querySelector<HTMLInputElement>(
-      'input[placeholder="siteLabelPlaceholder"]'
-    );
-    if (!labelInput) throw new Error('LABEL_INPUT_NOT_FOUND');
-    await enterInputValue(labelInput, 'Muse Renamed');
-
-    await clickButton('saveSettings');
-
-    await vi.waitFor(() => {
-      expect(container.textContent).toContain('settingsSaved');
-    });
-    const stored = (await chrome.storage.local.get(SETTINGS_STORAGE_KEY))[
-      SETTINGS_STORAGE_KEY
-    ] as { sites: Array<{ id: string; label: string }> };
-    expect(stored.sites).toHaveLength(2);
-    expect(stored.sites.find((site) => site.id === 'muse')?.label).toBe(
-      'Muse Renamed'
-    );
-  });
 
   it('starts a batch for the site chosen in the setup picker', async () => {
     await seed();

@@ -114,7 +114,7 @@
     "message": "评论提交失败"
   },
   "missingSettings": {
-    "message": "请先完成必填设置。"
+    "message": "请先在看板中完成必填设置（服务商 API Key 与推广网站）。"
   },
   "invalidWebsiteUrl": {
     "message": "请输入有效的 HTTP 或 HTTPS 网站地址。"
@@ -375,10 +375,10 @@
     "message": "这个评论组件托管在第三方域名下，需要手动发布。"
   },
   "displayNameRequiredForTarget": {
-    "message": "此表单要求填写显示名称，请在下一批次前到设置中补充。"
+    "message": "此表单要求填写显示名称，请在下一批次前到看板设置中补充。"
   },
   "emailRequiredForTarget": {
-    "message": "此表单要求填写邮箱，请在下一批次前到设置中补充。"
+    "message": "此表单要求填写邮箱，请在下一批次前到看板设置中补充。"
   },
   "formNeedsReview": {
     "message": "检测到可能的表单，但无法安全确认字段对应关系，因此没有提交。"
