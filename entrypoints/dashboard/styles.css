@@ -2846,8 +2846,20 @@ button.outbound-link-tag.is-selected {
   color: var(--ink);
 }
 
-.outbound-library-table {
+.outbound-library-table,
+.outbound-import-preview-table {
   width: 100%;
+}
+
+.outbound-import-preview-table td strong,
+.outbound-import-preview-table td small {
+  display: block;
+}
+
+.outbound-import-preview-table td small {
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
 }
 
 .outbound-library-table td strong,

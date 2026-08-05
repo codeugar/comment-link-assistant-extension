@@ -8,6 +8,7 @@ import {
   NewPlanDialog,
   OutboundLinkLibraryPage,
 } from './App';
+import { t } from './copy';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -79,6 +80,29 @@ async function enterTextarea(textarea: HTMLTextAreaElement, value: string) {
     setValue?.call(textarea, value);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
   });
+}
+
+async function selectFile(input: HTMLInputElement, file: File) {
+  Object.defineProperty(input, 'files', {
+    value: [file],
+    configurable: true,
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  maxAttempts = 20
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (predicate()) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  throw new Error('Timed out waiting for expected update');
 }
 
 beforeEach(() => {
@@ -277,6 +301,50 @@ describe('dashboard library and plan flow components', () => {
         'input[aria-label="从外链库选择 https://domain-1.example/article-domain-1"]'
       )
     ).toBeNull();
+  });
+
+  it('shows parsed row URLs and friendly error copy after importing a file', async () => {
+    await act(async () => {
+      root.render(
+        <OutboundLinkLibraryPage
+          entries={[]}
+          loading={false}
+          refreshing={false}
+          onRefresh={vi.fn()}
+          onEntriesChange={vi.fn()}
+          onToast={vi.fn()}
+          selectedIds={new Set()}
+          onToggleSelected={vi.fn()}
+          onCreatePlan={vi.fn()}
+        />
+      );
+    });
+
+    const fileInput =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+
+    const csv = [
+      'https://example.com/post-1,是,否,否',
+      ',是,否,否',
+      'https://example.com/post-2,否,是,是',
+    ].join('\n');
+    const file = new File([csv], 'links.csv', { type: 'text/csv' });
+    await selectFile(fileInput as HTMLInputElement, file);
+
+    await waitUntil(() =>
+      Boolean(container.textContent?.includes('https://example.com/post-1'))
+    );
+
+    expect(container.textContent).toContain('https://example.com/post-1');
+    expect(container.textContent).toContain('https://example.com/post-2');
+
+    const expectedRowError = t('outboundLinkImportRowError', [
+      2,
+      t('outboundLinkImportErrorUrlRequired'),
+    ]);
+    expect(container.textContent).toContain(expectedRowError);
+    expect(container.textContent).not.toContain('URL_REQUIRED');
   });
 
   it('keeps site input errors in the shared promoting-site dialog', async () => {
