@@ -1,3 +1,4 @@
+import type { DataBackupFile } from '@/storage/data-backup';
 import type { OutboundLinkLibraryEntry } from '@/storage/outbound-link-library';
 import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
 import { act } from 'react';
@@ -44,6 +45,29 @@ function entry(
     captchaRequired: null,
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function sampleBackup(): DataBackupFile {
+  return {
+    formatVersion: 1,
+    exportedAt: '2026-01-01T00:00:00.000Z',
+    appVersion: '0.5.1',
+    data: {
+      settings,
+      providerApiKeys: { deepseekApiKey: 'existing-key', kieApiKey: '' },
+      outboundLinkLibrary: [entry('backup-link')],
+      filterList: [],
+      batchHistory: [],
+      dashboard: {
+        plans: [],
+        batches: [],
+        targets: [],
+        runs: [],
+        attempts: [],
+        meta: [],
+      },
+    },
   };
 }
 
@@ -399,6 +423,10 @@ describe('settings drawer', () => {
           apiKeys={apiKeys}
           onClose={vi.fn()}
           onSave={onSave}
+          onExportData={vi.fn(async () => sampleBackup())}
+          onImportData={vi.fn(async () => undefined)}
+          onImportComplete={vi.fn()}
+          onToast={vi.fn()}
         />
       );
     });
@@ -440,6 +468,10 @@ describe('settings drawer', () => {
           apiKeys={apiKeys}
           onClose={vi.fn()}
           onSave={vi.fn(async () => undefined)}
+          onExportData={vi.fn(async () => sampleBackup())}
+          onImportData={vi.fn(async () => undefined)}
+          onImportComplete={vi.fn()}
+          onToast={vi.fn()}
         />
       );
     });
@@ -461,6 +493,10 @@ describe('settings drawer', () => {
           apiKeys={apiKeys}
           onClose={vi.fn()}
           onSave={onSave}
+          onExportData={vi.fn(async () => sampleBackup())}
+          onImportData={vi.fn(async () => undefined)}
+          onImportComplete={vi.fn()}
+          onToast={vi.fn()}
         />
       );
     });
@@ -471,5 +507,120 @@ describe('settings drawer', () => {
       expect(container.textContent).toContain('设置无法保存');
     });
     expect(container.querySelector('.settings-drawer')).not.toBeNull();
+  });
+
+  it('imports a backup file after showing a confirm dialog with a summary', async () => {
+    const backup = sampleBackup();
+    const onImportData = vi.fn(async () => undefined);
+    const onImportComplete = vi.fn();
+    const onToast = vi.fn();
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={vi.fn(async () => undefined)}
+          onExportData={vi.fn(async () => backup)}
+          onImportData={onImportData}
+          onImportComplete={onImportComplete}
+          onToast={onToast}
+        />
+      );
+    });
+
+    const fileInput =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    const file = new File([JSON.stringify(backup)], 'backup.json', {
+      type: 'application/json',
+    });
+    await selectFile(fileInput as HTMLInputElement, file);
+
+    await waitUntil(() =>
+      Boolean(container.querySelector('.data-backup-confirm-dialog'))
+    );
+    expect(container.textContent).toContain(
+      t('dataBackupSummaryOutboundLinks', [1])
+    );
+
+    await click(button(t('dataBackupImportConfirmAction')));
+
+    await vi.waitFor(() => {
+      expect(onImportData).toHaveBeenCalledWith(backup);
+    });
+    expect(onImportComplete).toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(t('dataBackupImportSuccess'));
+    expect(container.querySelector('.data-backup-confirm-dialog')).toBeNull();
+  });
+
+  it('cancels a pending import without calling onImportData', async () => {
+    const backup = sampleBackup();
+    const onImportData = vi.fn(async () => undefined);
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={vi.fn(async () => undefined)}
+          onExportData={vi.fn(async () => backup)}
+          onImportData={onImportData}
+          onImportComplete={vi.fn()}
+          onToast={vi.fn()}
+        />
+      );
+    });
+
+    const fileInput =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File([JSON.stringify(backup)], 'backup.json', {
+      type: 'application/json',
+    });
+    await selectFile(fileInput as HTMLInputElement, file);
+
+    await waitUntil(() =>
+      Boolean(container.querySelector('.data-backup-confirm-dialog'))
+    );
+    await click(button(t('cancel')));
+
+    expect(container.querySelector('.data-backup-confirm-dialog')).toBeNull();
+    expect(onImportData).not.toHaveBeenCalled();
+  });
+
+  it('shows an error toast for an invalid backup file', async () => {
+    const onToast = vi.fn();
+    await act(async () => {
+      root.render(
+        <SettingsDrawer
+          open
+          settings={settings}
+          apiKeys={apiKeys}
+          onClose={vi.fn()}
+          onSave={vi.fn(async () => undefined)}
+          onExportData={vi.fn(async () => sampleBackup())}
+          onImportData={vi.fn(async () => undefined)}
+          onImportComplete={vi.fn()}
+          onToast={onToast}
+        />
+      );
+    });
+
+    const fileInput =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    const file = new File(['not json'], 'backup.json', {
+      type: 'application/json',
+    });
+    await selectFile(fileInput as HTMLInputElement, file);
+
+    await vi.waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(
+        t('dataBackupImportInvalid'),
+        'error'
+      );
+    });
+    expect(container.querySelector('.data-backup-confirm-dialog')).toBeNull();
   });
 });

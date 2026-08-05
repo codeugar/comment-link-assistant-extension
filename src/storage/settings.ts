@@ -176,7 +176,7 @@ export function buildBatchSettingsSnapshot(
   };
 }
 
-const providerApiKeysSchema = z.object({
+export const providerApiKeysSchema = z.object({
   deepseekApiKey: z.string().trim().max(4_096),
   kieApiKey: z.string().trim().max(4_096),
 });

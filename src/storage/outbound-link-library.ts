@@ -99,7 +99,7 @@ const outboundLinkLibraryEntrySchema: z.ZodType<OutboundLinkLibraryEntry> = z
   })
   .strict();
 
-const outboundLinkLibrarySchema = z
+export const outboundLinkLibrarySchema = z
   .array(outboundLinkLibraryEntrySchema)
   .max(MAX_OUTBOUND_LINK_ENTRIES);
 

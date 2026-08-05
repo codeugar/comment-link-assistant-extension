@@ -323,6 +323,32 @@ const zh = {
   startedSuccess: '批次已启动',
   stoppedSuccess: '批次已停止',
   retryStarted: '已开始重试',
+  dataBackupSectionTitle: '数据备份',
+  dataBackupSectionDescription:
+    '导出或导入全部本地数据，用于更换安装位置或重装扩展后的数据迁移。',
+  dataBackupApiKeyCaution:
+    '备份文件包含 API 密钥等敏感信息，请妥善保管，不要分享给他人。',
+  dataBackupExportAction: '导出数据',
+  dataBackupImportAction: '导入数据',
+  dataBackupExportSuccess: '数据已导出',
+  dataBackupExportFailed: '数据导出失败',
+  dataBackupImportInvalid: '备份文件无效或已损坏',
+  dataBackupImportVersionUnsupported:
+    '该备份文件版本高于当前扩展支持的版本，请更新扩展后再试',
+  dataBackupImportConfirmTitle: '确认导入数据？',
+  dataBackupImportConfirmDescription:
+    '导入会替换当前的全部设置、外链库、过滤列表、批次历史与计划数据，且无法撤销。',
+  dataBackupImportConfirmAction: '确认导入',
+  dataBackupImportSuccess: '数据导入完成',
+  dataBackupImportFailed: '数据导入失败',
+  dataBackupSummarySites: '推广网站 {0} 个',
+  dataBackupSummaryOutboundLinks: '外链库 {0} 条',
+  dataBackupSummaryFilters: '过滤列表 {0} 条',
+  dataBackupSummaryHistory: '批次历史 {0} 条',
+  dataBackupSummaryPlans: '计划 {0} 个',
+  firstRunBannerDescription: '检测到全新安装，要从备份文件导入数据吗？',
+  firstRunBannerImportAction: '导入备份',
+  firstRunBannerDismissAction: '暂不需要',
 };
 
 const en: Record<keyof typeof zh, string> = {
@@ -647,6 +673,33 @@ const en: Record<keyof typeof zh, string> = {
   startedSuccess: 'Batch started',
   stoppedSuccess: 'Batch stopped',
   retryStarted: 'Retry started',
+  dataBackupSectionTitle: 'Data backup',
+  dataBackupSectionDescription:
+    'Export or import all local data, useful when moving the extension to a new install location or reinstalling it.',
+  dataBackupApiKeyCaution:
+    'The backup file contains your API keys and other sensitive data. Keep it safe and do not share it.',
+  dataBackupExportAction: 'Export data',
+  dataBackupImportAction: 'Import data',
+  dataBackupExportSuccess: 'Data exported',
+  dataBackupExportFailed: 'Could not export data',
+  dataBackupImportInvalid: 'The backup file is invalid or corrupted',
+  dataBackupImportVersionUnsupported:
+    'This backup was created by a newer version of the extension. Update the extension and try again.',
+  dataBackupImportConfirmTitle: 'Import this backup?',
+  dataBackupImportConfirmDescription:
+    'Importing replaces all current settings, the outbound link library, the filter list, batch history, and plan data. This cannot be undone.',
+  dataBackupImportConfirmAction: 'Confirm import',
+  dataBackupImportSuccess: 'Data import complete',
+  dataBackupImportFailed: 'Could not import the backup',
+  dataBackupSummarySites: '{0} promoting sites',
+  dataBackupSummaryOutboundLinks: '{0} outbound links',
+  dataBackupSummaryFilters: '{0} filter entries',
+  dataBackupSummaryHistory: '{0} batch history entries',
+  dataBackupSummaryPlans: '{0} plans',
+  firstRunBannerDescription:
+    'This looks like a fresh install. Import data from a backup file?',
+  firstRunBannerImportAction: 'Import backup',
+  firstRunBannerDismissAction: 'Not now',
 };
 
 export type CopyKey = keyof typeof zh;

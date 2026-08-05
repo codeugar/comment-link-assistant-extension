@@ -29,6 +29,14 @@ import {
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import {
+  DataBackupError,
+  type DataBackupFile,
+  clearFirstRunPending,
+  isDefaultExtensionSettings,
+  isFirstRunPending,
+  parseDataBackupFile,
+} from '@/storage/data-backup';
+import {
   type FilterEntryKind,
   type FilterListEntry,
   findMatchingFilterEntry,
@@ -114,6 +122,8 @@ import { ModerationRecheckPage } from './ModerationRecheckPage';
 import {
   DASHBOARD_REVISION_KEY,
   dashboardRequest,
+  exportDataBackup,
+  importDataBackup,
   isPreviewMode,
   loadActiveBatch,
   loadDashboardSummary,
@@ -2261,12 +2271,193 @@ function PlansPage({
   );
 }
 
+function dataBackupSummaryLines(backup: DataBackupFile): string[] {
+  return [
+    t('dataBackupSummarySites', [backup.data.settings.sites.length]),
+    t('dataBackupSummaryOutboundLinks', [
+      backup.data.outboundLinkLibrary.length,
+    ]),
+    t('dataBackupSummaryFilters', [backup.data.filterList.length]),
+    t('dataBackupSummaryHistory', [backup.data.batchHistory.length]),
+    t('dataBackupSummaryPlans', [backup.data.dashboard.plans.length]),
+  ];
+}
+
+function dataBackupImportErrorCopy(error: unknown): string {
+  if (
+    error instanceof DataBackupError &&
+    error.code === 'BACKUP_FORMAT_VERSION_UNSUPPORTED'
+  ) {
+    return t('dataBackupImportVersionUnsupported');
+  }
+  return t('dataBackupImportInvalid');
+}
+
+/**
+ * Reads and validates a backup JSON file, then shows a confirm dialog
+ * summarizing what will be replaced before calling `onImportData`. Shared by
+ * the settings drawer's "import data" control and the first-run banner so
+ * the parse → confirm → import flow only lives in one place.
+ */
+function DataBackupImportButton({
+  label,
+  onImportData,
+  onToast,
+  onImported,
+  disabled,
+}: {
+  label: string;
+  onImportData: (backup: DataBackupFile) => Promise<void>;
+  onToast: (message: string, kind?: Toast['kind']) => void;
+  onImported?: () => void;
+  disabled?: boolean;
+}) {
+  const [pendingImport, setPendingImport] = useState<DataBackupFile | null>(
+    null
+  );
+  const [importing, setImporting] = useState(false);
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const backup = parseDataBackupFile(JSON.parse(text));
+      setPendingImport(backup);
+    } catch (error) {
+      onToast(dataBackupImportErrorCopy(error), 'error');
+    }
+  };
+
+  const cancelImport = () => {
+    if (importing) return;
+    setPendingImport(null);
+  };
+
+  const confirmImport = async () => {
+    if (!pendingImport || importing) return;
+    setImporting(true);
+    try {
+      await onImportData(pendingImport);
+      onToast(t('dataBackupImportSuccess'));
+      setPendingImport(null);
+      onImported?.();
+    } catch {
+      onToast(t('dataBackupImportFailed'), 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <>
+      <label className="secondary-button file-button">
+        <UploadSimple size={17} aria-hidden />
+        {label}
+        <input
+          type="file"
+          accept="application/json"
+          disabled={disabled}
+          onChange={handleFileChange}
+        />
+      </label>
+      {pendingImport ? (
+        <div className="dialog-backdrop">
+          <div
+            className="confirm-dialog data-backup-confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="data-backup-import-title"
+            aria-describedby="data-backup-import-description"
+          >
+            <span className="confirm-danger-icon">
+              <WarningCircle size={29} weight="fill" aria-hidden />
+            </span>
+            <h2 id="data-backup-import-title">
+              {t('dataBackupImportConfirmTitle')}
+            </h2>
+            <p id="data-backup-import-description">
+              {t('dataBackupImportConfirmDescription')}
+            </p>
+            <ul className="data-backup-summary-list">
+              {dataBackupSummaryLines(pendingImport).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={cancelImport}
+                disabled={importing}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={confirmImport}
+                disabled={importing}
+              >
+                {importing ? (
+                  <SpinnerGap size={18} className="is-spinning" aria-hidden />
+                ) : (
+                  <UploadSimple size={18} aria-hidden />
+                )}
+                {t('dataBackupImportConfirmAction')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function FirstRunImportBanner({
+  onImportData,
+  onToast,
+  onImported,
+  onDismiss,
+}: {
+  onImportData: (backup: DataBackupFile) => Promise<void>;
+  onToast: (message: string, kind?: Toast['kind']) => void;
+  onImported: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="first-run-banner" aria-live="polite">
+      <span className="first-run-banner-icon">
+        <Database size={19} weight="bold" aria-hidden />
+      </span>
+      <p className="first-run-banner-text">{t('firstRunBannerDescription')}</p>
+      <div className="first-run-banner-actions">
+        <DataBackupImportButton
+          label={t('firstRunBannerImportAction')}
+          onImportData={onImportData}
+          onToast={onToast}
+          onImported={onImported}
+        />
+        <button type="button" className="secondary-button" onClick={onDismiss}>
+          <X size={15} aria-hidden />
+          {t('firstRunBannerDismissAction')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsDrawer({
   open,
   settings,
   apiKeys,
   onClose,
   onSave,
+  onExportData,
+  onImportData,
+  onImportComplete,
+  onToast,
 }: {
   open: boolean;
   settings: ExtensionSettings;
@@ -2276,12 +2467,17 @@ export function SettingsDrawer({
     settings: ExtensionSettings,
     apiKeys: ProviderApiKeys
   ) => Promise<void>;
+  onExportData: () => Promise<DataBackupFile>;
+  onImportData: (backup: DataBackupFile) => Promise<void>;
+  onImportComplete: () => void;
+  onToast: (message: string, kind?: Toast['kind']) => void;
 }) {
   const drawerRef = useRef<HTMLDialogElement>(null);
   const [draftSettings, setDraftSettings] = useState(settings);
   const [draftApiKeys, setDraftApiKeys] = useState(apiKeys);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [exportingBackup, setExportingBackup] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -2358,6 +2554,28 @@ export function SettingsDrawer({
     const window = await chrome.windows.getCurrent();
     if (window.id !== undefined) {
       await chrome.sidePanel.open({ windowId: window.id });
+    }
+  };
+
+  const handleExportBackup = async () => {
+    if (exportingBackup) return;
+    setExportingBackup(true);
+    try {
+      const backup = await onExportData();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `comment-link-assistant-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      onToast(t('dataBackupExportSuccess'));
+    } catch {
+      onToast(t('dataBackupExportFailed'), 'error');
+    } finally {
+      setExportingBackup(false);
     }
   };
 
@@ -2609,6 +2827,39 @@ export function SettingsDrawer({
               <option value="en">{t('languageEnglish')}</option>
             </select>
           </label>
+
+          <div className="form-field data-backup-field">
+            <span>{t('dataBackupSectionTitle')}</span>
+            <p className="website-field-hint">
+              {t('dataBackupSectionDescription')}
+            </p>
+            <p className="website-field-hint data-backup-caution">
+              <Warning size={14} weight="bold" aria-hidden />
+              {t('dataBackupApiKeyCaution')}
+            </p>
+            <div className="data-backup-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleExportBackup}
+                disabled={exportingBackup || saving}
+              >
+                {exportingBackup ? (
+                  <SpinnerGap size={17} className="is-spinning" aria-hidden />
+                ) : (
+                  <DownloadSimple size={17} aria-hidden />
+                )}
+                {t('dataBackupExportAction')}
+              </button>
+              <DataBackupImportButton
+                label={t('dataBackupImportAction')}
+                onImportData={onImportData}
+                onToast={onToast}
+                onImported={onImportComplete}
+                disabled={saving}
+              />
+            </div>
+          </div>
 
           <div className="form-messages" aria-live="polite">
             {formError ? <p className="form-error">{formError}</p> : null}
@@ -5415,8 +5666,10 @@ export default function App() {
     useState<PlanTargetWithAttempts | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [firstRunBannerVisible, setFirstRunBannerVisible] = useState(false);
   const refreshToken = useRef(0);
   const outboundLinkLibraryLoadToken = useRef(0);
+  const firstRunCheckedRef = useRef(false);
 
   useEffect(() => {
     const available = new Set(outboundLinkLibrary.map((entry) => entry.id));
@@ -5531,6 +5784,23 @@ export default function App() {
     document.documentElement.lang = locale();
     document.title = t('appName');
   }, [settings.locale]);
+
+  // Offers the first-run "import a backup?" prompt exactly once per load,
+  // and only when nothing has been configured yet (a brand-new install, not
+  // someone who already set the extension up by hand).
+  useEffect(() => {
+    if (isPreviewMode() || loading || firstRunCheckedRef.current) return;
+    firstRunCheckedRef.current = true;
+    isFirstRunPending()
+      .then((pending) => {
+        if (pending && isDefaultExtensionSettings(settings)) {
+          setFirstRunBannerVisible(true);
+        }
+      })
+      .catch(() => {
+        // A storage read failure should not block the rest of the dashboard.
+      });
+  }, [loading, settings]);
 
   useEffect(() => {
     void refreshOutboundLinkLibrary();
@@ -5755,6 +6025,27 @@ export default function App() {
     pushToast(translate('settingsSaved'));
   };
 
+  const handleExportData = useCallback(() => exportDataBackup(), []);
+
+  const handleImportData = useCallback(
+    (backup: DataBackupFile) => importDataBackup(backup),
+    []
+  );
+
+  const handleDataBackupImported = useCallback(() => {
+    setFirstRunBannerVisible(false);
+    void refresh();
+    void refreshOutboundLinkLibrary();
+  }, [refresh, refreshOutboundLinkLibrary]);
+
+  const dismissFirstRunBanner = useCallback(() => {
+    setFirstRunBannerVisible(false);
+    void clearFirstRunPending().catch(() => {
+      // The banner already hid itself; a storage write failure just means it
+      // may reappear on the next load, which is harmless.
+    });
+  }, []);
+
   const createPlan = async (input: {
     name: string;
     siteId: string;
@@ -5900,6 +6191,14 @@ export default function App() {
         }}
       />
       <div className="app-content">
+        {!loading && firstRunBannerVisible ? (
+          <FirstRunImportBanner
+            onImportData={handleImportData}
+            onToast={pushToast}
+            onImported={handleDataBackupImported}
+            onDismiss={dismissFirstRunBanner}
+          />
+        ) : null}
         {loading ? (
           <div className="page-loading" aria-live="polite">
             <BrandMark />
@@ -6006,6 +6305,10 @@ export default function App() {
         apiKeys={apiKeys}
         onClose={() => setSettingsOpen(false)}
         onSave={saveExtensionSettings}
+        onExportData={handleExportData}
+        onImportData={handleImportData}
+        onImportComplete={handleDataBackupImported}
+        onToast={pushToast}
       />
       <NewPlanDialog
         open={newPlanOpen}
