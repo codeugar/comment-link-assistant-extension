@@ -2012,22 +2012,6 @@ input[type="checkbox"] {
   font-size: 13px;
 }
 
-.settings-site-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.settings-site-row select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.settings-site-row .secondary-button,
-.settings-site-row .danger-text-button {
-  flex: 0 0 auto;
-}
-
 .filter-list-drawer {
   width: min(520px, 100vw);
 }
@@ -4023,4 +4007,225 @@ button.outbound-link-tag.is-selected {
 
 .anchor-mix-warning {
   color: var(--amber);
+}
+
+/* Websites page: the site roster on the left, the selected site's profile and
+   anchor mix on the right. */
+.sites-page {
+  min-height: 100%;
+  background: rgba(255, 252, 245, 0.2);
+}
+
+.sites-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  padding: 0 42px 42px;
+}
+
+/* The panes sit inside the page grid, so the card's own page margin would
+   double up on the padding already set above. */
+.sites-layout > .surface-card {
+  margin: 0;
+  padding: 18px;
+}
+
+.sites-list-pane h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.sites-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.sites-list button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sites-list button:hover {
+  background: rgba(255, 252, 245, 0.75);
+}
+
+.sites-list button.is-active {
+  border-color: var(--line-strong);
+  background: var(--paper);
+}
+
+.sites-list-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sites-list-url {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sites-list-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sites-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 4px;
+}
+
+.sites-detail-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.sites-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sites-detail > .website-field-hint {
+  margin-bottom: 16px;
+}
+
+/* Stays reachable while the anchor mix pushes the form long. */
+.sites-save-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin: 0 -18px -18px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 9px 9px;
+  background: var(--paper);
+}
+
+.sites-save-bar > .website-field-hint {
+  margin-right: auto;
+  color: var(--amber);
+}
+
+@media (max-width: 900px) {
+  .sites-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Which exact wording a bucket has published, ranked. One measure, one series:
+   the bar is the magnitude, the row's own text is its label, and the count is
+   printed so the comparison survives a bar too short to judge. */
+.anchor-texts {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+}
+
+.anchor-texts-title {
+  margin: 0 0 6px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* A 2px gap keeps adjacent bars from reading as one block. */
+.anchor-texts-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.anchor-texts-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 3px;
+  background: var(--paper-strong);
+  overflow: hidden;
+}
+
+/* The fill starts at the baseline and is rounded only at the data end, so the
+   length is read from a single moving edge. */
+.anchor-texts-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--anchor-text-share, 0%);
+  border-radius: 0 4px 4px 0;
+  background: rgba(216, 61, 31, 0.19);
+}
+
+.anchor-texts-word,
+.anchor-texts-count {
+  position: relative;
+  font-size: 12px;
+}
+
+.anchor-texts-word {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.anchor-texts-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.anchor-texts-toggle {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--red-deep);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.anchor-texts-toggle:hover {
+  text-decoration: underline;
 }

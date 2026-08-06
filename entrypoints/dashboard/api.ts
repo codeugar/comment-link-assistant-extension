@@ -626,6 +626,19 @@ async function demoRequest<T extends DashboardRequestResult>(
     );
     return renamed as T;
   }
+  if (message.type === 'plan.setChunkSize') {
+    const current = demoPlans.find((plan) => plan.id === message.planId);
+    if (!current) return null as T;
+    const resized: Plan = {
+      ...current,
+      chunkSize: message.chunkSize,
+      updatedAt: Date.now(),
+    };
+    demoPlans = demoPlans.map((plan) =>
+      plan.id === resized.id ? resized : plan
+    );
+    return { plan: resized, batches: batchesForPlan(resized) } as T;
+  }
   if (message.type === 'plan.archive') {
     demoPlans = demoPlans.map((plan) =>
       plan.id === message.planId ? { ...plan, status: 'archived' } : plan

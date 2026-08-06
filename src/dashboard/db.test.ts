@@ -302,6 +302,117 @@ describe('DashboardRepository schema and plans', () => {
   });
 });
 
+describe('DashboardRepository plan chunk size', () => {
+  it('regroups only the batches that have not started', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(
+      planInput({
+        urls: [
+          'https://a.example/1',
+          'https://b.example/2',
+          'https://c.example/3',
+          'https://d.example/4',
+          'https://e.example/5',
+          'https://f.example/6',
+        ],
+        chunkSize: 3,
+      })
+    );
+    expect(detail.batches.map((batch) => batch.targetCount)).toEqual([3, 3]);
+    await completedFirstBatch(detail, repo);
+
+    const resized = await repo.setPlanChunkSize(detail.plan.id, 2, 30_000);
+
+    expect(resized.plan.chunkSize).toBe(2);
+    // The finished batch keeps its three links and its sequence; only the
+    // untouched tail is re-split.
+    expect(resized.batches.map((batch) => batch.sequence)).toEqual([1, 2, 3]);
+    expect(resized.batches.map((batch) => batch.targetCount)).toEqual([
+      3, 2, 1,
+    ]);
+    expect(resized.batches[0]!.status).not.toBe('pending');
+    expect(resized.batches[1]!.status).toBe('pending');
+
+    const first = await repo.getBatchTargets(resized.batches[0]!.id);
+    expect(first.map((target) => target.url)).toEqual([
+      'https://a.example/1',
+      'https://b.example/2',
+      'https://c.example/3',
+    ]);
+    const second = await repo.getBatchTargets(resized.batches[1]!.id);
+    expect(second.map((target) => target.url)).toEqual([
+      'https://d.example/4',
+      'https://e.example/5',
+    ]);
+    const third = await repo.getBatchTargets(resized.batches[2]!.id);
+    expect(third.map((target) => target.url)).toEqual(['https://f.example/6']);
+  });
+
+  it('keeps target ids and plan-wide sequences so runs still resolve', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(
+      planInput({
+        urls: [
+          'https://a.example/1',
+          'https://b.example/2',
+          'https://c.example/3',
+          'https://d.example/4',
+        ],
+        chunkSize: 4,
+      })
+    );
+    const before = await repo.getBatchTargets(detail.batches[0]!.id);
+
+    const resized = await repo.setPlanChunkSize(detail.plan.id, 1, 30_000);
+
+    expect(resized.batches).toHaveLength(4);
+    const after = (
+      await Promise.all(
+        resized.batches.map((batch) => repo.getBatchTargets(batch.id))
+      )
+    ).flat();
+    expect(after.map((target) => target.id)).toEqual(
+      before.map((target) => target.id)
+    );
+    expect(after.map((target) => target.sequence)).toEqual([1, 2, 3, 4]);
+    expect(after.map((target) => target.batchSequence)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('rejects a size outside the allowed range and leaves the plan alone', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(planInput({ chunkSize: 2 }));
+
+    await expect(repo.setPlanChunkSize(detail.plan.id, 0)).rejects.toThrow(
+      DashboardDataError
+    );
+    await expect(repo.setPlanChunkSize(detail.plan.id, 201)).rejects.toThrow(
+      DashboardDataError
+    );
+    await expect(repo.setPlanChunkSize(detail.plan.id, 1.5)).rejects.toThrow(
+      DashboardDataError
+    );
+    const unchanged = await repo.getPlanDetail(detail.plan.id);
+    expect(unchanged?.plan.chunkSize).toBe(2);
+  });
+
+  it('records the new size even when every batch has already run', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(
+      planInput({
+        urls: ['https://a.example/1', 'https://b.example/2'],
+        chunkSize: 2,
+      })
+    );
+    await completedFirstBatch(detail, repo);
+
+    const resized = await repo.setPlanChunkSize(detail.plan.id, 1, 30_000);
+
+    expect(resized.plan.chunkSize).toBe(1);
+    expect(resized.batches).toHaveLength(1);
+    expect(resized.batches[0]!.targetCount).toBe(2);
+  });
+});
+
 describe('DashboardRepository execution semantics', () => {
   it('syncs latest results, errors, attempts, schedules, and summary groups', async () => {
     const { repo } = repository();

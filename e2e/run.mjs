@@ -89,18 +89,19 @@ async function prepareTestBuild(tempRoot) {
   const extDir = path.join(tempRoot, 'extension');
   await fsp.cp(BUILD_DIR, extDir, { recursive: true });
 
+  // Site origins are granted at install, so the batch never prompts. The run
+  // uses the shipped manifest verbatim and fails loudly if that stops being
+  // true, rather than quietly patching the permission in and testing something
+  // the user never gets.
   const manifest = JSON.parse(await fsp.readFile(path.join(extDir, 'manifest.json'), 'utf8'));
-  const promote = ['http://*/*', 'https://*/*'];
-  const optional = new Set(manifest.optional_host_permissions ?? []);
   const host = new Set(manifest.host_permissions ?? []);
-  for (const pattern of promote) {
-    optional.delete(pattern);
-    host.add(pattern);
+  const missing = ['http://*/*', 'https://*/*'].filter((pattern) => !host.has(pattern));
+  if (missing.length > 0) {
+    throw new Error(
+      `Build declares no install-time access to ${missing.join(', ')}; the batch would need a runtime permission prompt.`
+    );
   }
-  manifest.host_permissions = [...host];
-  manifest.optional_host_permissions = [...optional];
-  await fsp.writeFile(path.join(extDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-  return { extDir, hostPermissions: manifest.host_permissions };
+  return { extDir, hostPermissions: [...host] };
 }
 
 /** Chrome derives an unpacked extension id from the SHA-256 of its absolute path. */
@@ -292,11 +293,43 @@ async function closeSettingsDrawer(page) {
 }
 
 async function saveSettingsDrawer(page) {
+  await waitForToastsToClear(page);
   await page.click('dialog.settings-drawer button[type="submit"]');
   await page.waitForSelector('.toast-region .toast-success', { timeout: 15_000 });
   const toast = (await page.locator('.toast-region .toast-success').first().innerText()).trim();
   const formError = await page.locator('dialog.settings-drawer .form-error').count();
   assertEqual(formError, 0, 'Settings drawer reported a form error while saving');
+  return toast;
+}
+
+/**
+ * Toasts linger for a few seconds, so a save that follows an earlier one has to
+ * start from an empty region or it would read the previous toast back.
+ */
+async function waitForToastsToClear(page) {
+  await page
+    .waitForFunction(() => document.querySelectorAll('.toast-region .toast-success').length === 0, null, {
+      timeout: 10_000,
+      polling: 100,
+    })
+    .catch(() => undefined);
+}
+
+async function openSitesPage(page) {
+  await closeSettingsDrawer(page);
+  await waitForDashboardReady(page);
+  await page.click('nav.main-navigation button:has-text("网站管理")');
+  await page.waitForSelector('main.sites-page', { timeout: 20_000 });
+  await page.waitForSelector('#site-label', { timeout: 10_000 });
+}
+
+async function saveSitesPage(page) {
+  await waitForToastsToClear(page);
+  await page.click('main.sites-page button[type="submit"]');
+  await page.waitForSelector('.toast-region .toast-success', { timeout: 15_000 });
+  const toast = (await page.locator('.toast-region .toast-success').first().innerText()).trim();
+  const formError = await page.locator('main.sites-page .form-error').count();
+  assertEqual(formError, 0, 'Websites page reported a form error while saving');
   return toast;
 }
 
@@ -378,7 +411,7 @@ async function main() {
     await dashboard.waitForSelector('.app-sidebar', { timeout: 20_000 });
     const navText = await dashboard.locator('nav.main-navigation').innerText();
     // Actual zh-CN nav labels shipped by the dashboard.
-    for (const label of ['运营看板', '计划管理', '定时复查', '过滤列表', '外链库']) {
+    for (const label of ['运营看板', '计划管理', '网站管理', '定时复查', '过滤列表', '外链库']) {
       assertIncludes(navText, label, `Navigation is missing the "${label}" item`);
     }
     assert(
@@ -405,17 +438,23 @@ async function main() {
     const required = [
       '#settings-provider',
       '#settings-deepseek-key',
+      '#settings-locale',
+      'dialog.settings-drawer button[type="submit"]',
+    ];
+    for (const selector of required) {
+      assertEqual(await dashboard.locator(selector).count(), 1, `Settings drawer is missing ${selector}`);
+    }
+    // Site profiles and the anchor mix live on the websites page now.
+    for (const selector of [
       '#settings-site-select',
       '#settings-site-label',
       '#settings-site-url',
       '#settings-site-display-name',
       '#settings-site-email',
       '#settings-site-link-mode',
-      '#settings-locale',
-      'dialog.settings-drawer button[type="submit"]',
-    ];
-    for (const selector of required) {
-      assertEqual(await dashboard.locator(selector).count(), 1, `Settings drawer is missing ${selector}`);
+      '.anchor-mix',
+    ]) {
+      assertEqual(await dashboard.locator(selector).count(), 0, `Settings drawer still renders ${selector}`);
     }
     assertEqual(
       await dashboard.locator('#settings-deepseek-key').getAttribute('type'),
@@ -425,11 +464,6 @@ async function main() {
 
     await dashboard.selectOption('#settings-provider', SETTINGS.provider);
     await dashboard.fill('#settings-deepseek-key', SETTINGS.apiKey);
-    await dashboard.fill('#settings-site-label', SETTINGS.siteLabel);
-    await dashboard.fill('#settings-site-url', SETTINGS.websiteUrl);
-    await dashboard.fill('#settings-site-display-name', SETTINGS.displayName);
-    await dashboard.fill('#settings-site-email', 'e2e@example.com');
-    await dashboard.selectOption('#settings-site-link-mode', 'a-tag-newline');
     await shot(dashboard, 'T2a-settings-filled');
 
     const toast = await saveSettingsDrawer(dashboard);
@@ -442,35 +476,72 @@ async function main() {
     const persisted = await dashboard.evaluate(() => ({
       provider: document.querySelector('#settings-provider')?.value ?? null,
       apiKey: document.querySelector('#settings-deepseek-key')?.value ?? null,
-      label: document.querySelector('#settings-site-label')?.value ?? null,
-      websiteUrl: document.querySelector('#settings-site-url')?.value ?? null,
-      displayName: document.querySelector('#settings-site-display-name')?.value ?? null,
-      email: document.querySelector('#settings-site-email')?.value ?? null,
       locale: document.querySelector('#settings-locale')?.value ?? null,
     }));
     await shot(dashboard, 'T2c-settings-after-reload');
     assertEqual(persisted.provider, SETTINGS.provider, 'Provider did not persist');
     assertEqual(persisted.apiKey, SETTINGS.apiKey, 'API key did not persist');
-    assertEqual(persisted.label, SETTINGS.siteLabel, 'Site label did not persist');
-    assertEqual(persisted.websiteUrl, SETTINGS.websiteUrl, 'Website URL did not persist');
-    assertEqual(persisted.displayName, SETTINGS.displayName, 'Display name did not persist');
-    assertEqual(persisted.email, 'e2e@example.com', 'Email did not persist');
     assertEqual(persisted.locale, 'zh-CN', 'Locale did not persist');
     return `persisted after reload: ${JSON.stringify(persisted)}`;
   }
 
+  /* --------------------------------------------------------------- T2S ---- */
+  await runTest('T2S', 'websites page owns the site profile', async () => {
+    await closeSettingsDrawer(dashboard).catch(() => undefined);
+    await openSitesPage(dashboard);
+
+    assertEqual(
+      await dashboard.locator('dialog.settings-drawer').count(),
+      0,
+      'Opening the websites page left the settings drawer up'
+    );
+    for (const selector of ['#site-label', '#site-url', '#site-display-name', '#site-email', '#site-link-mode']) {
+      assertEqual(await dashboard.locator(selector).count(), 1, `Websites page is missing ${selector}`);
+    }
+    assertEqual(await dashboard.locator('.sites-list button').count(), 1, 'Websites page should list exactly one site');
+
+    await dashboard.fill('#site-label', SETTINGS.siteLabel);
+    await dashboard.fill('#site-url', SETTINGS.websiteUrl);
+    await dashboard.fill('#site-display-name', SETTINGS.displayName);
+    await dashboard.fill('#site-email', 'e2e@example.com');
+    await dashboard.selectOption('#site-link-mode', 'a-tag-newline');
+    // Unsaved edits are called out before the save lands.
+    await dashboard.waitForSelector('.sites-save-bar:has-text("有未保存的修改")', { timeout: 5_000 });
+    await shot(dashboard, 'T2Sa-sites-filled');
+
+    const toast = await saveSitesPage(dashboard);
+    assertIncludes(toast, '设置已保存', 'Saving the websites page did not produce the success toast');
+    await shot(dashboard, 'T2Sb-sites-saved');
+
+    await dashboard.reload({ waitUntil: 'domcontentloaded' });
+    await openSitesPage(dashboard);
+    const persisted = await dashboard.evaluate(() => ({
+      label: document.querySelector('#site-label')?.value ?? null,
+      websiteUrl: document.querySelector('#site-url')?.value ?? null,
+      displayName: document.querySelector('#site-display-name')?.value ?? null,
+      email: document.querySelector('#site-email')?.value ?? null,
+      linkMode: document.querySelector('#site-link-mode')?.value ?? null,
+    }));
+    await shot(dashboard, 'T2Sc-sites-after-reload');
+    assertEqual(persisted.label, SETTINGS.siteLabel, 'Site label did not persist');
+    assertEqual(persisted.websiteUrl, SETTINGS.websiteUrl, 'Website URL did not persist');
+    assertEqual(persisted.displayName, SETTINGS.displayName, 'Display name did not persist');
+    assertEqual(persisted.email, 'e2e@example.com', 'Email did not persist');
+    assertEqual(persisted.linkMode, 'a-tag-newline', 'Link mode did not persist');
+
+    const errors = extensionErrorsFor('T2S');
+    assertEqual(errors.length, 0, `Uncaught page errors on the websites page:\n${JSON.stringify(errors, null, 2)}`);
+    return `persisted after reload: ${JSON.stringify(persisted)}`;
+  });
+
   /* --------------------------------------------------------------- T2X ---- */
   await runTest('T2X', 'anchor mix editor persists a site anchor plan', async () => {
-    try {
-      return await anchorMixTest();
-    } finally {
-      await closeSettingsDrawer(dashboard).catch(() => undefined);
-    }
+    return await anchorMixTest();
   });
 
   async function anchorMixTest() {
-    await openSettingsDrawer(dashboard);
-    // T2 left the site on a-tag-newline, the mode whose comment body carries
+    await openSitesPage(dashboard);
+    // T2S left the site on a-tag-newline, the mode whose comment body carries
     // the anchor, so the mix editor must be present.
     await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
 
@@ -496,6 +567,23 @@ async function main() {
 
     await dashboard.fill('#anchor-pool-brand', 'E2E 品牌\nE2E Brand');
     await dashboard.fill('#anchor-pool-exact', 'AI video generator');
+
+    // Typed one key at a time, not set in one shot: a pool that re-renders its
+    // parsed form on every keystroke eats the space that has not become a word
+    // yet and the newline that has not become a line yet.
+    await dashboard.locator('#anchor-pool-partial').click();
+    await dashboard.locator('#anchor-pool-partial').pressSequentially('seedance 2.5\nseedance 2.5 model');
+    assertEqual(
+      await dashboard.locator('#anchor-pool-partial').inputValue(),
+      'seedance 2.5\nseedance 2.5 model',
+      'Typing a multi-word anchor into the pool did not survive keystroke by keystroke'
+    );
+    await dashboard.locator('#anchor-pool-exact').click();
+    assertEqual(
+      await dashboard.locator('#anchor-pool-partial').inputValue(),
+      'seedance 2.5\nseedance 2.5 model',
+      'Leaving the pool changed the wording that was typed'
+    );
     await dashboard.click('.anchor-mix button:has-text("从网站链接填入")');
     await dashboard.click('.anchor-mix button:has-text("添加推荐词")');
     await shot(dashboard, 'T2X-anchor-mix');
@@ -504,17 +592,17 @@ async function main() {
     assert(beforeReload.naked.includes(SETTINGS.websiteUrl), 'Bare URL fill did not add the website URL');
     assert(beforeReload.generic.length > 0, 'Generic suggestions added nothing');
 
-    // The mix is stored outside the settings form, so it must survive a reload
-    // without the form ever being submitted.
-    await closeSettingsDrawer(dashboard);
+    // The mix is stored outside the site profile form, so it must survive a
+    // reload without that form ever being submitted.
     await dashboard.reload({ waitUntil: 'domcontentloaded' });
-    await openSettingsDrawer(dashboard);
+    await openSitesPage(dashboard);
     await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
     const afterReload = await readAnchorMix(dashboard);
 
     assertEqual(afterReload.brand, beforeReload.brand, 'Brand pool did not persist');
     assertEqual(afterReload.exact, beforeReload.exact, 'Exact keyword pool did not persist');
     assertEqual(afterReload.naked, beforeReload.naked, 'Bare URL pool did not persist');
+    assertEqual(afterReload.partial, 'seedance 2.5\nseedance 2.5 model', 'Typed partial-match pool did not persist');
     assertEqual(afterReload.generic, beforeReload.generic, 'Generic pool did not persist');
     assertEqual(afterReload.total, 100, 'Shares did not persist as a whole mix');
 
@@ -525,7 +613,6 @@ async function main() {
 
     // Seed a tally the way the batch runner would, then confirm the editor
     // reports the mix those links actually produced.
-    await closeSettingsDrawer(dashboard);
     const siteId = await dashboard.evaluate(async () => {
       const stored = await chrome.storage.local.get('comment-link-assistant.settings');
       return stored['comment-link-assistant.settings'].activeSiteId;
@@ -537,6 +624,11 @@ async function main() {
             siteId: id,
             published: { brand: 6, naked: 4, exact: 4, partial: 3, generic: 2, natural: 1 },
             pending: [{ bucket: 'exact', targetUrl: 'https://blog.example/held', at: 1 }],
+            texts: [
+              { bucket: 'brand', text: 'E2E 品牌', count: 4, lastAt: 3 },
+              { bucket: 'brand', text: 'E2E Brand', count: 1, lastAt: 2 },
+              { bucket: 'exact', text: 'AI video generator', count: 4, lastAt: 4 },
+            ],
             updatedAt: 1,
           },
         },
@@ -544,7 +636,7 @@ async function main() {
     }, siteId);
 
     await dashboard.reload({ waitUntil: 'domcontentloaded' });
-    await openSettingsDrawer(dashboard);
+    await openSitesPage(dashboard);
     await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
     const tally = await dashboard.$$eval('.anchor-mix-actual', (nodes) =>
       nodes.map((node) => node.innerText.trim())
@@ -554,6 +646,41 @@ async function main() {
     assertIncludes(tally[2], '当前 20%（4 条）', 'Exact keyword tally is wrong');
     assertIncludes(tally[2], '另有 1 条待审核', 'A held comment is not reported alongside the tally');
     assertIncludes(tally[5], '当前 5%（1 条）', 'Natural tally is wrong');
+
+    // The wording breakdown: ranked within its own bucket, bars scaled to the
+    // busiest row, and honest about links whose wording was never recorded.
+    const brandWords = await dashboard.$$eval(
+      '.anchor-mix-row:has(#anchor-target-brand) .anchor-texts-row',
+      (nodes) =>
+        nodes.map((node) => ({
+          text: node.querySelector('.anchor-texts-word')?.textContent ?? '',
+          count: node.querySelector('.anchor-texts-count')?.textContent ?? '',
+          share: node.style.getPropertyValue('--anchor-text-share'),
+        }))
+    );
+    assertEqual(brandWords.length, 2, 'Brand wording breakdown did not render both rows');
+    assertEqual(brandWords[0].text, 'E2E 品牌', 'Brand wording is not ranked by count');
+    assertEqual(brandWords[0].count, '4 次', 'Brand wording count is wrong');
+    assertEqual(brandWords[0].share, '100%', 'Busiest wording should fill the row');
+    assertEqual(brandWords[1].share, '25%', 'Bar is not scaled against the busiest wording');
+    const brandBlock = await dashboard
+      .locator('.anchor-mix-row:has(#anchor-target-brand) .anchor-texts')
+      .innerText();
+    // 6 published against 5 with recorded wording.
+    assertIncludes(brandBlock, '另有 1 条没有留下用词记录', 'Untracked wording is not reported');
+
+    // A bucket whose links all predate the tally reports the gap and nothing
+    // else; claiming it published nothing would contradict its own share.
+    const nakedBlock = await dashboard
+      .locator('.anchor-mix-row:has(#anchor-target-naked) .anchor-texts')
+      .innerText();
+    assertEqual(
+      await dashboard.locator('.anchor-mix-row:has(#anchor-target-naked) .anchor-texts-row').count(),
+      0,
+      'Bare URL bucket should list no wording'
+    );
+    assertIncludes(nakedBlock, '另有 4 条没有留下用词记录', 'Untracked-only bucket is not explained');
+
     await dashboard.locator('.anchor-mix').scrollIntoViewIfNeeded();
     await shot(dashboard, 'T2X-anchor-mix-tally');
 
@@ -570,6 +697,7 @@ async function main() {
         brand: pool('brand'),
         naked: pool('naked'),
         exact: pool('exact'),
+        partial: pool('partial'),
         generic: pool('generic'),
         total: buckets.reduce(
           (sum, bucket) => sum + Number(document.querySelector(`#anchor-target-${bucket}`)?.value ?? 0),
@@ -651,13 +779,9 @@ async function main() {
     // example-promo.test is deliberately unresolvable. Point the site at the
     // local stub for this test only.
     await dashboard.bringToFront();
-    await closeSettingsDrawer(dashboard);
-    await waitForDashboardReady(dashboard);
-    await dashboard.click('nav.main-navigation button:has-text("运营看板")');
-    await openSettingsDrawer(dashboard);
-    await dashboard.fill('#settings-site-url', promoUrl);
-    await saveSettingsDrawer(dashboard);
-    await closeSettingsDrawer(dashboard);
+    await openSitesPage(dashboard);
+    await dashboard.fill('#site-url', promoUrl);
+    await saveSitesPage(dashboard);
 
     await sidepanel.bringToFront();
     await sidepanel.reload({ waitUntil: 'domcontentloaded' });

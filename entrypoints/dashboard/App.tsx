@@ -47,7 +47,7 @@ import {
   sendToBackground,
 } from '@/runtime/messages';
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
-import type { AnchorLedger } from '@/storage/anchor-ledger';
+import type { AnchorLedger, AnchorTextTally } from '@/storage/anchor-ledger';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import {
   DataBackupError,
@@ -79,7 +79,6 @@ import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
   extensionSettingsSchema,
-  getActiveSite,
   getSettings,
   setSettings as persistExtensionSettings,
   setProviderApiKeys,
@@ -171,6 +170,7 @@ type Route =
   | { page: 'dashboard' }
   | { page: 'moderation' }
   | { page: 'outbound' }
+  | { page: 'sites' }
   | { page: 'plans'; planId?: string };
 
 type IconComponent = PhosphorIcon;
@@ -182,6 +182,10 @@ interface Toast {
 }
 
 const PAGE_SIZE = 100;
+
+// Mirrors the bound the dashboard repository enforces, so the form stops
+// offering a size a save would reject.
+const MAX_PLAN_CHUNK_SIZE = 200;
 
 const EMPTY_SUMMARY: DashboardSummaryView = {
   activePlanCount: 0,
@@ -213,6 +217,7 @@ function readRoute(): Route {
   }
   if (parts[0] === 'moderation') return { page: 'moderation' };
   if (parts[0] === 'outbound') return { page: 'outbound' };
+  if (parts[0] === 'sites') return { page: 'sites' };
   return { page: 'dashboard' };
 }
 
@@ -222,6 +227,8 @@ function navigate(route: Route) {
     globalThis.location.hash = '#/moderation';
   } else if (route.page === 'outbound') {
     globalThis.location.hash = '#/outbound';
+  } else if (route.page === 'sites') {
+    globalThis.location.hash = '#/sites';
   } else {
     globalThis.location.hash = route.planId
       ? `#/plans/${encodeURIComponent(route.planId)}`
@@ -575,6 +582,7 @@ function Sidebar({
   filterListOpen,
   onOpenFilterList,
   onOpenOutboundLinkLibrary,
+  onOpenSites,
   onOpenSettings,
 }: {
   route: Route;
@@ -582,6 +590,7 @@ function Sidebar({
   filterListOpen: boolean;
   onOpenFilterList: () => void;
   onOpenOutboundLinkLibrary: () => void;
+  onOpenSites: () => void;
   onOpenSettings: () => void;
 }) {
   const isConnected = !isPreviewMode();
@@ -615,6 +624,18 @@ function Sidebar({
             weight={route.page === 'plans' ? 'fill' : 'regular'}
           />
           <span>{t('plans')}</span>
+        </button>
+        <button
+          type="button"
+          className={route.page === 'sites' ? 'is-active' : ''}
+          aria-current={route.page === 'sites' ? 'page' : undefined}
+          onClick={onOpenSites}
+        >
+          <GlobeHemisphereWest
+            size={22}
+            weight={route.page === 'sites' ? 'fill' : 'regular'}
+          />
+          <span>{t('sites')}</span>
         </button>
         <button
           type="button"
@@ -2062,7 +2083,7 @@ function PlansPage({
   outboundLinkLibraryLoading: boolean;
   onRefresh: () => void;
   onNewPlan: () => void;
-  onRenamePlan: (plan: Plan) => void;
+  onRenamePlan: (detail: PlanDetail) => void;
   onOpenFailure: (target: PlanTargetWithAttempts) => void;
   onRecheckTarget: (target: PlanTargetWithAttempts) => void;
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
@@ -2259,7 +2280,7 @@ function PlansPage({
             }}
             onRun={() => onRunPlan(selectedPlan.id)}
             onResume={() => onResume(selectedPlan.id)}
-            onRename={() => onRenamePlan(detail.plan)}
+            onRename={() => onRenamePlan(detail)}
             onArchive={() => onArchivePlan(detail.plan)}
             onDelete={() => onDeletePlan(detail.plan)}
           />
@@ -2515,6 +2536,115 @@ const GENERIC_SUGGESTION_COUNT = 5;
 const NATURAL_FALLBACK_COUNT = 6;
 
 /**
+ * The background reports why it could not write the fallback wording; a single
+ * "check your key and URL" line leaves the user guessing between causes that
+ * need different fixes.
+ */
+export function naturalAnchorFailureCopy(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw.includes('WEBSITE_URL_REQUIRED')) {
+    return translate('anchorMixGenerateNaturalNeedsUrl');
+  }
+  if (raw.includes('API_KEY_REQUIRED')) {
+    return translate('anchorMixGenerateNaturalNeedsApiKey');
+  }
+  if (
+    /WEBSITE_(FETCH_FAILED|META_NOT_FOUND|RESPONSE_NOT_HTML|REDIRECT)/.test(raw)
+  ) {
+    return translate('anchorMixGenerateNaturalSiteUnreachable');
+  }
+  // A blocked cross-origin fetch surfaces as a bare TypeError, with no code of
+  // its own to match on.
+  if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+    return translate('anchorMixGenerateNaturalNeedsPermission');
+  }
+  return translate('anchorMixGenerateNaturalFailed');
+}
+
+const ANCHOR_TEXT_PREVIEW_ROWS = 6;
+
+/**
+ * Which exact wording this bucket has published, and how often.
+ *
+ * One measure across many long labels, so the marks are horizontal bars and
+ * every row is directly labelled with its count — a single series, which is
+ * why there is no legend and no second colour to tell apart. Bars are scaled
+ * to the busiest wording in this bucket so a small bucket stays readable; the
+ * counts carry the comparison across buckets.
+ */
+export function AnchorTextBreakdown({
+  bucket,
+  rows,
+  published,
+}: {
+  bucket: AnchorBucket;
+  rows: readonly AnchorTextTally[];
+  published: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const ranked = rows
+    .filter((row) => row.bucket === bucket)
+    .slice()
+    .sort(
+      (left, right) => right.count - left.count || right.lastAt - left.lastAt
+    );
+
+  if (published === 0) return null;
+  const tracked = ranked.reduce((sum, row) => sum + row.count, 0);
+  // Wording written before the ledger recorded it, or dropped once the row
+  // ceiling filled up. Saying so beats a list that quietly fails to add up.
+  const untracked = Math.max(0, published - tracked);
+  const busiest = ranked[0]?.count ?? 0;
+  const visible = expanded ? ranked : ranked.slice(0, ANCHOR_TEXT_PREVIEW_ROWS);
+
+  return (
+    <div className="anchor-texts">
+      <p className="anchor-texts-title">{translate('anchorTextsTitle')}</p>
+      {ranked.length === 0 ? null : (
+        <ul className="anchor-texts-list">
+          {visible.map((row) => (
+            <li
+              key={row.text}
+              className="anchor-texts-row"
+              style={{
+                ['--anchor-text-share' as string]: `${
+                  busiest === 0 ? 0 : Math.round((row.count / busiest) * 100)
+                }%`,
+              }}
+              title={`${row.text} — ${translate(
+                'anchorTextsCount',
+                String(row.count)
+              )}`}
+            >
+              <span className="anchor-texts-word">{row.text}</span>
+              <span className="anchor-texts-count">
+                {translate('anchorTextsCount', String(row.count))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {ranked.length > ANCHOR_TEXT_PREVIEW_ROWS ? (
+        <button
+          type="button"
+          className="anchor-texts-toggle"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded
+            ? translate('anchorTextsShowLess')
+            : translate('anchorTextsShowAll', String(ranked.length))}
+        </button>
+      ) : null}
+      {untracked > 0 ? (
+        <p className="website-field-hint">
+          {translate('anchorTextsUntracked', String(untracked))}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Editor for one site's anchor mix, alongside the tally of what has actually
  * been published. The two belong together: the targets only mean anything next
  * to the mix they have produced so far.
@@ -2537,6 +2667,22 @@ export function AnchorMixEditor({
   const [plan, setPlan] = useState<AnchorPlan | null>(null);
   const [ledger, setLedger] = useState<AnchorLedger | null>(null);
   const [generating, setGenerating] = useState(false);
+  // What the user has literally typed into a pool, kept until they leave the
+  // field. Rendering the parsed pool back on every keystroke would eat the
+  // space that has not become a word yet, and the newline that has not become
+  // a line yet, making multi-word entries impossible to type.
+  const [poolDrafts, setPoolDrafts] = useState<
+    Partial<Record<AnchorBucket, string>>
+  >({});
+
+  const clearPoolDraft = useCallback((bucket: AnchorBucket) => {
+    setPoolDrafts((current) => {
+      if (current[bucket] === undefined) return current;
+      const next = { ...current };
+      delete next[bucket];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -2566,6 +2712,9 @@ export function AnchorMixEditor({
   const appendToPool = useCallback(
     (bucket: AnchorBucket, entries: readonly string[]) => {
       if (!plan || entries.length === 0) return;
+      // The button writes the pool, so whatever half-typed text was being held
+      // for that field is now stale.
+      clearPoolDraft(bucket);
       persist({
         ...plan,
         pools: {
@@ -2576,11 +2725,13 @@ export function AnchorMixEditor({
         },
       });
     },
-    [plan, persist]
+    [plan, persist, clearPoolDraft]
   );
 
   const writeNaturalFallbacks = useCallback(async () => {
     if (!plan || generating) return;
+    // No per-site permission prompt: site origins are granted at install, so
+    // adding a site here is the only consent this needs.
     setGenerating(true);
     try {
       const texts = await generateNaturalAnchorTexts(
@@ -2588,8 +2739,8 @@ export function AnchorMixEditor({
         NATURAL_FALLBACK_COUNT
       );
       appendToPool('natural', texts);
-    } catch {
-      onToast(translate('anchorMixGenerateNaturalFailed'), 'error');
+    } catch (error) {
+      onToast(naturalAnchorFailureCopy(error), 'error');
     } finally {
       setGenerating(false);
     }
@@ -2703,18 +2854,23 @@ export function AnchorMixEditor({
               aria-label={translate(labelKey)}
               className="anchor-mix-pool"
               rows={3}
-              value={formatAnchorPool(plan.pools[bucket])}
+              value={poolDrafts[bucket] ?? formatAnchorPool(plan.pools[bucket])}
               disabled={disabled}
               placeholder={translate('anchorMixPoolPlaceholder')}
-              onChange={(event) =>
+              onChange={(event) => {
+                const raw = event.target.value;
+                setPoolDrafts((current) => ({ ...current, [bucket]: raw }));
                 persist({
                   ...plan,
                   pools: {
                     ...plan.pools,
-                    [bucket]: parseAnchorPool(event.target.value),
+                    [bucket]: parseAnchorPool(raw),
                   },
-                })
-              }
+                });
+              }}
+              // Leaving the field is the point where the pool is settled, so
+              // that is where the normalized wording replaces what was typed.
+              onBlur={() => clearPoolDraft(bucket)}
             />
             <div className="anchor-mix-actions">
               {bucket === 'naked' ? (
@@ -2772,10 +2928,382 @@ export function AnchorMixEditor({
                 </span>
               ) : null}
             </div>
+            <AnchorTextBreakdown
+              bucket={bucket}
+              rows={ledger.texts}
+              published={published}
+            />
           </div>
         );
       })}
     </div>
+  );
+}
+
+// Mirrors the `sites` array bound in extensionSettingsSchema, so the page stops
+// offering "add" at exactly the point a save would be rejected.
+const MAX_SITES = 20;
+
+function siteDisplayName(site: SiteProfile): string {
+  return (
+    site.label || displayDomain(site.websiteUrl) || translate('siteUnnamed')
+  );
+}
+
+export function SitesPage({
+  settings,
+  refreshing,
+  onRefresh,
+  onSave,
+  onToast,
+}: {
+  settings: ExtensionSettings;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onSave: (settings: ExtensionSettings) => Promise<void>;
+  onToast: (message: string, kind?: Toast['kind']) => void;
+}) {
+  const [draft, setDraft] = useState(settings);
+  const [dirty, setDirty] = useState(false);
+  const [selectedSiteId, setSelectedSiteId] = useState(settings.activeSiteId);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  // A batch run refreshes settings in the background. Re-seeding only while the
+  // page is clean keeps those refreshes from wiping edits in progress.
+  useEffect(() => {
+    if (dirty) return;
+    setDraft(settings);
+  }, [settings, dirty]);
+
+  const selectedSite =
+    draft.sites.find((site) => site.id === selectedSiteId) ??
+    draft.sites[0] ??
+    null;
+
+  const applyDraft = (next: ExtensionSettings) => {
+    setDraft(next);
+    setDirty(true);
+    setFormError('');
+  };
+
+  const updateSiteField = <Key extends keyof SiteProfile>(
+    key: Key,
+    value: SiteProfile[Key]
+  ) => {
+    if (!selectedSite) return;
+    applyDraft({
+      ...draft,
+      sites: draft.sites.map((site) =>
+        site.id === selectedSite.id ? { ...site, [key]: value } : site
+      ),
+    });
+  };
+
+  const addSite = () => {
+    const site: SiteProfile = {
+      id: globalThis.crypto.randomUUID(),
+      label: '',
+      websiteUrl: '',
+      displayName: '',
+      email: '',
+      linkMode: 'a-tag-newline',
+    };
+    applyDraft({ ...draft, sites: [...draft.sites, site] });
+    setSelectedSiteId(site.id);
+  };
+
+  const removeSelectedSite = () => {
+    if (!selectedSite || draft.sites.length <= 1) return;
+    const remaining = draft.sites.filter((site) => site.id !== selectedSite.id);
+    applyDraft({
+      ...draft,
+      sites: remaining,
+      // The schema rejects an activeSiteId with no site behind it, so the
+      // default has to move along with the deletion.
+      activeSiteId:
+        draft.activeSiteId === selectedSite.id
+          ? (remaining[0]?.id ?? draft.activeSiteId)
+          : draft.activeSiteId,
+    });
+    setSelectedSiteId(remaining[0]?.id ?? '');
+  };
+
+  const revert = () => {
+    setDraft(settings);
+    setDirty(false);
+    setFormError('');
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setFormError('');
+    try {
+      const normalized = extensionSettingsSchema.parse({
+        ...draft,
+        sites: draft.sites.map((site) => ({
+          ...site,
+          websiteUrl: site.websiteUrl.trim()
+            ? normalizeWebsiteUrl(site.websiteUrl)
+            : '',
+        })),
+      });
+      await onSave(normalized);
+      setDraft(normalized);
+      setDirty(false);
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      if (
+        raw.includes('websiteUrl') ||
+        raw.includes('WEBSITE_URL') ||
+        raw.toLowerCase().includes('invalid url')
+      ) {
+        setFormError(translate('invalidWebsiteUrl'));
+      } else {
+        setFormError(translate('settingsSaveFailed'));
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <main className="sites-page">
+      <PageHeader
+        title={translate('sitesPageTitle')}
+        eyebrow={t('sites')}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+      />
+      <p className="page-description">{translate('sitesPageDescription')}</p>
+      <form className="sites-layout" onSubmit={handleSubmit} noValidate>
+        <aside className="sites-list-pane surface-card">
+          <h2>
+            {translate('sitesListTitle', [
+              String(draft.sites.length),
+              String(MAX_SITES),
+            ])}
+          </h2>
+          <ul className="sites-list">
+            {draft.sites.map((site) => (
+              <li key={site.id}>
+                <button
+                  type="button"
+                  className={site.id === selectedSite?.id ? 'is-active' : ''}
+                  aria-current={site.id === selectedSite?.id}
+                  onClick={() => setSelectedSiteId(site.id)}
+                >
+                  <span className="sites-list-name">
+                    {siteDisplayName(site)}
+                    {site.id === draft.activeSiteId ? (
+                      <span className="sites-list-badge">
+                        {translate('sitesDefaultBadge')}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="sites-list-url">
+                    {displayDomain(site.websiteUrl) ||
+                      translate('sitesNoWebsiteUrl')}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            id="site-add"
+            className="secondary-button"
+            disabled={saving || draft.sites.length >= MAX_SITES}
+            onClick={addSite}
+          >
+            <Plus size={15} weight="bold" aria-hidden />
+            {translate('siteAdd')}
+          </button>
+          {draft.sites.length >= MAX_SITES ? (
+            <p className="website-field-hint">
+              {translate('sitesLimitReached', String(MAX_SITES))}
+            </p>
+          ) : null}
+        </aside>
+
+        <section className="sites-detail surface-card">
+          {selectedSite ? (
+            <>
+              <header className="sites-detail-head">
+                <div>
+                  <p className="page-eyebrow">
+                    {translate('sitesBasicsTitle')}
+                  </p>
+                  <h2>{siteDisplayName(selectedSite)}</h2>
+                </div>
+                <div className="sites-detail-actions">
+                  {selectedSite.id === draft.activeSiteId ? (
+                    <span className="sites-list-badge">
+                      {translate('sitesDefaultBadge')}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      disabled={saving}
+                      onClick={() =>
+                        applyDraft({
+                          ...draft,
+                          activeSiteId: selectedSite.id,
+                        })
+                      }
+                    >
+                      {translate('sitesSetDefault')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="danger-text-button"
+                    disabled={saving || draft.sites.length <= 1}
+                    onClick={removeSelectedSite}
+                  >
+                    <Trash size={15} aria-hidden />
+                    {translate('siteRemove')}
+                  </button>
+                </div>
+              </header>
+              <p className="website-field-hint">
+                {translate('sitesDefaultHint')}
+              </p>
+
+              <label className="form-field" htmlFor="site-label">
+                <span>{translate('siteLabelField')}</span>
+                <input
+                  id="site-label"
+                  value={selectedSite.label}
+                  maxLength={100}
+                  disabled={saving}
+                  onChange={(event) =>
+                    updateSiteField('label', event.target.value)
+                  }
+                  placeholder={translate('siteLabelPlaceholder')}
+                />
+              </label>
+              <label className="form-field" htmlFor="site-url">
+                <span>{translate('websiteUrlLabel')}</span>
+                <input
+                  id="site-url"
+                  value={selectedSite.websiteUrl}
+                  maxLength={2_048}
+                  disabled={saving}
+                  onChange={(event) =>
+                    updateSiteField('websiteUrl', event.target.value)
+                  }
+                  placeholder={translate('websiteUrlPlaceholder')}
+                  inputMode="url"
+                />
+              </label>
+              <label className="form-field" htmlFor="site-display-name">
+                <span>{translate('displayNameLabel')}</span>
+                <input
+                  id="site-display-name"
+                  value={selectedSite.displayName}
+                  maxLength={200}
+                  disabled={saving}
+                  onChange={(event) =>
+                    updateSiteField('displayName', event.target.value)
+                  }
+                  placeholder={translate('displayNamePlaceholder')}
+                />
+              </label>
+              <label className="form-field" htmlFor="site-email">
+                <span>{translate('emailLabel')}</span>
+                <input
+                  id="site-email"
+                  type="email"
+                  value={selectedSite.email}
+                  maxLength={320}
+                  disabled={saving}
+                  onChange={(event) =>
+                    updateSiteField('email', event.target.value)
+                  }
+                  placeholder={translate('emailPlaceholder')}
+                />
+              </label>
+              <label className="form-field" htmlFor="site-link-mode">
+                <span>{translate('linkModeLabel')}</span>
+                <select
+                  id="site-link-mode"
+                  value={selectedSite.linkMode}
+                  disabled={saving}
+                  onChange={(event) =>
+                    updateSiteField(
+                      'linkMode',
+                      event.target.value as SiteProfile['linkMode']
+                    )
+                  }
+                >
+                  <option value="a-tag-newline">
+                    {translate('linkModeATagNewline')}
+                  </option>
+                  <option value="prefer-website-field">
+                    {translate('linkModePreferWebsiteField')}
+                  </option>
+                  <option value="comment-only">
+                    {translate('linkModeCommentOnly')}
+                  </option>
+                </select>
+              </label>
+
+              {usesInlineAnchor(selectedSite.linkMode) ? (
+                <AnchorMixEditor
+                  key={selectedSite.id}
+                  siteId={selectedSite.id}
+                  websiteUrl={selectedSite.websiteUrl}
+                  disabled={saving}
+                  onToast={onToast}
+                />
+              ) : (
+                <div className="form-field anchor-mix">
+                  <span>{translate('anchorMixTitle')}</span>
+                  <p className="website-field-hint">
+                    {translate('sitesAnchorMixUnavailable')}
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <EmptyState
+              icon={GlobeHemisphereWest}
+              title={translate('siteUnnamed')}
+              description={translate('sitesPageDescription')}
+            />
+          )}
+
+          <div className="form-messages" aria-live="polite">
+            {formError ? <p className="form-error">{formError}</p> : null}
+          </div>
+          <div className="sites-save-bar">
+            <span className="website-field-hint">
+              {dirty ? translate('sitesUnsavedChanges') : ''}
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={saving || !dirty}
+              onClick={revert}
+            >
+              {translate('sitesRevert')}
+            </button>
+            <button type="submit" className="primary-button" disabled={saving}>
+              {saving ? (
+                <SpinnerGap size={18} className="is-spinning" aria-hidden />
+              ) : (
+                <Check size={18} weight="bold" aria-hidden />
+              )}
+              {translate('sitesSave')}
+            </button>
+          </div>
+        </section>
+      </form>
+    </main>
   );
 }
 
@@ -2826,54 +3354,8 @@ export function SettingsDrawer({
     // in-progress edits. Intentionally omit `settings`/`apiKeys` deps.
   }, [open]);
 
-  const activeSite = getActiveSite(draftSettings);
-
   const updateDraftProvider = (provider: ExtensionSettings['provider']) =>
     setDraftSettings((current) => ({ ...current, provider }));
-
-  const selectDraftActiveSite = (siteId: string) =>
-    setDraftSettings((current) => ({ ...current, activeSiteId: siteId }));
-
-  const updateDraftSiteField = <Key extends keyof SiteProfile>(
-    key: Key,
-    value: SiteProfile[Key]
-  ) =>
-    setDraftSettings((current) => ({
-      ...current,
-      sites: current.sites.map((site) =>
-        site.id === current.activeSiteId ? { ...site, [key]: value } : site
-      ),
-    }));
-
-  const addDraftSite = () =>
-    setDraftSettings((current) => {
-      const site: SiteProfile = {
-        id: globalThis.crypto.randomUUID(),
-        label: '',
-        websiteUrl: '',
-        displayName: '',
-        email: '',
-        linkMode: 'a-tag-newline',
-      };
-      return {
-        ...current,
-        sites: [...current.sites, site],
-        activeSiteId: site.id,
-      };
-    });
-
-  const removeDraftActiveSite = () =>
-    setDraftSettings((current) => {
-      if (current.sites.length <= 1) return current;
-      const remaining = current.sites.filter(
-        (site) => site.id !== current.activeSiteId
-      );
-      return {
-        ...current,
-        sites: remaining,
-        activeSiteId: remaining[0]?.id ?? current.activeSiteId,
-      };
-    });
 
   const updateDraftApiKey = <Key extends keyof ProviderApiKeys>(
     key: Key,
@@ -2916,28 +3398,13 @@ export function SettingsDrawer({
     setSaving(true);
     setFormError('');
     try {
-      const normalized = extensionSettingsSchema.parse({
-        ...draftSettings,
-        sites: draftSettings.sites.map((site) => ({
-          ...site,
-          websiteUrl: site.websiteUrl.trim()
-            ? normalizeWebsiteUrl(site.websiteUrl)
-            : '',
-        })),
-      });
+      // Site profiles are edited on the Websites page now; the drawer only
+      // carries them through untouched.
+      const normalized = extensionSettingsSchema.parse(draftSettings);
       await onSave(normalized, draftApiKeys);
       setDraftSettings(normalized);
-    } catch (error) {
-      const raw = error instanceof Error ? error.message : String(error);
-      if (
-        raw.includes('websiteUrl') ||
-        raw.includes('WEBSITE_URL') ||
-        raw.toLowerCase().includes('invalid url')
-      ) {
-        setFormError(translate('invalidWebsiteUrl'));
-      } else {
-        setFormError(translate('settingsSaveFailed'));
-      }
+    } catch {
+      setFormError(translate('settingsSaveFailed'));
     } finally {
       setSaving(false);
     }
@@ -3022,132 +3489,6 @@ export function SettingsDrawer({
           <p className="website-field-hint">
             {translate('apiKeySecurityNote')}
           </p>
-
-          <label className="form-field" htmlFor="settings-site-select">
-            <span>{translate('siteSelectorLabel')}</span>
-            <div className="settings-site-row">
-              <select
-                id="settings-site-select"
-                value={draftSettings.activeSiteId}
-                disabled={saving}
-                onChange={(event) => selectDraftActiveSite(event.target.value)}
-              >
-                {draftSettings.sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.label ||
-                      displayDomain(site.websiteUrl) ||
-                      translate('siteUnnamed')}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="secondary-button compact-button"
-                disabled={saving || draftSettings.sites.length >= 20}
-                onClick={addDraftSite}
-              >
-                <Plus size={15} weight="bold" aria-hidden />
-                {translate('siteAdd')}
-              </button>
-              <button
-                type="button"
-                className="danger-text-button"
-                disabled={saving || draftSettings.sites.length <= 1}
-                onClick={removeDraftActiveSite}
-              >
-                <Trash size={15} aria-hidden />
-                {translate('siteRemove')}
-              </button>
-            </div>
-          </label>
-          <label className="form-field" htmlFor="settings-site-label">
-            <span>{translate('siteLabelField')}</span>
-            <input
-              id="settings-site-label"
-              value={activeSite.label}
-              maxLength={100}
-              disabled={saving}
-              onChange={(event) =>
-                updateDraftSiteField('label', event.target.value)
-              }
-              placeholder={translate('siteLabelPlaceholder')}
-            />
-          </label>
-          <label className="form-field" htmlFor="settings-site-url">
-            <span>{translate('websiteUrlLabel')}</span>
-            <input
-              id="settings-site-url"
-              value={activeSite.websiteUrl}
-              maxLength={2_048}
-              disabled={saving}
-              onChange={(event) =>
-                updateDraftSiteField('websiteUrl', event.target.value)
-              }
-              placeholder={translate('websiteUrlPlaceholder')}
-              inputMode="url"
-            />
-          </label>
-          <label className="form-field" htmlFor="settings-site-display-name">
-            <span>{translate('displayNameLabel')}</span>
-            <input
-              id="settings-site-display-name"
-              value={activeSite.displayName}
-              maxLength={200}
-              disabled={saving}
-              onChange={(event) =>
-                updateDraftSiteField('displayName', event.target.value)
-              }
-              placeholder={translate('displayNamePlaceholder')}
-            />
-          </label>
-          <label className="form-field" htmlFor="settings-site-email">
-            <span>{translate('emailLabel')}</span>
-            <input
-              id="settings-site-email"
-              type="email"
-              value={activeSite.email}
-              maxLength={320}
-              disabled={saving}
-              onChange={(event) =>
-                updateDraftSiteField('email', event.target.value)
-              }
-              placeholder={translate('emailPlaceholder')}
-            />
-          </label>
-          <label className="form-field" htmlFor="settings-site-link-mode">
-            <span>{translate('linkModeLabel')}</span>
-            <select
-              id="settings-site-link-mode"
-              value={activeSite.linkMode}
-              disabled={saving}
-              onChange={(event) =>
-                updateDraftSiteField(
-                  'linkMode',
-                  event.target.value as SiteProfile['linkMode']
-                )
-              }
-            >
-              <option value="a-tag-newline">
-                {translate('linkModeATagNewline')}
-              </option>
-              <option value="prefer-website-field">
-                {translate('linkModePreferWebsiteField')}
-              </option>
-              <option value="comment-only">
-                {translate('linkModeCommentOnly')}
-              </option>
-            </select>
-          </label>
-
-          {usesInlineAnchor(activeSite.linkMode) ? (
-            <AnchorMixEditor
-              key={activeSite.id}
-              siteId={activeSite.id}
-              websiteUrl={activeSite.websiteUrl}
-              disabled={saving}
-              onToast={onToast}
-            />
-          ) : null}
 
           <label className="form-field" htmlFor="settings-locale">
             <span>{t('language')}</span>
@@ -5504,21 +5845,28 @@ export function NewPlanDialog({
   );
 }
 
-function RenamePlanDialog({
-  plan,
+export function EditPlanDialog({
+  detail,
   busy,
   onClose,
   onSave,
 }: {
-  plan: Plan | null;
+  detail: PlanDetail | null;
   busy: boolean;
   onClose: () => void;
-  onSave: (input: { planId: string; name: string }) => void;
+  onSave: (input: {
+    planId: string;
+    name?: string;
+    chunkSize?: number;
+  }) => void;
 }) {
+  const plan = detail?.plan ?? null;
   const [name, setName] = useState('');
+  const [chunkSize, setChunkSize] = useState('');
 
   useEffect(() => {
     setName(plan?.name ?? '');
+    setChunkSize(plan ? String(plan.chunkSize) : '');
   }, [plan]);
 
   useEffect(() => {
@@ -5530,15 +5878,30 @@ function RenamePlanDialog({
     return () => globalThis.removeEventListener('keydown', onKeyDown);
   }, [plan, busy, onClose]);
 
-  if (!plan || plan.status === 'archived') return null;
+  if (!detail || !plan || plan.status === 'archived') return null;
+  // Only batches that have not started are regrouped, so the count that will
+  // actually be re-split is the one worth showing.
+  const pendingCount = detail.batches
+    .filter((batch) => batch.status === 'pending')
+    .reduce((sum, batch) => sum + batch.targetCount, 0);
   const normalizedName = name.trim();
-  const canSave =
-    normalizedName.length > 0 && normalizedName !== plan.name && !busy;
+  const parsedChunkSize = Number.parseInt(chunkSize, 10);
+  const chunkSizeValid =
+    Number.isInteger(parsedChunkSize) &&
+    parsedChunkSize >= 1 &&
+    parsedChunkSize <= MAX_PLAN_CHUNK_SIZE;
+  const nameChanged = normalizedName.length > 0 && normalizedName !== plan.name;
+  const chunkSizeChanged = chunkSizeValid && parsedChunkSize !== plan.chunkSize;
+  const canSave = chunkSizeValid && (nameChanged || chunkSizeChanged) && !busy;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!canSave) return;
-    onSave({ planId: plan.id, name: normalizedName });
+    onSave({
+      planId: plan.id,
+      name: nameChanged ? normalizedName : undefined,
+      chunkSize: chunkSizeChanged ? parsedChunkSize : undefined,
+    });
   };
 
   return (
@@ -5560,14 +5923,38 @@ function RenamePlanDialog({
             </IconButton>
           </div>
 
-          <label className="form-field">
+          <label className="form-field" htmlFor="edit-plan-name">
             <span>{t('planName')}</span>
             <input
+              id="edit-plan-name"
               value={name}
               maxLength={120}
               onChange={(event) => setName(event.target.value)}
               placeholder={t('planNamePlaceholder')}
             />
+          </label>
+
+          <label className="form-field" htmlFor="edit-plan-chunk-size">
+            <span>{translate('planChunkSize')}</span>
+            <input
+              id="edit-plan-chunk-size"
+              type="number"
+              min={1}
+              max={MAX_PLAN_CHUNK_SIZE}
+              step={1}
+              value={chunkSize}
+              onChange={(event) => setChunkSize(event.target.value)}
+            />
+            <p className="website-field-hint">
+              {pendingCount === 0
+                ? t('planChunkSizeLocked')
+                : t('planChunkSizeHint', [
+                    pendingCount,
+                    chunkSizeValid
+                      ? Math.ceil(pendingCount / parsedChunkSize)
+                      : Math.ceil(pendingCount / plan.chunkSize),
+                  ])}
+            </p>
           </label>
 
           <div className="dialog-actions">
@@ -5999,7 +6386,7 @@ export default function App() {
   const [createPromotingSiteReturn, setCreatePromotingSiteReturn] = useState<
     'dashboard' | 'new-plan' | null
   >(null);
-  const [planToRename, setPlanToRename] = useState<Plan | null>(null);
+  const [planToEdit, setPlanToEdit] = useState<PlanDetail | null>(null);
   const [selectedError, setSelectedError] =
     useState<PlanTargetWithAttempts | null>(null);
   const [deletePlan, setDeletePlan] = useState<Plan | null>(null);
@@ -6419,15 +6806,29 @@ export default function App() {
     }
   };
 
-  const renamePlan = async (input: { planId: string; name: string }) => {
+  const savePlanEdits = async (input: {
+    planId: string;
+    name?: string;
+    chunkSize?: number;
+  }) => {
     const key = 'rename:' + input.planId;
     setBusyAction(key);
     try {
-      await dashboardRequest<Plan>({
-        type: 'plan.rename',
-        ...input,
-      });
-      setPlanToRename(null);
+      if (input.name !== undefined) {
+        await dashboardRequest<Plan>({
+          type: 'plan.rename',
+          planId: input.planId,
+          name: input.name,
+        });
+      }
+      if (input.chunkSize !== undefined) {
+        await dashboardRequest<PlanDetail>({
+          type: 'plan.setChunkSize',
+          planId: input.planId,
+          chunkSize: input.chunkSize,
+        });
+      }
+      setPlanToEdit(null);
       pushToast(t('planRenamed'));
       await refresh();
     } catch {
@@ -6526,6 +6927,11 @@ export default function App() {
           setFilterListOpen(false);
           navigate({ page: 'outbound' });
         }}
+        onOpenSites={() => {
+          setSettingsOpen(false);
+          setFilterListOpen(false);
+          navigate({ page: 'sites' });
+        }}
         onOpenSettings={() => {
           setFilterListOpen(false);
           setSettingsOpen(true);
@@ -6579,6 +6985,16 @@ export default function App() {
           />
         ) : route.page === 'moderation' ? (
           <ModerationRecheckPage />
+        ) : route.page === 'sites' ? (
+          <SitesPage
+            settings={settings}
+            refreshing={refreshing}
+            onRefresh={() => refresh()}
+            onSave={(nextSettings) =>
+              saveExtensionSettings(nextSettings, apiKeys)
+            }
+            onToast={pushToast}
+          />
         ) : route.page === 'outbound' ? (
           <OutboundLinkLibraryPage
             entries={outboundLinkLibrary}
@@ -6615,7 +7031,7 @@ export default function App() {
             outboundLinkLibraryLoading={outboundLinkLibraryLoading}
             onRefresh={() => refresh()}
             onNewPlan={() => openNewPlan('plans')}
-            onRenamePlan={setPlanToRename}
+            onRenamePlan={setPlanToEdit}
             onOpenFailure={setSelectedError}
             onRecheckTarget={recheckTarget}
             onDeleteTarget={setTargetToDelete}
@@ -6689,13 +7105,13 @@ export default function App() {
           }
         }}
       />
-      <RenamePlanDialog
-        plan={planToRename}
+      <EditPlanDialog
+        detail={planToEdit}
         busy={Boolean(
-          planToRename && busyAction === 'rename:' + planToRename.id
+          planToEdit && busyAction === 'rename:' + planToEdit.plan.id
         )}
-        onClose={() => setPlanToRename(null)}
-        onSave={renamePlan}
+        onClose={() => setPlanToEdit(null)}
+        onSave={savePlanEdits}
       />
       <ConfirmDeleteDialog
         plan={deletePlan}

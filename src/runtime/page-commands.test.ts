@@ -185,6 +185,28 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
+  it('reports a failed navigation as an unreachable target, not a Chrome internal', async () => {
+    const executeScript = vi
+      .fn()
+      .mockRejectedValue(new Error('Frame with ID 0 is showing error page.'));
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      );
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    await expect(analyzeTab(42)).rejects.toThrow('TARGET_PAGE_UNREACHABLE');
+
+    expect(executeScript).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('prepares a submission in the specified tab', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',

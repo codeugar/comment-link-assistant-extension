@@ -37,6 +37,38 @@ const JETPACK_FRAME_POLL_INTERVAL_MS = 250;
 const ANALYZE_COMMAND_TIMEOUT_MS = 30_000;
 const activeSubmissionTabs = new Set<number>();
 
+// A tab whose navigation failed (DNS, refused, timeout, cert) keeps the target
+// URL and reports `complete`, so every caller-side guard passes and injection is
+// the first thing to notice. Chrome rejects it with a raw internal string; map
+// it to an owned code so the failure reads as "site is down", not a Chrome bug.
+function injectionRejectedByErrorPage(error: unknown): boolean {
+  return error instanceof Error && /showing error page/i.test(error.message);
+}
+
+async function injectPageCommandScript(
+  target: chrome.scripting.InjectionTarget,
+  command: PageCommand,
+  // Without this the injection waits for document_idle, which a heavy
+  // still-loading page can push past the command timeout.
+  injectImmediately = true
+): Promise<void> {
+  try {
+    await withPageCommandTimeout(
+      chrome.scripting.executeScript({
+        target,
+        files: [PAGE_COMMAND_SCRIPT],
+        injectImmediately,
+      }),
+      commandTimeout(command)
+    );
+  } catch (error) {
+    if (injectionRejectedByErrorPage(error)) {
+      throw new Error('TARGET_PAGE_UNREACHABLE');
+    }
+    throw error;
+  }
+}
+
 function commandTimeout(command: PageCommand): number {
   return command.type === 'analyze'
     ? ANALYZE_COMMAND_TIMEOUT_MS
@@ -91,16 +123,7 @@ async function executePageCommand(
       throw error;
     }
   }
-  await withPageCommandTimeout(
-    chrome.scripting.executeScript({
-      target: { tabId },
-      files: [PAGE_COMMAND_SCRIPT],
-      // Without this the injection waits for document_idle, which a heavy
-      // still-loading page can push past the command timeout.
-      injectImmediately: true,
-    }),
-    commandTimeout(command)
-  );
+  await injectPageCommandScript({ tabId }, command);
   return sendPageCommand(tabId, command);
 }
 
@@ -207,13 +230,7 @@ async function executeFramePageCommand(
       throw error;
     }
   }
-  await withPageCommandTimeout(
-    chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      files: [PAGE_COMMAND_SCRIPT],
-    }),
-    commandTimeout(command)
-  );
+  await injectPageCommandScript({ tabId, frameIds: [frameId] }, command, false);
   return sendFramePageCommand(tabId, frameId, command);
 }
 

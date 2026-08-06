@@ -111,7 +111,8 @@ export interface BatchRunnerDependencies {
     siteId: string,
     bucket: AnchorBucket,
     targetUrl: string,
-    status: 'published' | 'pending_moderation'
+    status: 'published' | 'pending_moderation',
+    text?: string
   ): Promise<void>;
   prepareTabSubmission(
     tabId: number,
@@ -211,12 +212,12 @@ export const defaultDependencies: BatchRunnerDependencies = {
     }
     return selection;
   },
-  async recordSiteAnchor(siteId, bucket, targetUrl, status) {
+  async recordSiteAnchor(siteId, bucket, targetUrl, status, text) {
     if (status === 'published') {
-      await recordAnchorPublished(siteId, bucket);
+      await recordAnchorPublished(siteId, bucket, text);
       return;
     }
-    await recordAnchorPending(siteId, bucket, targetUrl);
+    await recordAnchorPending(siteId, bucket, targetUrl, text);
   },
   async prepareTabSubmission(tabId, input, target, batchId, frame) {
     await assertWorkerTabOwnership(batchId, tabId);
@@ -703,7 +704,8 @@ async function recordItemAnchor(
       siteId,
       item.anchor.bucket,
       item.url,
-      status
+      status,
+      item.anchor.text
     );
   } catch {
     // Losing one tally entry is not worth failing a comment that already

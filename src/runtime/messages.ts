@@ -140,6 +140,7 @@ export type PopupMessage =
       pageSize?: number;
     }
   | { type: 'plan.rename'; planId: string; name: string }
+  | { type: 'plan.setChunkSize'; planId: string; chunkSize: number }
   | { type: 'plan.archive'; planId: string }
   | { type: 'plan.deletePermanently'; planId: string }
   | {
@@ -210,6 +211,7 @@ export type PopupMessageResult =
   | { type: 'plan.getDetail'; data: PlanDetail }
   | { type: 'plan.getTargets'; data: DashboardPlanTargetPage }
   | { type: 'plan.rename'; data: Plan }
+  | { type: 'plan.setChunkSize'; data: PlanDetail }
   | { type: 'plan.archive'; data: Plan }
   | { type: 'plan.deletePermanently'; data: null }
   | { type: 'plan.deleteTarget'; data: PlanTarget }
