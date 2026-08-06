@@ -185,59 +185,11 @@
   "pageChangedSinceGeneration": {
     "message": "The active page or comment form changed after this draft was generated. Generate a new draft before submitting."
   },
-  "batchSetupTitle": {
-    "message": "Target queue"
-  },
-  "batchSetupDescription": {
-    "message": "Paste the blog or forum pages where you want to publish comments."
-  },
-  "targetUrlsLabel": {
-    "message": "Target URLs"
-  },
   "targetUrlsPlaceholder": {
     "message": "https://blog.example/post\nhttps://forum.example/thread"
   },
-  "targetUrlsHint": {
-    "message": "One HTTP or HTTPS URL per line, up to 200. Duplicates are removed."
-  },
   "invalidTargetUrls": {
     "message": "Check the target URLs. Use up to 200 complete HTTP or HTTPS URLs."
-  },
-  "prepareBatch": {
-    "message": "Review batch"
-  },
-  "preparingBatch": {
-    "message": "Reading website metadata…"
-  },
-  "batchReviewTitle": {
-    "message": "Confirm automatic publishing"
-  },
-  "websiteProfileTitle": {
-    "message": "Website context"
-  },
-  "refreshWebsiteProfile": {
-    "message": "Refresh"
-  },
-  "refreshingWebsiteProfile": {
-    "message": "Refreshing…"
-  },
-  "metaTitleLabel": {
-    "message": "Meta title"
-  },
-  "metaDescriptionLabel": {
-    "message": "Meta description"
-  },
-  "targetUrlsSummary": {
-    "message": "$1 unique target URLs ready"
-  },
-  "batchConfirmationNotice": {
-    "message": "After this one confirmation, the assistant will generate and submit comments to $1 sites in sequence. It pauses for login or CAPTCHA."
-  },
-  "confirmAndStartBatch": {
-    "message": "Confirm and start"
-  },
-  "startingBatch": {
-    "message": "Starting batch…"
   },
   "batchProgressTitle": {
     "message": "Batch progress"
@@ -290,26 +242,11 @@
   "startNewBatch": {
     "message": "Start a new batch"
   },
-  "batchRetryItem": {
-    "message": "Retry"
-  },
-  "batchRetryFailed": {
-    "message": "Retry failed items"
-  },
   "batchHistoryTitle": {
     "message": "History"
   },
-  "batchHistoryRetryFailed": {
-    "message": "Retry failed items"
-  },
-  "batchHistoryRetryUrl": {
-    "message": "Retry"
-  },
   "batchHistoryEmpty": {
     "message": "No finished batches yet"
-  },
-  "siteSelectorLabel": {
-    "message": "Website"
   },
   "siteAdd": {
     "message": "Add website"
@@ -521,15 +458,6 @@
   "planPreviewSummary": {
     "message": "$1 URLs → $2 batches"
   },
-  "planDueBanner": {
-    "message": "“$1” today's batch is due (batch $2/$3, $4 URLs)"
-  },
-  "planRunNext": {
-    "message": "Run today's batch"
-  },
-  "planDoneToday": {
-    "message": "“$1” done for today — next batch tomorrow"
-  },
   "planProgress": {
     "message": "$1 / $2 batches done"
   },
@@ -682,5 +610,17 @@
   },
   "anchorBucketNaturalHint": {
     "message": "A phrase that belongs to the sentence around it."
+  },
+  "batchIdleTitle": {
+    "message": "No run in progress"
+  },
+  "batchIdleDescription": {
+    "message": "Runs are started from a plan in the dashboard. This panel follows progress and handles login and CAPTCHA stops."
+  },
+  "resumeStoppedBatch": {
+    "message": "Resume run"
+  },
+  "resumeStoppedBatchHint": {
+    "message": "Resuming picks up the targets this run has not finished. A comment that was already submitted is never sent twice."
   }
 }

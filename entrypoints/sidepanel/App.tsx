@@ -1,15 +1,13 @@
-import { isDueToday, nextPendingChunk, planProgress } from '@/batch/plan';
+import { hasResumableItems } from '@/batch/state';
 import {
   type BatchItem,
   type BatchItemStatus,
   type BatchSnapshot,
   batchSnapshotSchema,
 } from '@/batch/types';
-import { parseTargetUrls } from '@/batch/urls';
 import { TextLoop } from '@/components/core/text-loop';
 import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
 import { sendToBackground } from '@/runtime/messages';
-import { requestBatchOriginPermissions } from '@/runtime/permissions';
 import { BATCH_STORAGE_KEY, getBatch } from '@/storage/batch';
 import {
   type BatchHistoryEntry,
@@ -17,36 +15,30 @@ import {
   getBatchHistory,
   isFailedHistoryStatus,
 } from '@/storage/batch-history';
-import { findMatchingFilterEntry, getFilterList } from '@/storage/filter-list';
-import { PLANS_STORAGE_KEY, type PlansMap, getPlans } from '@/storage/plans';
 import {
   DEFAULT_SETTINGS,
-  PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
   extensionSettingsSchema,
-  getActiveSite,
-  getProviderApiKeys,
   getSettings,
-  setSettings as persistSettings,
   restrictStorageToTrustedContexts,
 } from '@/storage/settings';
-import type { ExtensionSettings, ProviderApiKeys } from '@/types';
-import { type WebsiteProfile, normalizeWebsiteUrl } from '@/website/profile';
+import type { ExtensionSettings } from '@/types';
 import { ChartLineUp } from '@phosphor-icons/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
+// The sidepanel observes a run and works the manual gates it stops at. It never
+// starts one: every surface that puts a link on someone else's page lives in the
+// dashboard, where the promoted site is chosen explicitly and recorded on the
+// plan. Keeping one entry point is what stops a run from promoting a site the
+// operator did not pick for it.
 type BusyState =
   | 'idle'
-  | 'preparing'
-  | 'refreshing'
-  | 'starting'
   | 'continuing'
   | 'skipping'
   | 'stopping'
+  | 'resuming'
   | 'opening'
-  | 'resetting'
-  | 'retrying'
-  | 'planning';
+  | 'resetting';
 
 function providerLabel(provider: ExtensionSettings['provider']): string {
   return translate(
@@ -209,15 +201,6 @@ function batchItemDiagnostic(item: BatchDiagnosticItem): string {
   return lines.join('\n');
 }
 
-function friendlyRetryError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const code = raw.split(':', 1)[0] || 'UNKNOWN_ERROR';
-  // Retry failures originate in the batch state machine rather than comment
-  // submission. Keep the machine-readable code visible until locale-specific
-  // retry explanations are available.
-  return `${translate('batchRetryItem')}: ${code}`;
-}
-
 function pauseCopy(status?: BatchItemStatus): string {
   if (status === 'login_required') {
     return translate('batchPausedLoginDescription');
@@ -321,35 +304,14 @@ function isTerminalItem(item: BatchItem): boolean {
   ].includes(item.status);
 }
 
-/**
- * The background remains the source of truth and repeats this check at batch
- * creation time. The sidepanel performs it first solely to avoid asking for
- * permissions, a website profile, or provider credentials for links that will
- * be skipped anyway.
- */
-async function runnableTargetsFor(targetText: string): Promise<string[]> {
-  const targets = parseTargetUrls(targetText);
-  const filters = await getFilterList();
-  return targets.filter((target) => !findMatchingFilterEntry(target, filters));
-}
-
 export default function App() {
   const [settings, setSettings] = useState<ExtensionSettings>(DEFAULT_SETTINGS);
-  const [apiKeys, setApiKeys] = useState<ProviderApiKeys>({
-    deepseekApiKey: '',
-    kieApiKey: '',
-  });
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<BusyState>('idle');
   const [batch, setBatch] = useState<BatchSnapshot | null>(null);
-  const [targetText, setTargetText] = useState('');
-  const [websiteProfile, setWebsiteProfile] = useState<WebsiteProfile | null>(
-    null
-  );
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [history, setHistory] = useState<BatchHistoryEntry[]>([]);
-  const [plans, setPlans] = useState<PlansMap>({});
   const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
     Set<string>
   >(() => new Set());
@@ -359,29 +321,16 @@ export default function App() {
     void Promise.all([
       restrictStorageToTrustedContexts(),
       getSettings(),
-      getProviderApiKeys(),
       getBatch(),
       getBatchHistory(),
-      getPlans(),
-    ]).then(
-      ([
-        ,
-        storedSettings,
-        storedKeys,
-        storedBatch,
-        storedHistory,
-        storedPlans,
-      ]) => {
-        setSettings(storedSettings);
-        setUiLocale(storedSettings.locale ?? DEFAULT_UI_LOCALE);
-        setApiKeys(storedKeys);
-        setBatch(storedBatch);
-        setHistory(storedHistory);
-        setPlans(storedPlans);
-        setLoaded(true);
-        if (!disposed) chrome.storage.onChanged.addListener(onStorageChanged);
-      }
-    );
+    ]).then(([, storedSettings, storedBatch, storedHistory]) => {
+      setSettings(storedSettings);
+      setUiLocale(storedSettings.locale ?? DEFAULT_UI_LOCALE);
+      setBatch(storedBatch);
+      setHistory(storedHistory);
+      setLoaded(true);
+      if (!disposed) chrome.storage.onChanged.addListener(onStorageChanged);
+    });
 
     const onStorageChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -399,10 +348,6 @@ export default function App() {
         }
       }
       if (changes[HISTORY_STORAGE_KEY]) void getBatchHistory().then(setHistory);
-      if (changes[PLANS_STORAGE_KEY]) void getPlans().then(setPlans);
-      if (changes[PROVIDER_API_KEYS_STORAGE_KEY]) {
-        void getProviderApiKeys().then(setApiKeys);
-      }
       if (changes[SETTINGS_STORAGE_KEY]) {
         const changedSettings = extensionSettingsSchema.safeParse(
           changes[SETTINGS_STORAGE_KEY].newValue
@@ -424,50 +369,12 @@ export default function App() {
     };
   }, []);
 
-  const activeSite = getActiveSite(settings);
-
-  const configured = useMemo(
-    () =>
-      Boolean(
-        activeSite.websiteUrl &&
-          (settings.provider === 'deepseek'
-            ? apiKeys.deepseekApiKey
-            : apiKeys.kieApiKey)
-      ),
-    [apiKeys, settings.provider, activeSite.websiteUrl]
-  );
-
-  const targets = useMemo(() => {
-    try {
-      return parseTargetUrls(targetText);
-    } catch {
-      return [];
-    }
-  }, [targetText]);
-
-  const siteLabelById = (siteId: string): string => {
-    const site = settings.sites.find((candidate) => candidate.id === siteId);
-    if (!site) return siteId;
-    return site.label || displayTarget(site.websiteUrl) || siteId;
-  };
-  const planEntries = Object.values(plans);
-  const duePlans = planEntries.filter((plan) => isDueToday(plan, Date.now()));
-  const ranTodayPlans = planEntries.filter(
-    (plan) => !isDueToday(plan, Date.now()) && nextPendingChunk(plan) !== null
-  );
-
   const batchIsActive =
     batch?.status === 'running' || batch?.status === 'paused';
-  const batchIsTerminal =
-    batch?.status === 'completed' || batch?.status === 'stopped';
-  const canRetryItem = (item: BatchItem): boolean =>
-    batchIsTerminal &&
-    (item.status === 'failed' ||
-      item.status === 'no_form' ||
-      item.status === 'validation_error');
-  const retryableItemIds = batch
-    ? batch.items.filter(canRetryItem).map((item) => item.id)
-    : [];
+  // hasResumableItems is the same check resumeStoppedBatch runs, so the button
+  // is only offered when the request behind it can actually succeed.
+  const canResumeStopped =
+    batch?.status === 'stopped' && hasResumableItems(batch);
   const currentItem =
     batch && batch.currentIndex < batch.items.length
       ? batch.items[batch.currentIndex]
@@ -499,154 +406,15 @@ export default function App() {
       : batch.currentIndex
     : 0;
 
-  const selectActiveSite = (siteId: string) =>
-    setSettings((current) => ({ ...current, activeSiteId: siteId }));
-
-  async function persistConfiguration(permissionUrls?: string[]) {
-    const normalized = extensionSettingsSchema.parse({
-      ...settings,
-      sites: settings.sites.map((site) => ({
-        ...site,
-        websiteUrl: site.websiteUrl.trim()
-          ? normalizeWebsiteUrl(site.websiteUrl)
-          : '',
-      })),
-    });
-    if (permissionUrls) {
-      const selectedKey =
-        settings.provider === 'deepseek'
-          ? apiKeys.deepseekApiKey
-          : apiKeys.kieApiKey;
-      if (!selectedKey.trim()) {
-        throw new Error(
-          settings.provider === 'deepseek'
-            ? 'DEEPSEEK_API_KEY_REQUIRED'
-            : 'KIE_API_KEY_REQUIRED'
-        );
-      }
-      if (!getActiveSite(normalized).websiteUrl) {
-        throw new Error('WEBSITE_URL_REQUIRED');
-      }
-      const granted = await requestBatchOriginPermissions(permissionUrls);
-      if (!granted) throw new Error('ORIGIN_PERMISSION_DENIED');
-    }
-    await persistSettings(normalized);
-    setSettings(normalized);
-    return normalized;
-  }
-
-  async function prepareBatch() {
-    setBusy('preparing');
-    setError('');
-    setNotice('');
-    try {
-      const runnableTargets = await runnableTargetsFor(targetText);
-      if (runnableTargets.length === 0) {
-        const response = await sendToBackground({
-          type: 'batch.start',
-          targetText,
-          siteId: settings.activeSiteId,
-        });
-        if (response.type !== 'batch.start') {
-          throw new Error('BATCH_START_FAILED');
-        }
-        setBatch(response.data);
-        setWebsiteProfile(null);
-        return;
-      }
-      if (!configured) {
-        setError(translate('missingSettings'));
-        return;
-      }
-      const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
-      const normalized = await persistConfiguration([normalizedWebsiteUrl]);
-      const response = await sendToBackground({
-        type: 'batch.preview',
-        websiteUrl: getActiveSite(normalized).websiteUrl,
-      });
-      if (response.type !== 'batch.preview') {
-        throw new Error('BATCH_PREVIEW_FAILED');
-      }
-      setWebsiteProfile(response.data);
-    } catch (caught) {
-      const raw = caught instanceof Error ? caught.message : String(caught);
-      if (raw.includes('websiteUrl')) {
-        setError(translate('invalidWebsiteUrl'));
-      } else if (raw.includes('TARGET_URL_')) {
-        setError(translate('invalidTargetUrls'));
-      } else setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function refreshWebsiteProfile() {
-    setBusy('refreshing');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground({
-        type: 'batch.preview',
-        websiteUrl: activeSite.websiteUrl,
-        refresh: true,
-      });
-      if (response.type !== 'batch.preview') {
-        throw new Error('BATCH_PREVIEW_FAILED');
-      }
-      setWebsiteProfile(response.data);
-    } catch (caught) {
-      setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function startBatch() {
-    setBusy('starting');
-    setError('');
-    setNotice('');
-    try {
-      const runnableTargets = await runnableTargetsFor(targetText);
-      if (runnableTargets.length > 0 && !websiteProfile) return;
-
-      if (runnableTargets.length > 0) {
-        const normalizedWebsiteUrl = normalizeWebsiteUrl(activeSite.websiteUrl);
-        await persistConfiguration([normalizedWebsiteUrl, ...runnableTargets]);
-      }
-
-      const response = await sendToBackground({
-        type: 'batch.start',
-        targetText,
-        ...(runnableTargets.length > 0 && websiteProfile
-          ? { websiteProfile }
-          : {}),
-        siteId: settings.activeSiteId,
-      });
-      if (response.type !== 'batch.start') {
-        throw new Error('BATCH_START_FAILED');
-      }
-      setBatch(response.data);
-      setWebsiteProfile(null);
-    } catch (caught) {
-      const raw = caught instanceof Error ? caught.message : String(caught);
-      if (raw.includes('websiteUrl')) {
-        setError(translate('invalidWebsiteUrl'));
-      } else if (raw.includes('TARGET_URL_')) {
-        setError(translate('invalidTargetUrls'));
-      } else setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
   async function runBatchCommand(
     type:
       | 'batch.continue'
       | 'batch.skip-current'
       | 'batch.stop'
+      | 'batch.resume'
       | 'batch.reset'
       | 'batch.open-current',
-    nextBusy: Exclude<BusyState, 'idle' | 'preparing' | 'starting'>
+    nextBusy: Exclude<BusyState, 'idle'>
   ) {
     setBusy(nextBusy);
     setError('');
@@ -655,77 +423,6 @@ export default function App() {
       const response = await sendToBackground({ type });
       if (response.type !== type) throw new Error('BATCH_COMMAND_FAILED');
       setBatch(response.data);
-      if (type === 'batch.reset') {
-        setTargetText('');
-        setWebsiteProfile(null);
-      }
-    } catch (caught) {
-      setError(friendlyError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function retryBatchItems(itemIds: string[]) {
-    if (itemIds.length === 0) return;
-    setBusy('retrying');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground({
-        type: 'batch.retry-items',
-        itemIds,
-      });
-      if (response.type !== 'batch.retry-items') {
-        throw new Error('BATCH_COMMAND_FAILED');
-      }
-      setBatch(response.data);
-    } catch (caught) {
-      setError(friendlyRetryError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function retryFromHistory(historyId: string, urls?: string[]) {
-    if (batchIsActive) return;
-    setBusy('retrying');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground(
-        urls
-          ? { type: 'batch.retry-from-history', historyId, urls }
-          : { type: 'batch.retry-from-history', historyId }
-      );
-      if (response.type !== 'batch.retry-from-history') {
-        throw new Error('BATCH_COMMAND_FAILED');
-      }
-      setBatch(response.data);
-      setWebsiteProfile(null);
-      setTargetText('');
-    } catch (caught) {
-      setError(friendlyRetryError(caught));
-    } finally {
-      setBusy('idle');
-    }
-  }
-
-  async function runPlan(siteId: string) {
-    if (batchIsActive) return;
-    setBusy('planning');
-    setError('');
-    setNotice('');
-    try {
-      const response = await sendToBackground({
-        type: 'plan.run-next',
-        siteId,
-      });
-      if (response.type !== 'plan.run-next') {
-        throw new Error('PLAN_RUN_FAILED');
-      }
-      setBatch(response.data);
-      setWebsiteProfile(null);
     } catch (caught) {
       setError(friendlyError(caught));
     } finally {
@@ -802,159 +499,18 @@ export default function App() {
         </span>
       </div>
 
-      {!batchIsActive && (duePlans.length > 0 || ranTodayPlans.length > 0) ? (
-        <section className="plan-due-banners" aria-live="polite">
-          {duePlans.map((plan) => {
-            const { done, total } = planProgress(plan);
-            const chunk = nextPendingChunk(plan);
-            return (
-              <div key={plan.siteId} className="plan-due-banner">
-                <p>
-                  {translate('planDueBanner', [
-                    siteLabelById(plan.siteId),
-                    String(done + 1),
-                    String(total),
-                    String(chunk?.urls.length ?? 0),
-                  ])}
-                </p>
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={busy !== 'idle'}
-                  onClick={() => runPlan(plan.siteId)}
-                >
-                  {translate('planRunNext')}
-                </button>
-              </div>
-            );
-          })}
-          {ranTodayPlans.map((plan) => (
-            <p key={plan.siteId} className="plan-done-today">
-              {translate('planDoneToday', [siteLabelById(plan.siteId)])}
-            </p>
-          ))}
-        </section>
-      ) : null}
-
       {!batch ? (
-        <>
-          <section className="panel workspace-panel">
-            <div className="section-heading">
-              <p className="step-number">01</p>
-              <div>
-                <h2>{translate('batchSetupTitle')}</h2>
-                <p>{translate('batchSetupDescription')}</p>
-              </div>
-            </div>
-
-            <label className="field">
-              <span>{translate('siteSelectorLabel')}</span>
-              <select
-                value={settings.activeSiteId}
-                onChange={(event) => {
-                  selectActiveSite(event.target.value);
-                  setWebsiteProfile(null);
-                }}
-              >
-                {settings.sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.label ||
-                      displayTarget(site.websiteUrl) ||
-                      translate('siteUnnamed')}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>{translate('targetUrlsLabel')}</span>
-              <textarea
-                className="target-editor"
-                value={targetText}
-                onChange={(event) => {
-                  setTargetText(event.target.value);
-                  setWebsiteProfile(null);
-                }}
-                placeholder={translate('targetUrlsPlaceholder')}
-                rows={7}
-              />
-              <small className="field-hint">
-                {translate('targetUrlsHint')}
-              </small>
-            </label>
-
-            <button
-              type="button"
-              className="primary-button full-width-button"
-              disabled={busy !== 'idle'}
-              onClick={prepareBatch}
-            >
-              {busy === 'preparing'
-                ? translate('preparingBatch')
-                : translate('prepareBatch')}
-            </button>
-          </section>
-
-          {websiteProfile ? (
-            <section className="panel review-panel">
-              <div className="section-heading">
-                <p className="step-number">02</p>
-                <div>
-                  <h2>{translate('batchReviewTitle')}</h2>
-                  <p>
-                    {translate('targetUrlsSummary', String(targets.length))}
-                  </p>
-                </div>
-              </div>
-
-              <div className="profile-card">
-                <div className="profile-card-heading">
-                  <p className="profile-label">
-                    {translate('websiteProfileTitle')}
-                  </p>
-                  <button
-                    type="button"
-                    className="text-button"
-                    disabled={busy !== 'idle'}
-                    onClick={refreshWebsiteProfile}
-                  >
-                    {busy === 'refreshing'
-                      ? translate('refreshingWebsiteProfile')
-                      : translate('refreshWebsiteProfile')}
-                  </button>
-                </div>
-                <dl>
-                  <div>
-                    <dt>{translate('websiteUrlLabel')}</dt>
-                    <dd>{websiteProfile.url}</dd>
-                  </div>
-                  <div>
-                    <dt>{translate('metaTitleLabel')}</dt>
-                    <dd>{websiteProfile.title}</dd>
-                  </div>
-                  <div>
-                    <dt>{translate('metaDescriptionLabel')}</dt>
-                    <dd>{websiteProfile.description}</dd>
-                  </div>
-                </dl>
-              </div>
-
-              <p className="confirmation-note">
-                {translate('batchConfirmationNotice', String(targets.length))}
-              </p>
-              <button
-                type="button"
-                className="publish-button full-width-button"
-                disabled={busy !== 'idle'}
-                onClick={startBatch}
-              >
-                {busy === 'starting'
-                  ? translate('startingBatch')
-                  : translate('confirmAndStartBatch')}
-              </button>
-            </section>
-          ) : null}
-        </>
+        <section className="panel idle-panel">
+          <h2>{translate('batchIdleTitle')}</h2>
+          <p>{translate('batchIdleDescription')}</p>
+          <button
+            type="button"
+            className="primary-button full-width-button"
+            onClick={openDashboard}
+          >
+            {translate('openDashboard')}
+          </button>
+        </section>
       ) : (
         <section className="panel batch-panel">
           <div className="batch-heading">
@@ -1061,19 +617,24 @@ export default function App() {
               <p className="batch-summary">
                 {translate('batchSummary', batchSummary(batch))}
               </p>
-              {retryableItemIds.length > 0 ? (
-                <button
-                  type="button"
-                  className="secondary-button full-width-button"
-                  disabled={busy !== 'idle'}
-                  onClick={() => retryBatchItems(retryableItemIds)}
-                >
-                  {translate('batchRetryFailed')}
-                </button>
+              {canResumeStopped ? (
+                <>
+                  <button
+                    type="button"
+                    className="primary-button full-width-button"
+                    disabled={busy !== 'idle'}
+                    onClick={() => runBatchCommand('batch.resume', 'resuming')}
+                  >
+                    {translate('resumeStoppedBatch')}
+                  </button>
+                  <p className="stop-hint">
+                    {translate('resumeStoppedBatchHint')}
+                  </p>
+                </>
               ) : null}
               <button
                 type="button"
-                className="primary-button full-width-button"
+                className={`${canResumeStopped ? 'secondary-button' : 'primary-button'} full-width-button`}
                 disabled={busy !== 'idle'}
                 onClick={() => runBatchCommand('batch.reset', 'resetting')}
               >
@@ -1173,30 +734,16 @@ export default function App() {
                       <p className="site-result-detail">{detail}</p>
                     ) : null}
 
-                    {failureDetail || canRetryItem(item) ? (
+                    {failureDetail ? (
                       <div className="site-diagnostics">
-                        {failureDetail ? (
-                          <>
-                            <code>{failureDetail.message}</code>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => copyDiagnostics(item)}
-                            >
-                              {translate('copyDiagnostics')}
-                            </button>
-                          </>
-                        ) : null}
-                        {canRetryItem(item) ? (
-                          <button
-                            type="button"
-                            className="text-button"
-                            disabled={busy !== 'idle'}
-                            onClick={() => retryBatchItems([item.id])}
-                          >
-                            {translate('batchRetryItem')}
-                          </button>
-                        ) : null}
+                        <code>{failureDetail.message}</code>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => copyDiagnostics(item)}
+                        >
+                          {translate('copyDiagnostics')}
+                        </button>
                       </div>
                     ) : null}
 
@@ -1262,16 +809,6 @@ export default function App() {
                           {formatEventTime(entry.archivedAt)}
                         </time>
                       </summary>
-                      {entry.counts.failed > 0 ? (
-                        <button
-                          type="button"
-                          className="secondary-button full-width-button"
-                          disabled={busy !== 'idle' || batchIsActive}
-                          onClick={() => retryFromHistory(entry.id)}
-                        >
-                          {translate('batchHistoryRetryFailed')}
-                        </button>
-                      ) : null}
                       <ul className="history-failed-list">
                         {failedItems.map((item) => {
                           const failureDetail = failureDetailFor(item);
@@ -1291,8 +828,8 @@ export default function App() {
                                   <code>{failureDetail.message}</code>
                                 ) : null}
                               </div>
-                              <div className="history-failed-actions">
-                                {failureDetail ? (
+                              {failureDetail ? (
+                                <div className="history-failed-actions">
                                   <button
                                     type="button"
                                     className="text-button"
@@ -1300,18 +837,8 @@ export default function App() {
                                   >
                                     {translate('copyDiagnostics')}
                                   </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="text-button"
-                                  disabled={busy !== 'idle' || batchIsActive}
-                                  onClick={() =>
-                                    retryFromHistory(entry.id, [item.url])
-                                  }
-                                >
-                                  {translate('batchHistoryRetryUrl')}
-                                </button>
-                              </div>
+                                </div>
+                              ) : null}
                             </li>
                           );
                         })}

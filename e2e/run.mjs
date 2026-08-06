@@ -729,12 +729,19 @@ async function main() {
     const dashboardButton = sidepanel.locator('button.dashboard-link');
     assertEqual(await dashboardButton.count(), 1, 'Sidepanel is missing the open-dashboard button');
     assertIncludes(await dashboardButton.innerText(), '打开看板', 'Open-dashboard button text unexpected');
-    assertEqual(await sidepanel.locator('textarea.target-editor').count(), 1, 'Sidepanel is missing the batch target textarea');
+
+    // Runs are started from a dashboard plan only. The sidepanel must offer no
+    // way to begin one: no target editor, no setup panel, no plan run banner.
+    assertEqual(await sidepanel.locator('textarea.target-editor').count(), 0, 'Sidepanel still renders a batch target textarea');
+    assertEqual(await sidepanel.locator('section.workspace-panel').count(), 0, 'Sidepanel still renders the batch setup panel');
+    assertEqual(await sidepanel.locator('section.review-panel').count(), 0, 'Sidepanel still renders the batch review panel');
+    assertEqual(await sidepanel.locator('section.plan-due-banners').count(), 0, 'Sidepanel still renders the plan due banner');
+    assertEqual(await sidepanel.locator('section.idle-panel').count(), 1, 'Sidepanel is missing the idle panel that points at the dashboard');
 
     await shot(sidepanel, 'T3-sidepanel');
     const errors = extensionErrorsFor('T3');
     assertEqual(errors.length, 0, `Uncaught page errors on sidepanel:\n${JSON.stringify(errors, null, 2)}`);
-    return 'no provider select / api key input; has open-dashboard + target textarea';
+    return 'no provider select / api key input / run controls; has open-dashboard + idle panel';
   });
 
   /* ---------------------------------------------------------------- T4 ---- */
@@ -783,24 +790,26 @@ async function main() {
     await dashboard.fill('#site-url', promoUrl);
     await saveSitesPage(dashboard);
 
+    // Runs begin from a dashboard plan, which is where the promoted site is
+    // chosen and recorded. The sidepanel only follows and stops the run.
+    await closeSettingsDrawer(dashboard);
+    await waitForDashboardReady(dashboard);
+    await dashboard.click('nav.main-navigation button:has-text("计划管理")');
+    await dashboard.waitForSelector('.plans-page', { timeout: 20_000 });
+    await dashboard.click('.plans-page button:has-text("新建计划")');
+    await dashboard.waitForSelector('dialog.new-plan-dialog', { timeout: 20_000 });
+    await dashboard.fill('dialog.new-plan-dialog .form-field input', 'E2E 停止测试');
+    await dashboard.fill('dialog.new-plan-dialog .target-urls-field textarea', BATCH_TARGETS.join('\n'));
+    await shot(dashboard, 'T5a-new-plan');
+    await dashboard.click('dialog.new-plan-dialog button[type="submit"]');
+    await dashboard.waitForSelector('dialog.new-plan-dialog', { state: 'detached', timeout: 20_000 });
+
+    await dashboard.waitForSelector('.plan-run-strip button', { timeout: 20_000 });
+    await dashboard.click('.plan-run-strip button');
+
     await sidepanel.bringToFront();
     await sidepanel.reload({ waitUntil: 'domcontentloaded' });
     await sidepanel.waitForSelector('main.shell:not(.loading)', { timeout: 20_000 });
-
-    await sidepanel.fill('textarea.target-editor', BATCH_TARGETS.join('\n'));
-    await sidepanel.click('section.workspace-panel button.primary-button');
-
-    // Step 02 (review/confirm) appears once the promoted site's meta is read.
-    await Promise.race([
-      sidepanel.waitForSelector('section.review-panel', { timeout: 45_000 }),
-      sidepanel.waitForSelector('p.error-toast', { timeout: 45_000 }).then(async () => {
-        const message = await sidepanel.locator('p.error-toast').innerText();
-        throw new Error(`Batch preview failed: ${message}`);
-      }),
-    ]);
-    await shot(sidepanel, 'T5a-review');
-    await sidepanel.click('section.review-panel button.publish-button');
-
     await sidepanel.waitForSelector('section.batch-panel .stop-button', { timeout: 45_000 });
     // Let the first item actually start before stopping.
     await sidepanel
@@ -872,6 +881,41 @@ async function main() {
       `Batch controls stayed disabled for ${controlsEnabledMs}ms after the stop`
     );
     return `stop latency ${stopLatencyMs}ms; controls re-enabled in ${controlsEnabledMs}ms; state ${JSON.stringify(afterStop)}`;
+  });
+
+  /* --------------------------------------------------------------- T5R ---- */
+  await runTest('T5R', 'stopped run resumes from the sidepanel', async () => {
+    // The run T5 stopped is still on screen. Picking it back up must not need a
+    // trip to the dashboard, and must not restart the targets it already
+    // finished.
+    await sidepanel.bringToFront();
+    const before = await sidepanel.$$eval('.site-flow-list .site-flow-card', (cards) =>
+      cards.map((card) => [...card.classList].filter((name) => name.startsWith('status-')).join(','))
+    );
+    const settledBefore = before.filter((status) => !status.includes('status-stopped')).length;
+
+    const resumeButton = sidepanel.locator('section.batch-panel button:has-text("继续运行")');
+    assertEqual(await resumeButton.count(), 1, 'Sidepanel offered no resume for the stopped run');
+    await resumeButton.click();
+
+    await sidepanel.waitForFunction(
+      () => !(document.querySelector('.batch-heading h2')?.textContent?.includes('批次已停止') ?? false),
+      null,
+      { timeout: 20_000, polling: 25 }
+    );
+    await shot(sidepanel, 'T5R-resumed');
+
+    const after = await sidepanel.$$eval('.site-flow-list .site-flow-card', (cards) =>
+      cards.map((card) => [...card.classList].filter((name) => name.startsWith('status-')).join(','))
+    );
+    assertEqual(after.length, before.length, 'Resume changed the target count');
+    const stillStopped = after.filter((status) => status.includes('status-stopped')).length;
+    assertEqual(stillStopped, 0, 'Resume left targets sitting in the stopped state');
+
+    const heading = (await sidepanel.locator('.batch-heading h2').innerText()).trim();
+    const errors = extensionErrorsFor('T5R');
+    assertEqual(errors.length, 0, `Uncaught page errors while resuming:\n${JSON.stringify(errors, null, 2)}`);
+    return `resumed to ${heading}; ${settledBefore} already-settled target(s) untouched`;
   });
 
   /* ---------------------------------------------------------------- T6 ---- */

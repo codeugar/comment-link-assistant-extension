@@ -185,59 +185,11 @@
   "pageChangedSinceGeneration": {
     "message": "生成草稿后，当前页面或评论表单已经变化。请重新生成草稿再提交。"
   },
-  "batchSetupTitle": {
-    "message": "目标队列"
-  },
-  "batchSetupDescription": {
-    "message": "粘贴你要发表评论的博客或论坛页面。"
-  },
-  "targetUrlsLabel": {
-    "message": "目标网址"
-  },
   "targetUrlsPlaceholder": {
     "message": "https://blog.example/post\nhttps://forum.example/thread"
   },
-  "targetUrlsHint": {
-    "message": "每行一个完整的 HTTP 或 HTTPS URL，最多 200 个，重复项会自动去除。"
-  },
   "invalidTargetUrls": {
     "message": "请检查目标网址，最多输入 200 个完整的 HTTP 或 HTTPS URL。"
-  },
-  "prepareBatch": {
-    "message": "检查批次"
-  },
-  "preparingBatch": {
-    "message": "正在读取网站 Meta 信息…"
-  },
-  "batchReviewTitle": {
-    "message": "确认自动发布"
-  },
-  "websiteProfileTitle": {
-    "message": "外链网站信息"
-  },
-  "refreshWebsiteProfile": {
-    "message": "刷新"
-  },
-  "refreshingWebsiteProfile": {
-    "message": "刷新中…"
-  },
-  "metaTitleLabel": {
-    "message": "Meta Title"
-  },
-  "metaDescriptionLabel": {
-    "message": "Meta Description"
-  },
-  "targetUrlsSummary": {
-    "message": "已准备 $1 个去重后的目标网址"
-  },
-  "batchConfirmationNotice": {
-    "message": "本次确认后，助手会依次为 $1 个网站生成并提交评论，不再逐条确认；遇到登录或 CAPTCHA 会暂停。"
-  },
-  "confirmAndStartBatch": {
-    "message": "确认并开始"
-  },
-  "startingBatch": {
-    "message": "正在启动批次…"
   },
   "batchProgressTitle": {
     "message": "批次进度"
@@ -290,26 +242,11 @@
   "startNewBatch": {
     "message": "开始新批次"
   },
-  "batchRetryItem": {
-    "message": "重试"
-  },
-  "batchRetryFailed": {
-    "message": "重跑失败项"
-  },
   "batchHistoryTitle": {
     "message": "历史记录"
   },
-  "batchHistoryRetryFailed": {
-    "message": "重跑失败项"
-  },
-  "batchHistoryRetryUrl": {
-    "message": "重试"
-  },
   "batchHistoryEmpty": {
     "message": "暂无历史批次"
-  },
-  "siteSelectorLabel": {
-    "message": "网站"
   },
   "siteAdd": {
     "message": "新增网站"
@@ -521,15 +458,6 @@
   "planPreviewSummary": {
     "message": "$1 条 → $2 批"
   },
-  "planDueBanner": {
-    "message": "「$1」今日批次待跑（第 $2/$3 批，$4 条）"
-  },
-  "planRunNext": {
-    "message": "跑今天这批"
-  },
-  "planDoneToday": {
-    "message": "「$1」今日已跑，明天继续"
-  },
   "planProgress": {
     "message": "已完成 $1/$2 批"
   },
@@ -682,5 +610,17 @@
   },
   "anchorBucketNaturalHint": {
     "message": "融进上下文句子里的一个短语。"
+  },
+  "batchIdleTitle": {
+    "message": "暂无运行中的批次"
+  },
+  "batchIdleDescription": {
+    "message": "批次在数据看板中按计划发起。此处仅用于查看进度、处理登录与验证码。"
+  },
+  "resumeStoppedBatch": {
+    "message": "继续运行"
+  },
+  "resumeStoppedBatchHint": {
+    "message": "继续会从队列里未完成的目标接着跑；已提交的评论不会重复提交。"
   }
 }

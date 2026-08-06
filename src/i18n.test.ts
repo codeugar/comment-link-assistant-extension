@@ -10,12 +10,8 @@ import {
 } from './i18n';
 
 const requiredBatchKeys = [
-  'batchSetupTitle',
-  'targetUrlsLabel',
-  'prepareBatch',
-  'batchReviewTitle',
-  'batchConfirmationNotice',
-  'confirmAndStartBatch',
+  'batchIdleTitle',
+  'batchIdleDescription',
   'batchProgressTitle',
   'continueBatch',
   'stopBatch',
