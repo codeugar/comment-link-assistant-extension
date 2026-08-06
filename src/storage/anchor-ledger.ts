@@ -1,4 +1,8 @@
-import { ANCHOR_BUCKETS, type AnchorBucket } from '@/anchor/types';
+import {
+  ANCHOR_BUCKETS,
+  type AnchorBucket,
+  MAX_ANCHOR_TEXT_LENGTH,
+} from '@/anchor/types';
 import { z } from 'zod';
 
 export const ANCHOR_LEDGER_STORAGE_KEY = 'comment-link-assistant.anchor-ledger';
@@ -8,11 +12,27 @@ const MAX_SITES_WITH_ANCHOR_LEDGERS = 20;
 // back of this list. Dropping it is the honest outcome: publication was never
 // confirmed, so it must not count toward the site's live anchor profile.
 const MAX_PENDING_ENTRIES = 500;
+// Per-wording rows are a breakdown of `published`, not the source of it. Pools
+// hold at most 50 entries per bucket and only the natural bucket writes free
+// wording, so this ceiling is far above a real site; when it is reached the
+// least-used rows go first and the bucket totals stay correct regardless.
+export const MAX_ANCHOR_TEXT_ROWS = 500;
 
 export interface AnchorPendingEntry {
   bucket: AnchorBucket;
   targetUrl: string;
   at: number;
+  /** Wording the comment actually carried. Absent on rows written before the
+   *  ledger recorded wording. */
+  text?: string;
+}
+
+/** How often one exact wording has gone live for a site. */
+export interface AnchorTextTally {
+  bucket: AnchorBucket;
+  text: string;
+  count: number;
+  lastAt: number;
 }
 
 /**
@@ -28,6 +48,12 @@ export interface AnchorLedger {
   siteId: string;
   published: Record<AnchorBucket, number>;
   pending: AnchorPendingEntry[];
+  /**
+   * Which exact wording went out, and how often. A breakdown of `published`
+   * that starts empty on ledgers written before it existed, so its sum can
+   * legitimately trail the bucket totals — the totals stay authoritative.
+   */
+  texts: AnchorTextTally[];
   updatedAt: number;
 }
 
@@ -53,10 +79,26 @@ export const anchorLedgerSchema: z.ZodType<AnchorLedger> = z
             bucket: z.enum(ANCHOR_BUCKETS),
             targetUrl: z.string().min(1).max(2_048),
             at: z.number().int().nonnegative(),
+            text: z.string().min(1).max(MAX_ANCHOR_TEXT_LENGTH).optional(),
           })
           .strict()
       )
       .max(MAX_PENDING_ENTRIES),
+    // Defaulted rather than required, so a ledger stored before wording was
+    // tracked still parses instead of failing the whole map back to empty.
+    texts: z
+      .array(
+        z
+          .object({
+            bucket: z.enum(ANCHOR_BUCKETS),
+            text: z.string().min(1).max(MAX_ANCHOR_TEXT_LENGTH),
+            count: z.number().int().positive(),
+            lastAt: z.number().int().nonnegative(),
+          })
+          .strict()
+      )
+      .max(MAX_ANCHOR_TEXT_ROWS)
+      .default([]),
     updatedAt: z.number().int().nonnegative(),
   })
   .strict();
@@ -77,8 +119,46 @@ export function emptyAnchorLedger(siteId: string, now: number): AnchorLedger {
       natural: 0,
     },
     pending: [],
+    texts: [],
     updatedAt: now,
   };
+}
+
+/** Comparable form for merging the same wording written with different case or
+ *  spacing into one row. */
+export function comparableAnchorText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function creditAnchorText(
+  texts: readonly AnchorTextTally[],
+  bucket: AnchorBucket,
+  text: string | undefined,
+  now: number
+): AnchorTextTally[] {
+  const wording = text?.trim().replace(/\s+/g, ' ').slice(0, 80) ?? '';
+  if (!wording) return [...texts];
+  const key = comparableAnchorText(wording);
+  const index = texts.findIndex(
+    (row) => row.bucket === bucket && comparableAnchorText(row.text) === key
+  );
+  if (index >= 0) {
+    const next = [...texts];
+    const row = next[index] as AnchorTextTally;
+    next[index] = { ...row, count: row.count + 1, lastAt: now };
+    return next;
+  }
+  const next = [...texts, { bucket, text: wording, count: 1, lastAt: now }];
+  if (next.length <= MAX_ANCHOR_TEXT_ROWS) return next;
+  // Over the ceiling the rows that explain the least go first, oldest before
+  // newer at the same count.
+  const weakest = next.reduce((lowest, row) =>
+    row.count < lowest.count ||
+    (row.count === lowest.count && row.lastAt < lowest.lastAt)
+      ? row
+      : lowest
+  );
+  return next.filter((row) => row !== weakest);
 }
 
 /** Comparable form for matching a moderation recheck back to its pending row. */
@@ -135,11 +215,13 @@ async function updateAnchorLedger(
 export function recordAnchorPublished(
   siteId: string,
   bucket: AnchorBucket,
+  text?: string,
   now: number = Date.now()
 ): Promise<AnchorLedger> {
   return updateAnchorLedger(siteId, now, (ledger) => ({
     ...ledger,
     published: { ...ledger.published, [bucket]: ledger.published[bucket] + 1 },
+    texts: creditAnchorText(ledger.texts, bucket, text, now),
   }));
 }
 
@@ -153,8 +235,10 @@ export function recordAnchorPending(
   siteId: string,
   bucket: AnchorBucket,
   targetUrl: string,
+  text?: string,
   now: number = Date.now()
 ): Promise<AnchorLedger> {
+  const wording = text?.trim().replace(/\s+/g, ' ').slice(0, 80) || undefined;
   return updateAnchorLedger(siteId, now, (ledger) => ({
     ...ledger,
     pending: [
@@ -163,7 +247,7 @@ export function recordAnchorPending(
           comparableLedgerUrl(entry.targetUrl) !==
           comparableLedgerUrl(targetUrl)
       ),
-      { bucket, targetUrl, at: now },
+      { bucket, targetUrl, at: now, ...(wording ? { text: wording } : {}) },
     ].slice(-MAX_PENDING_ENTRIES),
   }));
 }
@@ -196,6 +280,7 @@ export function resolveAnchorPending(
         [entry.bucket]: ledger.published[entry.bucket] + 1,
       },
       pending,
+      texts: creditAnchorText(ledger.texts, entry.bucket, entry.text, now),
     };
   });
 }

@@ -144,7 +144,7 @@
     "message": "Contextual outreach desk"
   },
   "settingsDescription": {
-    "message": "Add provider keys, choose a model, and identify the website you want to promote."
+    "message": "Add provider keys, choose a model, and pick the interface language. Promoted websites live under Websites."
   },
   "currentPageLabel": {
     "message": "Current page"
@@ -326,6 +326,45 @@
   "siteUnnamed": {
     "message": "Untitled website"
   },
+  "sitesPageTitle": {
+    "message": "Websites"
+  },
+  "sitesPageDescription": {
+    "message": "Keep the profile of every website you promote, and set the anchor text mix its links should follow."
+  },
+  "sitesListTitle": {
+    "message": "Websites ($1/$2)"
+  },
+  "sitesBasicsTitle": {
+    "message": "Basics"
+  },
+  "sitesNoWebsiteUrl": {
+    "message": "No website URL yet"
+  },
+  "sitesDefaultBadge": {
+    "message": "Default"
+  },
+  "sitesSetDefault": {
+    "message": "Set as default"
+  },
+  "sitesDefaultHint": {
+    "message": "The side panel and new plans start from this website."
+  },
+  "sitesUnsavedChanges": {
+    "message": "Unsaved changes"
+  },
+  "sitesRevert": {
+    "message": "Discard changes"
+  },
+  "sitesSave": {
+    "message": "Save websites"
+  },
+  "sitesLimitReached": {
+    "message": "Up to $1 websites."
+  },
+  "sitesAnchorMixUnavailable": {
+    "message": "Anchor text only applies when the link goes into the comment body. Switch to that placement to set a mix."
+  },
   "batchStatusQueued": {
     "message": "Queued"
   },
@@ -373,6 +412,9 @@
   },
   "crossOriginCommentFrameUnsupported": {
     "message": "This comment widget is hosted on another origin and requires manual posting."
+  },
+  "targetPageUnreachable": {
+    "message": "The page did not load — the site may be down, blocked, or too slow to reach."
   },
   "displayNameRequiredForTarget": {
     "message": "This form requires a display name. Add one in the dashboard's settings before the next batch."
@@ -569,11 +611,38 @@
   "anchorMixGeneratingNatural": {
     "message": "Writing…"
   },
+  "anchorMixGenerateNaturalNeedsUrl": {
+    "message": "Fill in the website URL and save the site first, then generate."
+  },
+  "anchorMixGenerateNaturalNeedsPermission": {
+    "message": "Access to your own website is needed to read its title and description."
+  },
+  "anchorMixGenerateNaturalNeedsApiKey": {
+    "message": "Add the API key for the selected model in Settings first."
+  },
+  "anchorMixGenerateNaturalSiteUnreachable": {
+    "message": "Could not read the website. Check that the URL opens and its home page has a title and description."
+  },
   "anchorMixGenerateNaturalFailed": {
     "message": "Could not write fallback wording. Check the provider API key and the website URL."
   },
   "anchorMixNaturalHint": {
     "message": "Written fresh for each comment so it fits the sentence. These entries are only the fallback when that is unusable — leave them empty and this kind is skipped."
+  },
+  "anchorTextsTitle": {
+    "message": "Wording already published"
+  },
+  "anchorTextsCount": {
+    "message": "$1×"
+  },
+  "anchorTextsShowAll": {
+    "message": "Show all $1"
+  },
+  "anchorTextsShowLess": {
+    "message": "Show less"
+  },
+  "anchorTextsUntracked": {
+    "message": "$1 more were published without a recorded wording."
   },
   "anchorMixSaveFailed": {
     "message": "Could not save the anchor mix."

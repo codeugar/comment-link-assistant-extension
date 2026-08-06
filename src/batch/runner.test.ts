@@ -2172,7 +2172,10 @@ describe('anchor mix control', () => {
         'site-1',
         'brand',
         'https://blog.example/post',
-        status
+        status,
+        // The wording travels with the tally, so the ledger can show which
+        // anchor texts actually went out rather than only their bucket.
+        'Example'
       );
     }
   );

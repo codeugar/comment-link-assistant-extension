@@ -1462,6 +1462,137 @@ export class DashboardRepository {
     );
   }
 
+  /**
+   * Re-chunks the work that has not started yet. Batches that already ran keep
+   * their targets and their sequence numbers — the history of what went out
+   * together is a record, not a layout to be recomputed. Only the pending tail
+   * is regrouped, and every target keeps its id and its plan-wide sequence, so
+   * runs and attempts still point at the same rows.
+   */
+  async setPlanChunkSize(
+    planIdValue: string,
+    chunkSizeValue: number,
+    at: number = this.clock()
+  ): Promise<PlanDetail> {
+    if (
+      !Number.isInteger(chunkSizeValue) ||
+      chunkSizeValue < 1 ||
+      chunkSizeValue > MAX_CHUNK_SIZE
+    ) {
+      throw new DashboardDataError('PLAN_CHUNK_SIZE_INVALID');
+    }
+    return this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planBatches,
+        DASHBOARD_STORE_NAMES.planTargets,
+        DASHBOARD_STORE_NAMES.runs,
+      ],
+      'readwrite',
+      async (transaction) => {
+        const planStore = transaction.objectStore(DASHBOARD_STORE_NAMES.plans);
+        const batchStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planBatches
+        );
+        const targetStore = transaction.objectStore(
+          DASHBOARD_STORE_NAMES.planTargets
+        );
+        const runStore = transaction.objectStore(DASHBOARD_STORE_NAMES.runs);
+        const plan = (await requestResult(planStore.get(planIdValue))) as
+          | Plan
+          | undefined;
+        if (!plan) throw new DashboardDataError('PLAN_NOT_FOUND');
+        if (plan.status === 'archived') {
+          throw new DashboardDataError('PLAN_ARCHIVED');
+        }
+
+        const [allTargets, batches, runs] = await Promise.all([
+          allFromIndex<PlanTarget>(targetStore, INDEXES.targets.plan, plan.id),
+          allFromIndex<PlanBatch>(batchStore, INDEXES.batches.plan, plan.id),
+          allFromIndex<Run>(runStore, INDEXES.runs.plan, plan.id),
+        ]);
+        const sorted = sortBatches(batches);
+        const kept = sorted.filter((batch) => batch.status !== 'pending');
+        const regrouped = sorted.filter((batch) => batch.status === 'pending');
+        // A batch that is mid-flight is never pending, so shrinking the tail
+        // stays legal while one runs — which is the whole point of being able
+        // to say "this batch is too big" partway through a plan. Only a
+        // pending batch that somehow still carries a live run is refused,
+        // because its targets are about to move.
+        if (
+          regrouped.some((batch) =>
+            batchHasActiveRunForTargetDeletion(batch, runs)
+          )
+        ) {
+          throw new DashboardDataError('BATCH_ALREADY_ACTIVE');
+        }
+
+        const nextPlan: Plan = {
+          ...plan,
+          chunkSize: chunkSizeValue,
+          updatedAt: at,
+        };
+        if (regrouped.length === 0) {
+          planStore.put(nextPlan);
+          return { plan: nextPlan, batches: sorted };
+        }
+
+        const regroupedIds = new Set(regrouped.map((batch) => batch.id));
+        const pendingTargets = allTargets
+          .filter((target) => regroupedIds.has(target.batchId))
+          .sort((left, right) => left.sequence - right.sequence);
+        for (const batch of regrouped) batchStore.delete(batch.id);
+
+        const nextBatches = [...kept];
+        let batchSequence = kept.reduce(
+          (highest, batch) => Math.max(highest, batch.sequence),
+          0
+        );
+        for (
+          let start = 0;
+          start < pendingTargets.length;
+          start += chunkSizeValue
+        ) {
+          batchSequence += 1;
+          const group = pendingTargets.slice(start, start + chunkSizeValue);
+          const currentBatchId = batchId(plan.id, batchSequence);
+          const previous = regrouped.find(
+            (batch) => batch.id === currentBatchId
+          );
+          const batch: PlanBatch = applyCountsToBatch(
+            {
+              id: currentBatchId,
+              planId: plan.id,
+              sequence: batchSequence,
+              status: 'pending',
+              targetCount: group.length,
+              processedCount: 0,
+              submittedCount: 0,
+              failedCount: 0,
+              unknownCount: 0,
+              createdAt: previous?.createdAt ?? at,
+              updatedAt: at,
+            },
+            group
+          );
+          batchStore.put(batch);
+          nextBatches.push(batch);
+          for (const target of group) {
+            targetStore.put({
+              ...target,
+              batchId: currentBatchId,
+              batchSequence,
+              updatedAt: at,
+            } satisfies PlanTarget);
+          }
+        }
+
+        planStore.put(nextPlan);
+        return { plan: nextPlan, batches: sortBatches(nextBatches) };
+      }
+    );
+  }
+
   async archivePlan(
     planIdValue: string,
     at: number = this.clock()

@@ -105,6 +105,7 @@ type RepositoryPort = Pick<
   | 'renamePlan'
   | 'recordModerationCheck'
   | 'resumeBatchRun'
+  | 'setPlanChunkSize'
   | 'startBatchRun'
   | 'startStandaloneBatchRun'
   | 'syncBatchSnapshot'
@@ -356,6 +357,15 @@ export class DashboardService {
     const plan = await this.repository.renamePlan(planId, name);
     await this.bumpRevision();
     return plan;
+  }
+
+  async setPlanChunkSize(
+    planId: string,
+    chunkSize: number
+  ): Promise<PlanDetail> {
+    const detail = await this.repository.setPlanChunkSize(planId, chunkSize);
+    await this.bumpRevision();
+    return detail;
   }
 
   async getTargets(

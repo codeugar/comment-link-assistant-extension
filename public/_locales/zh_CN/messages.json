@@ -144,7 +144,7 @@
     "message": "语境化外链工作台"
   },
   "settingsDescription": {
-    "message": "填写服务商 API Key、选择模型，并填写要推广的网站。"
+    "message": "填写服务商 API Key、选择模型和界面语言。推广网站在「网站管理」里维护。"
   },
   "currentPageLabel": {
     "message": "当前页面"
@@ -326,6 +326,45 @@
   "siteUnnamed": {
     "message": "未命名网站"
   },
+  "sitesPageTitle": {
+    "message": "网站管理"
+  },
+  "sitesPageDescription": {
+    "message": "维护要推广的网站资料，并为每个网站设定外链的锚文本配比。"
+  },
+  "sitesListTitle": {
+    "message": "网站列表（$1/$2）"
+  },
+  "sitesBasicsTitle": {
+    "message": "基本信息"
+  },
+  "sitesNoWebsiteUrl": {
+    "message": "未填写网站链接"
+  },
+  "sitesDefaultBadge": {
+    "message": "默认"
+  },
+  "sitesSetDefault": {
+    "message": "设为默认网站"
+  },
+  "sitesDefaultHint": {
+    "message": "侧边栏和新建计划默认使用这个网站。"
+  },
+  "sitesUnsavedChanges": {
+    "message": "有未保存的修改"
+  },
+  "sitesRevert": {
+    "message": "撤销修改"
+  },
+  "sitesSave": {
+    "message": "保存网站"
+  },
+  "sitesLimitReached": {
+    "message": "最多可添加 $1 个网站。"
+  },
+  "sitesAnchorMixUnavailable": {
+    "message": "只有把链接写进评论正文的放置方式才使用锚文本，换成这种方式后即可设定配比。"
+  },
   "batchStatusQueued": {
     "message": "等待处理"
   },
@@ -373,6 +412,9 @@
   },
   "crossOriginCommentFrameUnsupported": {
     "message": "这个评论组件托管在第三方域名下，需要手动发布。"
+  },
+  "targetPageUnreachable": {
+    "message": "页面没有加载出来，站点可能已下线、被拦截或访问超时。"
   },
   "displayNameRequiredForTarget": {
     "message": "此表单要求填写显示名称，请在下一批次前到看板设置中补充。"
@@ -569,11 +611,38 @@
   "anchorMixGeneratingNatural": {
     "message": "生成中…"
   },
+  "anchorMixGenerateNaturalNeedsUrl": {
+    "message": "先填好网站链接并点「保存网站」，再生成兜底词。"
+  },
+  "anchorMixGenerateNaturalNeedsPermission": {
+    "message": "需要授权访问你自己的网站，才能读到它的标题和描述。"
+  },
+  "anchorMixGenerateNaturalNeedsApiKey": {
+    "message": "先在设置里填好当前模型的 API Key。"
+  },
+  "anchorMixGenerateNaturalSiteUnreachable": {
+    "message": "读不到网站信息。确认链接能打开，且首页有 title 和 description。"
+  },
   "anchorMixGenerateNaturalFailed": {
     "message": "生成兜底词失败，请检查模型 API Key 和网站链接。"
   },
   "anchorMixNaturalHint": {
     "message": "每条评论都会现写一个，以贴合上下文。这里的词只在现写结果不可用时兜底——留空则这一类会被跳过。"
+  },
+  "anchorTextsTitle": {
+    "message": "已发布的用词"
+  },
+  "anchorTextsCount": {
+    "message": "$1 次"
+  },
+  "anchorTextsShowAll": {
+    "message": "展开全部 $1 条"
+  },
+  "anchorTextsShowLess": {
+    "message": "收起"
+  },
+  "anchorTextsUntracked": {
+    "message": "另有 $1 条没有留下用词记录。"
   },
   "anchorMixSaveFailed": {
     "message": "锚文本配比保存失败。"

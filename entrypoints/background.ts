@@ -1656,6 +1656,15 @@ async function dispatch(
       data: await dashboardService.renamePlan(message.planId, message.name),
     };
   }
+  if (message.type === 'plan.setChunkSize') {
+    return {
+      type: message.type,
+      data: await dashboardService.setPlanChunkSize(
+        message.planId,
+        message.chunkSize
+      ),
+    };
+  }
   if (message.type === 'plan.archive') {
     return {
       type: message.type,

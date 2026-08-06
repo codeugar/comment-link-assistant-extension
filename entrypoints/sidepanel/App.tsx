@@ -122,6 +122,9 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'CROSS_ORIGIN_COMMENT_FRAME_UNSUPPORTED') {
     return translate('crossOriginCommentFrameUnsupported');
   }
+  if (message === 'TARGET_PAGE_UNREACHABLE') {
+    return translate('targetPageUnreachable');
+  }
   if (message === 'DISPLAY_NAME_REQUIRED') {
     return translate('displayNameRequiredForTarget');
   }

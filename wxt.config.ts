@@ -32,7 +32,16 @@ export default defineConfig({
     side_panel: {
       default_path: 'sidepanel.html',
     },
-    host_permissions: ['https://api.deepseek.com/*', 'https://api.kie.ai/*'],
-    optional_host_permissions: ['http://*/*', 'https://*/*'],
+    // Granted at install rather than prompted for per site. The extension's
+    // whole job is to read the promoted site's own meta and post comments on
+    // arbitrary blogs, so a per-origin prompt asked nothing the user had not
+    // already decided by adding the site and the targets. The cost is the
+    // install-time "read and change all your data on all websites" warning.
+    host_permissions: [
+      'https://api.deepseek.com/*',
+      'https://api.kie.ai/*',
+      'http://*/*',
+      'https://*/*',
+    ],
   }),
 });

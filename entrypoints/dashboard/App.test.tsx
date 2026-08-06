@@ -1,3 +1,5 @@
+import type { Plan, PlanBatch, PlanDetail } from '@/dashboard/model';
+import type { AnchorTextTally } from '@/storage/anchor-ledger';
 import type { DataBackupFile } from '@/storage/data-backup';
 import type { OutboundLinkLibraryEntry } from '@/storage/outbound-link-library';
 import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
@@ -5,10 +7,14 @@ import { act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  AnchorTextBreakdown,
   CreatePromotingSiteDialog,
+  EditPlanDialog,
   NewPlanDialog,
   OutboundLinkLibraryPage,
   SettingsDrawer,
+  SitesPage,
+  naturalAnchorFailureCopy,
 } from './App';
 import { t } from './copy';
 
@@ -413,7 +419,7 @@ describe('settings drawer', () => {
     kieApiKey: '',
   };
 
-  it('prefills the provider, API keys, and active site, and proposes edits on save', async () => {
+  it('prefills the provider and API keys, and proposes edits on save', async () => {
     const onSave = vi.fn<
       (settings: ExtensionSettings, apiKeys: ProviderApiKeys) => Promise<void>
     >(async () => undefined);
@@ -437,15 +443,11 @@ describe('settings drawer', () => {
       '#settings-deepseek-key'
     );
     expect(deepseekInput?.value).toBe('existing-key');
-    const siteLabelInput = container.querySelector<HTMLInputElement>(
-      '#settings-site-label'
-    );
-    expect(siteLabelInput?.value).toBe(site.label);
-    const siteUrlInput =
-      container.querySelector<HTMLInputElement>('#settings-site-url');
-    expect(siteUrlInput?.value).toBe(site.websiteUrl);
+    expect(
+      container.querySelector<HTMLSelectElement>('#settings-provider')?.value
+    ).toBe('deepseek');
 
-    await enterInput(siteLabelInput as HTMLInputElement, 'Renamed site');
+    await enterInput(deepseekInput as HTMLInputElement, 'rotated-key');
     await click(button('保存设置'));
 
     await vi.waitFor(() => {
@@ -455,13 +457,11 @@ describe('settings drawer', () => {
       ExtensionSettings,
       ProviderApiKeys,
     ];
-    expect(
-      savedSettings.sites.find((candidate) => candidate.id === site.id)?.label
-    ).toBe('Renamed site');
-    expect(savedApiKeys.deepseekApiKey).toBe('existing-key');
+    expect(savedSettings.sites).toHaveLength(1);
+    expect(savedApiKeys.deepseekApiKey).toBe('rotated-key');
   });
 
-  it('disables removing the last site and re-enables it once another exists', async () => {
+  it('no longer edits site profiles, which moved to the websites page', async () => {
     await act(async () => {
       root.render(
         <SettingsDrawer
@@ -478,9 +478,19 @@ describe('settings drawer', () => {
       );
     });
 
-    expect(button('删除网站').disabled).toBe(true);
-    await click(button('新增网站'));
-    expect(button('删除网站').disabled).toBe(false);
+    for (const selector of [
+      '#settings-site-select',
+      '#settings-site-label',
+      '#settings-site-url',
+      '#settings-site-display-name',
+      '#settings-site-email',
+      '#settings-site-link-mode',
+      '.anchor-mix',
+    ]) {
+      expect(container.querySelector(selector)).toBeNull();
+    }
+    expect(container.querySelector('#settings-provider')).not.toBeNull();
+    expect(container.querySelector('#settings-locale')).not.toBeNull();
   });
 
   it('shows an inline error and keeps the drawer open when saving fails', async () => {
@@ -624,5 +634,408 @@ describe('settings drawer', () => {
       );
     });
     expect(container.querySelector('.data-backup-confirm-dialog')).toBeNull();
+  });
+});
+
+describe('websites page', () => {
+  const secondSite: SiteProfile = {
+    id: 'site-secondary',
+    label: 'Secondary site',
+    websiteUrl: 'https://secondary.example',
+    displayName: '',
+    email: '',
+    linkMode: 'comment-only',
+  };
+
+  async function renderSitesPage(
+    props: Partial<Parameters<typeof SitesPage>[0]> = {}
+  ) {
+    const onSave = vi.fn<(next: ExtensionSettings) => Promise<void>>(
+      async () => undefined
+    );
+    await act(async () => {
+      root.render(
+        <SitesPage
+          settings={settings}
+          refreshing={false}
+          onRefresh={vi.fn()}
+          onSave={onSave}
+          onToast={vi.fn()}
+          {...props}
+        />
+      );
+    });
+    return onSave;
+  }
+
+  it('edits the selected site profile and saves a normalized website URL', async () => {
+    const onSave = await renderSitesPage();
+
+    const labelInput = container.querySelector<HTMLInputElement>('#site-label');
+    expect(labelInput?.value).toBe(site.label);
+    const urlInput = container.querySelector<HTMLInputElement>('#site-url');
+    expect(urlInput?.value).toBe(site.websiteUrl);
+
+    await enterInput(labelInput as HTMLInputElement, 'Renamed site');
+    await enterInput(urlInput as HTMLInputElement, 'promoting.example/');
+    await click(button('保存网站'));
+
+    await vi.waitFor(() => {
+      expect(onSave).toHaveBeenCalled();
+    });
+    const [saved] = onSave.mock.calls[0] as [ExtensionSettings];
+    const savedSite = saved.sites.find((candidate) => candidate.id === site.id);
+    expect(savedSite?.label).toBe('Renamed site');
+    expect(savedSite?.websiteUrl).toBe('https://promoting.example');
+  });
+
+  it('disables removing the last site and re-enables it once another exists', async () => {
+    await renderSitesPage();
+
+    expect(button('删除网站').disabled).toBe(true);
+    await click(button('新增网站'));
+    expect(button('删除网站').disabled).toBe(false);
+  });
+
+  it('moves the default to a surviving site when the default one is deleted', async () => {
+    const onSave = await renderSitesPage({
+      settings: { ...settings, sites: [site, secondSite] },
+    });
+
+    // The first site is the default and is selected on load.
+    await click(button('删除网站'));
+    await click(button('保存网站'));
+
+    await vi.waitFor(() => {
+      expect(onSave).toHaveBeenCalled();
+    });
+    const [saved] = onSave.mock.calls[0] as [ExtensionSettings];
+    expect(saved.sites.map((candidate) => candidate.id)).toEqual([
+      secondSite.id,
+    ]);
+    expect(saved.activeSiteId).toBe(secondSite.id);
+  });
+
+  it('promotes another site to the default without touching the rest of the profile', async () => {
+    const onSave = await renderSitesPage({
+      settings: { ...settings, sites: [site, secondSite] },
+    });
+
+    const secondEntry = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.sites-list button')
+    ).find((candidate) => candidate.textContent?.includes(secondSite.label));
+    await click(secondEntry as HTMLButtonElement);
+    await click(button('设为默认网站'));
+    await click(button('保存网站'));
+
+    await vi.waitFor(() => {
+      expect(onSave).toHaveBeenCalled();
+    });
+    const [saved] = onSave.mock.calls[0] as [ExtensionSettings];
+    expect(saved.activeSiteId).toBe(secondSite.id);
+    expect(saved.sites).toHaveLength(2);
+  });
+
+  it('only offers the anchor mix for link modes that put the link in the comment body', async () => {
+    await renderSitesPage({
+      settings: { ...settings, sites: [site, secondSite] },
+    });
+
+    // The default site uses a-tag-newline, so the editor is present.
+    expect(
+      container.querySelector('.anchor-mix .anchor-mix-row')
+    ).not.toBeNull();
+
+    const linkMode =
+      container.querySelector<HTMLSelectElement>('#site-link-mode');
+    expect(linkMode?.value).toBe('a-tag-newline');
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value'
+      )?.set;
+      setValue?.call(linkMode, 'comment-only');
+      linkMode?.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(container.querySelector('.anchor-mix .anchor-mix-row')).toBeNull();
+    expect(container.textContent).toContain('只有把链接写进评论正文');
+  });
+
+  it('keeps in-progress edits when a background settings refresh arrives', async () => {
+    await renderSitesPage();
+
+    const labelInput = container.querySelector<HTMLInputElement>('#site-label');
+    await enterInput(labelInput as HTMLInputElement, 'Edited but unsaved');
+
+    await act(async () => {
+      root.render(
+        <SitesPage
+          settings={{ ...settings, sites: [{ ...site }] }}
+          refreshing={false}
+          onRefresh={vi.fn()}
+          onSave={vi.fn(async () => undefined)}
+          onToast={vi.fn()}
+        />
+      );
+    });
+
+    expect(
+      container.querySelector<HTMLInputElement>('#site-label')?.value
+    ).toBe('Edited but unsaved');
+  });
+  it('lets a multi-word anchor be typed a character at a time', async () => {
+    await renderSitesPage();
+
+    await waitUntil(
+      () => container.querySelector('#anchor-pool-brand') !== null
+    );
+    const pool =
+      container.querySelector<HTMLTextAreaElement>('#anchor-pool-brand');
+
+    // Re-rendering the parsed pool on every keystroke would swallow the
+    // trailing space and the trailing newline, so neither a phrase nor a
+    // second line could ever be typed.
+    await enterTextarea(pool as HTMLTextAreaElement, 'AI ');
+    expect(pool?.value).toBe('AI ');
+    await enterTextarea(pool as HTMLTextAreaElement, 'AI video generator\n');
+    expect(pool?.value).toBe('AI video generator\n');
+    await enterTextarea(
+      pool as HTMLTextAreaElement,
+      'AI video generator\nseedance 2.5'
+    );
+    expect(pool?.value).toBe('AI video generator\nseedance 2.5');
+
+    // Leaving the field is where the wording settles.
+    await act(async () => {
+      pool?.focus();
+      pool?.blur();
+    });
+    expect(pool?.value).toBe('AI video generator\nseedance 2.5');
+  });
+});
+
+describe('natural anchor fallback failures', () => {
+  // The background answers with a code; each one needs a different fix, so a
+  // single "check your key and URL" line would leave the user guessing.
+  it.each([
+    ['WEBSITE_URL_REQUIRED:WEBSITE_URL_REQUIRED', '先填好网站链接'],
+    ['DEEPSEEK_API_KEY_REQUIRED:DEEPSEEK_API_KEY_REQUIRED', 'API Key'],
+    ['KIE_API_KEY_REQUIRED:KIE_API_KEY_REQUIRED', 'API Key'],
+    ['WEBSITE_FETCH_FAILED_403:WEBSITE_FETCH_FAILED_403', '读不到网站信息'],
+    ['WEBSITE_META_NOT_FOUND:WEBSITE_META_NOT_FOUND', '读不到网站信息'],
+    ['TypeError: Failed to fetch', '需要授权访问'],
+  ])('maps %s to specific copy', (message, expected) => {
+    expect(naturalAnchorFailureCopy(new Error(message))).toContain(expected);
+  });
+
+  it('falls back to the generic message for an unrecognized failure', () => {
+    expect(naturalAnchorFailureCopy(new Error('SOMETHING_ELSE'))).toBe(
+      '生成兜底词失败，请检查模型 API Key 和网站链接。'
+    );
+  });
+});
+
+describe('edit plan dialog', () => {
+  function plan(overrides: Partial<Plan> = {}): Plan {
+    return {
+      id: 'plan-1',
+      name: 'July comments',
+      promotingSiteId: site.id,
+      promotingSiteLabel: site.label,
+      promotingWebsiteUrl: site.websiteUrl,
+      status: 'active',
+      chunkSize: 30,
+      targetCount: 60,
+      processedCount: 30,
+      submittedCount: 28,
+      failedCount: 2,
+      unknownCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    };
+  }
+
+  function batch(sequence: number, status: PlanBatch['status']): PlanBatch {
+    return {
+      id: `plan-1:batch:${sequence}`,
+      planId: 'plan-1',
+      sequence,
+      status,
+      targetCount: 30,
+      processedCount: status === 'pending' ? 0 : 30,
+      submittedCount: status === 'pending' ? 0 : 28,
+      failedCount: status === 'pending' ? 0 : 2,
+      unknownCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  const detail: PlanDetail = {
+    plan: plan(),
+    batches: [batch(1, 'completed_with_errors'), batch(2, 'pending')],
+  };
+
+  async function renderDialog(next: PlanDetail = detail) {
+    const onSave =
+      vi.fn<
+        (input: {
+          planId: string;
+          name?: string;
+          chunkSize?: number;
+        }) => void
+      >();
+    await act(async () => {
+      root.render(
+        <EditPlanDialog
+          detail={next}
+          busy={false}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      );
+    });
+    return onSave;
+  }
+
+  it('previews how the untouched tail would be re-split', async () => {
+    await renderDialog();
+
+    // 30 links are still waiting; at 10 per batch that is 3 batches.
+    expect(container.textContent).toContain('还剩 30 条待处理，将分成 1 批');
+    await enterInput(
+      container.querySelector<HTMLInputElement>('#edit-plan-chunk-size')!,
+      '10'
+    );
+    expect(container.textContent).toContain('还剩 30 条待处理，将分成 3 批');
+  });
+
+  it('sends only the field that changed', async () => {
+    const onSave = await renderDialog();
+
+    await enterInput(
+      container.querySelector<HTMLInputElement>('#edit-plan-chunk-size')!,
+      '10'
+    );
+    await click(button('保存'));
+
+    expect(onSave).toHaveBeenCalledWith({
+      planId: 'plan-1',
+      name: undefined,
+      chunkSize: 10,
+    });
+  });
+
+  it('keeps save disabled until something actually changes', async () => {
+    await renderDialog();
+
+    expect(button('保存').disabled).toBe(true);
+    await enterInput(
+      container.querySelector<HTMLInputElement>('#edit-plan-name')!,
+      'August comments'
+    );
+    expect(button('保存').disabled).toBe(false);
+  });
+
+  it('refuses a batch size outside the range the repository accepts', async () => {
+    await renderDialog();
+
+    for (const value of ['0', '201', '']) {
+      await enterInput(
+        container.querySelector<HTMLInputElement>('#edit-plan-chunk-size')!,
+        value
+      );
+      expect(button('保存').disabled).toBe(true);
+    }
+  });
+
+  it('says so when there is no pending work left to regroup', async () => {
+    await renderDialog({
+      plan: plan({ processedCount: 60 }),
+      batches: [batch(1, 'completed'), batch(2, 'completed')],
+    });
+
+    expect(container.textContent).toContain('所有批次都已跑完');
+  });
+});
+
+describe('anchor text breakdown', () => {
+  const rows: AnchorTextTally[] = [
+    { bucket: 'brand', text: 'Seed Audio', count: 6, lastAt: 5 },
+    { bucket: 'brand', text: 'Seed Audio app', count: 2, lastAt: 4 },
+    { bucket: 'exact', text: 'AI video generator', count: 4, lastAt: 3 },
+  ];
+
+  async function renderBreakdown(
+    props: Partial<Parameters<typeof AnchorTextBreakdown>[0]> = {}
+  ) {
+    await act(async () => {
+      root.render(
+        <AnchorTextBreakdown
+          bucket="brand"
+          rows={rows}
+          published={8}
+          {...props}
+        />
+      );
+    });
+  }
+
+  it('ranks only this bucket wording and scales bars against its busiest row', async () => {
+    await renderBreakdown();
+
+    const listed = Array.from(
+      container.querySelectorAll<HTMLElement>('.anchor-texts-row')
+    );
+    expect(
+      listed.map((row) => row.querySelector('.anchor-texts-word')?.textContent)
+    ).toEqual(['Seed Audio', 'Seed Audio app']);
+    expect(listed[0]?.style.getPropertyValue('--anchor-text-share')).toBe(
+      '100%'
+    );
+    // 2 of the busiest 6 is a third of the width.
+    expect(listed[1]?.style.getPropertyValue('--anchor-text-share')).toBe(
+      '33%'
+    );
+    expect(container.textContent).toContain('6 次');
+  });
+
+  it('says how many published links left no wording behind', async () => {
+    await renderBreakdown({ published: 11 });
+
+    expect(container.textContent).toContain('另有 3 条没有留下用词记录');
+  });
+
+  it('stays quiet until the bucket has published something', async () => {
+    await renderBreakdown({ published: 0 });
+
+    expect(container.querySelector('.anchor-texts')).toBeNull();
+  });
+
+  it('explains the gap when published links left no wording behind', async () => {
+    await renderBreakdown({ rows: [], published: 4 });
+
+    // Those links did go out; only their wording predates the tally, so the
+    // block must say that rather than claim the bucket published nothing.
+    expect(container.querySelector('.anchor-texts-row')).toBeNull();
+    expect(container.textContent).toContain('另有 4 条没有留下用词记录');
+  });
+
+  it('collapses a long list behind a toggle', async () => {
+    const many: AnchorTextTally[] = Array.from({ length: 9 }, (_, index) => ({
+      bucket: 'brand' as const,
+      text: `word-${index}`,
+      count: 9 - index,
+      lastAt: index,
+    }));
+    await renderBreakdown({ rows: many, published: 45 });
+
+    expect(container.querySelectorAll('.anchor-texts-row')).toHaveLength(6);
+    await click(button('展开全部 9 条'));
+    expect(container.querySelectorAll('.anchor-texts-row')).toHaveLength(9);
+    await click(button('收起'));
+    expect(container.querySelectorAll('.anchor-texts-row')).toHaveLength(6);
   });
 });
