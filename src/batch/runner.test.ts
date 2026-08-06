@@ -121,7 +121,9 @@ function dependencies(
       status: 'loading',
     })),
     analyzeTab: vi.fn(async () => analysis()),
-    generateComment: vi.fn(async () => 'A useful comment'),
+    generateComment: vi.fn(async () => ({ comment: 'A useful comment' })),
+    selectSiteAnchor: vi.fn(async () => null),
+    recordSiteAnchor: vi.fn(async () => undefined),
     prepareTabSubmission: vi.fn(async () => ({
       ok: true as const,
       prepared,
@@ -1133,7 +1135,7 @@ describe('batch runner', () => {
       5
     );
     const context = dependencies(batch, {
-      generateComment: vi.fn(async () => 'A useful comment'),
+      generateComment: vi.fn(async () => ({ comment: 'A useful comment' })),
     });
 
     await advanceBatchStep(context.deps);
@@ -2000,7 +2002,7 @@ describe('batch runner', () => {
       8
     );
     const context = dependencies(batch, {
-      generateComment: vi.fn(async () => 'Comment B'),
+      generateComment: vi.fn(async () => ({ comment: 'Comment B' })),
     });
 
     await advanceBatchStep(context.deps);
@@ -2010,5 +2012,191 @@ describe('batch runner', () => {
       comment: 'Comment B',
     });
     expect(context.read()?.items[1]?.status).not.toBe('failed');
+  });
+});
+
+describe('anchor mix control', () => {
+  function anchorBatch(
+    linkMode: 'inline' | 'prefer-website-field' = 'inline',
+    siteId: string | null = 'site-1'
+  ): BatchSnapshot {
+    let batch = initialBatch();
+    batch = {
+      ...batch,
+      settings: {
+        ...batch.settings,
+        linkMode,
+        ...(siteId ? { siteId } : {}),
+      },
+    };
+    return updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: analysis(),
+          message: 'COMMENT_GENERATION_READY',
+        },
+      },
+      3
+    );
+  }
+
+  const brandSelection = {
+    bucket: 'brand' as const,
+    text: 'Example',
+    cursor: {
+      brand: 1,
+      naked: 0,
+      exact: 0,
+      partial: 0,
+      generic: 0,
+      natural: 0,
+    },
+  };
+
+  it('passes the selected anchor text into generation', async () => {
+    const context = dependencies(anchorBatch(), {
+      selectSiteAnchor: vi.fn(async () => brandSelection),
+      generateComment: vi.fn(async () => ({
+        comment: 'A useful comment',
+        anchorText: 'Example',
+      })),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.selectSiteAnchor).toHaveBeenCalledWith('site-1');
+    expect(context.deps.generateComment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ anchorText: 'Example' })
+    );
+    expect(context.read()?.items[0]?.anchor).toEqual({
+      bucket: 'brand',
+      text: 'Example',
+    });
+  });
+
+  it('asks the model to word the anchor only for the natural bucket', async () => {
+    const context = dependencies(anchorBatch(), {
+      selectSiteAnchor: vi.fn(async () => ({
+        ...brandSelection,
+        bucket: 'natural' as const,
+        text: 'a walkthrough I keep coming back to',
+      })),
+      generateComment: vi.fn(async () => ({
+        comment: 'A useful comment',
+        anchorText: 'the write-up on this',
+      })),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.generateComment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requestAnchorText: true })
+    );
+    // The wording that actually shipped is stored, not the fallback it was
+    // given.
+    expect(context.read()?.items[0]?.anchor).toEqual({
+      bucket: 'natural',
+      text: 'the write-up on this',
+    });
+  });
+
+  it('skips anchor control for a link mode with no anchor in the body', async () => {
+    const context = dependencies(anchorBatch('prefer-website-field'), {
+      selectSiteAnchor: vi.fn(async () => brandSelection),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.selectSiteAnchor).not.toHaveBeenCalled();
+    expect(context.read()?.items[0]?.anchor).toBeUndefined();
+  });
+
+  it('skips anchor control for a snapshot that cannot name its promoted site', async () => {
+    const context = dependencies(anchorBatch('inline', null), {
+      selectSiteAnchor: vi.fn(async () => brandSelection),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.selectSiteAnchor).not.toHaveBeenCalled();
+  });
+
+  it('generates the comment anyway when the anchor plan cannot be read', async () => {
+    const context = dependencies(anchorBatch(), {
+      selectSiteAnchor: vi.fn(async () => {
+        throw new Error('ANCHOR_PLAN_UNAVAILABLE');
+      }),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.generateComment).toHaveBeenCalledOnce();
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'generating',
+      comment: 'A useful comment',
+    });
+  });
+
+  it.each(['published', 'pending_moderation'] as const)(
+    'credits the mix for a %s comment',
+    async (status) => {
+      let batch = anchorBatch();
+      batch = updateBatchProgress(
+        batch,
+        {
+          item: {
+            status: 'verifying',
+            prepared,
+            anchor: { bucket: 'brand', text: 'Example' },
+          },
+        },
+        4
+      );
+      const context = dependencies(batch, {
+        verifyTabSubmission: vi.fn(async () => ({
+          status,
+          message: 'COMMENT_SUBMITTED',
+          fingerprint: prepared.fingerprint,
+          clickOccurred: true,
+        })),
+      });
+
+      await advanceBatchStep(context.deps);
+
+      expect(context.deps.recordSiteAnchor).toHaveBeenCalledWith(
+        'site-1',
+        'brand',
+        'https://blog.example/post',
+        status
+      );
+    }
+  );
+
+  it('does not credit the mix for a comment left unconfirmed', async () => {
+    let batch = anchorBatch();
+    batch = updateBatchProgress(
+      batch,
+      {
+        item: {
+          status: 'verifying',
+          prepared,
+          anchor: { bucket: 'brand', text: 'Example' },
+        },
+      },
+      4
+    );
+    // Past the re-verification window, so the unconfirmed verdict settles
+    // instead of being retried on a later wake.
+    const context = dependencies(batch, { now: () => 300_000 });
+
+    await advanceBatchStep(context.deps);
+
+    expect(context.read()?.items[0]?.status).toBe('unconfirmed');
+    expect(context.deps.recordSiteAnchor).not.toHaveBeenCalled();
   });
 });

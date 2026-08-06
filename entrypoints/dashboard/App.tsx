@@ -1,3 +1,18 @@
+import { suggestGenericAnchors } from '@/anchor/generic-presets';
+import {
+  anchorTargetTotal,
+  bareUrlAnchorVariants,
+  formatAnchorPool,
+  normalizeAnchorTargets,
+  parseAnchorPool,
+} from '@/anchor/plan-form';
+import { anchorSelectionCounts } from '@/anchor/select';
+import {
+  ANCHOR_BUCKETS,
+  ANCHOR_TARGET_TOTAL,
+  type AnchorBucket,
+  type AnchorPlan,
+} from '@/anchor/types';
 import type { BatchItem, BatchSnapshot } from '@/batch/types';
 import type {
   DashboardSummary,
@@ -21,12 +36,18 @@ import {
   type PromotingSiteFormValues,
   validatePromotingSiteInput,
 } from '@/dashboard/promoting-site';
-import { DEFAULT_UI_LOCALE, setUiLocale, translate } from '@/i18n';
+import {
+  DEFAULT_UI_LOCALE,
+  type MessageKey,
+  setUiLocale,
+  translate,
+} from '@/i18n';
 import {
   type DashboardSummaryView,
   sendToBackground,
 } from '@/runtime/messages';
 import { requestBatchOriginPermissions } from '@/runtime/permissions';
+import type { AnchorLedger } from '@/storage/anchor-ledger';
 import { BATCH_STORAGE_KEY } from '@/storage/batch';
 import {
   DataBackupError,
@@ -63,12 +84,13 @@ import {
   setSettings as persistExtensionSettings,
   setProviderApiKeys,
 } from '@/storage/settings';
-import type {
-  ExtensionSettings,
-  LinkMode,
-  ProviderApiKeys,
-  SiteProfile,
-  UiLocale,
+import {
+  type ExtensionSettings,
+  type LinkMode,
+  type ProviderApiKeys,
+  type SiteProfile,
+  type UiLocale,
+  usesInlineAnchor,
 } from '@/types';
 import { normalizeWebsiteUrl } from '@/website/profile';
 import {
@@ -123,13 +145,17 @@ import {
   DASHBOARD_REVISION_KEY,
   dashboardRequest,
   exportDataBackup,
+  generateNaturalAnchorTexts,
   importDataBackup,
   isPreviewMode,
   loadActiveBatch,
+  loadAnchorLedger,
+  loadAnchorPlan,
   loadDashboardSummary,
   loadPlans,
   loadProviderApiKeys,
   loadSettings,
+  storeAnchorPlan,
   syncPreviewApiKeys,
   syncPreviewSettings,
 } from './api';
@@ -2448,6 +2474,311 @@ function FirstRunImportBanner({
   );
 }
 
+const ANCHOR_BUCKET_FIELDS: {
+  bucket: AnchorBucket;
+  labelKey: MessageKey;
+  hintKey: MessageKey;
+}[] = [
+  {
+    bucket: 'brand',
+    labelKey: 'anchorBucketBrand',
+    hintKey: 'anchorBucketBrandHint',
+  },
+  {
+    bucket: 'naked',
+    labelKey: 'anchorBucketNaked',
+    hintKey: 'anchorBucketNakedHint',
+  },
+  {
+    bucket: 'exact',
+    labelKey: 'anchorBucketExact',
+    hintKey: 'anchorBucketExactHint',
+  },
+  {
+    bucket: 'partial',
+    labelKey: 'anchorBucketPartial',
+    hintKey: 'anchorBucketPartialHint',
+  },
+  {
+    bucket: 'generic',
+    labelKey: 'anchorBucketGeneric',
+    hintKey: 'anchorBucketGenericHint',
+  },
+  {
+    bucket: 'natural',
+    labelKey: 'anchorBucketNatural',
+    hintKey: 'anchorBucketNaturalHint',
+  },
+];
+
+const GENERIC_SUGGESTION_COUNT = 5;
+const NATURAL_FALLBACK_COUNT = 6;
+
+/**
+ * Editor for one site's anchor mix, alongside the tally of what has actually
+ * been published. The two belong together: the targets only mean anything next
+ * to the mix they have produced so far.
+ *
+ * Shares are persisted the moment they are valid rather than behind a save
+ * button — a mix whose shares do not add up to 100 is not a mix, so a partial
+ * edit is simply held in the form until it is whole again.
+ */
+export function AnchorMixEditor({
+  siteId,
+  websiteUrl,
+  disabled,
+  onToast,
+}: {
+  siteId: string;
+  websiteUrl: string;
+  disabled: boolean;
+  onToast: (message: string, kind?: Toast['kind']) => void;
+}) {
+  const [plan, setPlan] = useState<AnchorPlan | null>(null);
+  const [ledger, setLedger] = useState<AnchorLedger | null>(null);
+  const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([loadAnchorPlan(siteId), loadAnchorLedger(siteId)]).then(
+      ([nextPlan, nextLedger]) => {
+        if (!active) return;
+        setPlan(nextPlan);
+        setLedger(nextLedger);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [siteId]);
+
+  const persist = useCallback(
+    (next: AnchorPlan) => {
+      setPlan(next);
+      if (anchorTargetTotal(next.targets) !== ANCHOR_TARGET_TOTAL) return;
+      void storeAnchorPlan({ ...next, updatedAt: Date.now() }).catch(() => {
+        onToast(translate('anchorMixSaveFailed'), 'error');
+      });
+    },
+    [onToast]
+  );
+
+  const appendToPool = useCallback(
+    (bucket: AnchorBucket, entries: readonly string[]) => {
+      if (!plan || entries.length === 0) return;
+      persist({
+        ...plan,
+        pools: {
+          ...plan.pools,
+          [bucket]: parseAnchorPool(
+            [...plan.pools[bucket], ...entries].join('\n')
+          ),
+        },
+      });
+    },
+    [plan, persist]
+  );
+
+  const writeNaturalFallbacks = useCallback(async () => {
+    if (!plan || generating) return;
+    setGenerating(true);
+    try {
+      const texts = await generateNaturalAnchorTexts(
+        siteId,
+        NATURAL_FALLBACK_COUNT
+      );
+      appendToPool('natural', texts);
+    } catch {
+      onToast(translate('anchorMixGenerateNaturalFailed'), 'error');
+    } finally {
+      setGenerating(false);
+    }
+  }, [plan, generating, siteId, appendToPool, onToast]);
+
+  if (!plan || !ledger) return null;
+
+  const counts = anchorSelectionCounts(ledger);
+  const publishedTotal = ANCHOR_BUCKETS.reduce(
+    (sum, bucket) => sum + ledger.published[bucket],
+    0
+  );
+  const total = anchorTargetTotal(plan.targets);
+  const totalValid = total === ANCHOR_TARGET_TOTAL;
+  const bareUrlVariants = bareUrlAnchorVariants(websiteUrl);
+
+  return (
+    <div className="form-field anchor-mix">
+      <span>{translate('anchorMixTitle')}</span>
+      <p className="website-field-hint">{translate('anchorMixDescription')}</p>
+
+      <div className="anchor-mix-total">
+        <span className={totalValid ? '' : 'anchor-mix-total-invalid'}>
+          {translate('anchorMixTotalLabel', String(total))}
+        </span>
+        {totalValid ? null : (
+          <>
+            <span className="anchor-mix-total-invalid">
+              {translate('anchorMixTotalInvalid')}
+            </span>
+            <button
+              type="button"
+              className="secondary-button compact-button"
+              disabled={disabled}
+              onClick={() =>
+                persist({
+                  ...plan,
+                  targets: normalizeAnchorTargets(plan.targets),
+                })
+              }
+            >
+              {translate('anchorMixNormalize')}
+            </button>
+          </>
+        )}
+      </div>
+
+      {ANCHOR_BUCKET_FIELDS.map(({ bucket, labelKey, hintKey }) => {
+        const published = ledger.published[bucket];
+        const pending = counts[bucket] - published;
+        const share =
+          publishedTotal === 0
+            ? 0
+            : Math.round((published / publishedTotal) * 100);
+        return (
+          <div className="anchor-mix-row" key={bucket}>
+            <div className="anchor-mix-row-head">
+              <label htmlFor={`anchor-target-${bucket}`}>
+                {translate(labelKey)}
+              </label>
+              <input
+                id={`anchor-target-${bucket}`}
+                className="anchor-mix-target"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={plan.targets[bucket]}
+                disabled={disabled}
+                onChange={(event) =>
+                  persist({
+                    ...plan,
+                    targets: {
+                      ...plan.targets,
+                      [bucket]: Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          Math.trunc(Number(event.target.value) || 0)
+                        )
+                      ),
+                    },
+                  })
+                }
+              />
+              <span className="anchor-mix-actual">
+                {publishedTotal === 0
+                  ? translate('anchorMixNoLinksYet')
+                  : translate('anchorMixActualLabel', [
+                      String(share),
+                      String(published),
+                    ])}
+                {pending > 0
+                  ? ` · ${translate('anchorMixPendingLabel', String(pending))}`
+                  : ''}
+              </span>
+            </div>
+            <div
+              className="anchor-mix-bar"
+              role="presentation"
+              style={{
+                // The target is the track's marker; the fill is where the site
+                // actually stands against it.
+                ['--anchor-target' as string]: `${plan.targets[bucket]}%`,
+                ['--anchor-actual' as string]: `${share}%`,
+              }}
+            />
+            <p className="website-field-hint">{translate(hintKey)}</p>
+            <textarea
+              id={`anchor-pool-${bucket}`}
+              aria-label={translate(labelKey)}
+              className="anchor-mix-pool"
+              rows={3}
+              value={formatAnchorPool(plan.pools[bucket])}
+              disabled={disabled}
+              placeholder={translate('anchorMixPoolPlaceholder')}
+              onChange={(event) =>
+                persist({
+                  ...plan,
+                  pools: {
+                    ...plan.pools,
+                    [bucket]: parseAnchorPool(event.target.value),
+                  },
+                })
+              }
+            />
+            <div className="anchor-mix-actions">
+              {bucket === 'naked' ? (
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  disabled={disabled || bareUrlVariants.length === 0}
+                  onClick={() => appendToPool('naked', bareUrlVariants)}
+                >
+                  {translate('anchorMixFillBareUrl')}
+                </button>
+              ) : null}
+              {bucket === 'naked' && bareUrlVariants.length === 0 ? (
+                <span className="website-field-hint">
+                  {translate('anchorMixFillBareUrlUnavailable')}
+                </span>
+              ) : null}
+              {bucket === 'generic' ? (
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  disabled={disabled}
+                  onClick={() =>
+                    appendToPool(
+                      'generic',
+                      suggestGenericAnchors(
+                        plan.pools.generic,
+                        GENERIC_SUGGESTION_COUNT
+                      )
+                    )
+                  }
+                >
+                  {translate('anchorMixSuggestGeneric')}
+                </button>
+              ) : null}
+              {bucket === 'natural' ? (
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  disabled={disabled || generating}
+                  onClick={() => void writeNaturalFallbacks()}
+                >
+                  {generating
+                    ? translate('anchorMixGeneratingNatural')
+                    : translate('anchorMixGenerateNatural')}
+                </button>
+              ) : null}
+              {plan.targets[bucket] > 0 && plan.pools[bucket].length === 0 ? (
+                <span className="website-field-hint anchor-mix-warning">
+                  {translate(
+                    bucket === 'natural'
+                      ? 'anchorMixNaturalHint'
+                      : 'anchorMixPoolEmpty'
+                  )}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SettingsDrawer({
   open,
   settings,
@@ -2807,6 +3138,16 @@ export function SettingsDrawer({
               </option>
             </select>
           </label>
+
+          {usesInlineAnchor(activeSite.linkMode) ? (
+            <AnchorMixEditor
+              key={activeSite.id}
+              siteId={activeSite.id}
+              websiteUrl={activeSite.websiteUrl}
+              disabled={saving}
+              onToast={onToast}
+            />
+          ) : null}
 
           <label className="form-field" htmlFor="settings-locale">
             <span>{t('language')}</span>

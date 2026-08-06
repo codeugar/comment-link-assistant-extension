@@ -156,6 +156,7 @@ export type PopupMessage =
       comment: string;
       target: PageSubmissionTarget;
     }
+  | { type: 'anchor.generateNaturalTexts'; siteId: string; count: number }
   | { type: 'data-backup.export' }
   | { type: 'data-backup.import'; backup: unknown };
 
@@ -194,6 +195,7 @@ export type PopupMessageResult =
   | { type: 'link-library.add'; data: OutboundLinkLibraryEntry }
   | { type: 'link-library.update'; data: OutboundLinkLibraryEntry | null }
   | { type: 'link-library.remove'; data: boolean }
+  | { type: 'anchor.generateNaturalTexts'; data: string[] }
   | { type: 'dashboard.getSummary'; data: DashboardSummaryView }
   | { type: 'moderation.getDashboard'; data: ModerationRecheckDashboardData }
   | { type: 'moderation.runNow'; data: ModerationRecheckLastRun }

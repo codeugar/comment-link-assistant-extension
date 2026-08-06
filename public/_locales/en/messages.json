@@ -523,5 +523,95 @@
   },
   "linkModeCommentOnly": {
     "message": "Comment only"
+  },
+  "anchorMixTitle": {
+    "message": "Anchor text mix"
+  },
+  "anchorMixDescription": {
+    "message": "Set the share each kind of anchor text should hold for this site. Every published link is counted, and the next one is drawn from whichever kind is furthest behind its share."
+  },
+  "anchorMixTotalLabel": {
+    "message": "Total: $1%"
+  },
+  "anchorMixTotalInvalid": {
+    "message": "Shares must add up to 100%."
+  },
+  "anchorMixNormalize": {
+    "message": "Scale to 100%"
+  },
+  "anchorMixActualLabel": {
+    "message": "now $1% ($2)"
+  },
+  "anchorMixPendingLabel": {
+    "message": "+$1 awaiting review"
+  },
+  "anchorMixNoLinksYet": {
+    "message": "No published links yet"
+  },
+  "anchorMixPoolPlaceholder": {
+    "message": "One anchor text per line"
+  },
+  "anchorMixPoolEmpty": {
+    "message": "Add wording here, or this kind is skipped."
+  },
+  "anchorMixFillBareUrl": {
+    "message": "Fill from website URL"
+  },
+  "anchorMixFillBareUrlUnavailable": {
+    "message": "Set the website URL above first."
+  },
+  "anchorMixSuggestGeneric": {
+    "message": "Add suggestions"
+  },
+  "anchorMixGenerateNatural": {
+    "message": "Write fallbacks with AI"
+  },
+  "anchorMixGeneratingNatural": {
+    "message": "Writing…"
+  },
+  "anchorMixGenerateNaturalFailed": {
+    "message": "Could not write fallback wording. Check the provider API key and the website URL."
+  },
+  "anchorMixNaturalHint": {
+    "message": "Written fresh for each comment so it fits the sentence. These entries are only the fallback when that is unusable — leave them empty and this kind is skipped."
+  },
+  "anchorMixSaveFailed": {
+    "message": "Could not save the anchor mix."
+  },
+  "anchorBucketBrand": {
+    "message": "Brand"
+  },
+  "anchorBucketBrandHint": {
+    "message": "Your site or product name."
+  },
+  "anchorBucketNaked": {
+    "message": "Bare URL"
+  },
+  "anchorBucketNakedHint": {
+    "message": "The address itself, shown as the link text."
+  },
+  "anchorBucketExact": {
+    "message": "Exact keyword"
+  },
+  "anchorBucketExactHint": {
+    "message": "The keyword you are targeting, word for word."
+  },
+  "anchorBucketPartial": {
+    "message": "Partial match"
+  },
+  "anchorBucketPartialHint": {
+    "message": "A variation around that keyword."
+  },
+  "anchorBucketGeneric": {
+    "message": "Generic"
+  },
+  "anchorBucketGenericHint": {
+    "message": "Wording that names no keyword at all."
+  },
+  "anchorBucketNatural": {
+    "message": "Natural phrasing"
+  },
+  "anchorBucketNaturalHint": {
+    "message": "A phrase that belongs to the sentence around it."
   }
 }

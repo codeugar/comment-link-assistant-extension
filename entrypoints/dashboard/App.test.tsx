@@ -58,6 +58,8 @@ function sampleBackup(): DataBackupFile {
       providerApiKeys: { deepseekApiKey: 'existing-key', kieApiKey: '' },
       outboundLinkLibrary: [entry('backup-link')],
       filterList: [],
+      anchorPlans: {},
+      anchorLedgers: {},
       batchHistory: [],
       dashboard: {
         plans: [],

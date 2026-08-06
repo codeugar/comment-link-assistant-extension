@@ -523,5 +523,95 @@
   },
   "linkModeCommentOnly": {
     "message": "优先评论"
+  },
+  "anchorMixTitle": {
+    "message": "锚文本配比"
+  },
+  "anchorMixDescription": {
+    "message": "为这个网站设定各类锚文本应占的比例。每条已发布的外链都会被记录，下一条从当前落后自己配额最多的那一类里取。"
+  },
+  "anchorMixTotalLabel": {
+    "message": "合计：$1%"
+  },
+  "anchorMixTotalInvalid": {
+    "message": "各项比例之和必须等于 100%。"
+  },
+  "anchorMixNormalize": {
+    "message": "归一化到 100%"
+  },
+  "anchorMixActualLabel": {
+    "message": "当前 $1%（$2 条）"
+  },
+  "anchorMixPendingLabel": {
+    "message": "另有 $1 条待审核"
+  },
+  "anchorMixNoLinksYet": {
+    "message": "还没有已发布的外链"
+  },
+  "anchorMixPoolPlaceholder": {
+    "message": "每行一个锚文本"
+  },
+  "anchorMixPoolEmpty": {
+    "message": "在这里填入词，否则这一类会被跳过。"
+  },
+  "anchorMixFillBareUrl": {
+    "message": "从网站链接填入"
+  },
+  "anchorMixFillBareUrlUnavailable": {
+    "message": "请先在上面填写网站链接。"
+  },
+  "anchorMixSuggestGeneric": {
+    "message": "添加推荐词"
+  },
+  "anchorMixGenerateNatural": {
+    "message": "用 AI 生成兜底词"
+  },
+  "anchorMixGeneratingNatural": {
+    "message": "生成中…"
+  },
+  "anchorMixGenerateNaturalFailed": {
+    "message": "生成兜底词失败，请检查模型 API Key 和网站链接。"
+  },
+  "anchorMixNaturalHint": {
+    "message": "每条评论都会现写一个，以贴合上下文。这里的词只在现写结果不可用时兜底——留空则这一类会被跳过。"
+  },
+  "anchorMixSaveFailed": {
+    "message": "锚文本配比保存失败。"
+  },
+  "anchorBucketBrand": {
+    "message": "品牌词"
+  },
+  "anchorBucketBrandHint": {
+    "message": "你的网站名或产品名。"
+  },
+  "anchorBucketNaked": {
+    "message": "裸链"
+  },
+  "anchorBucketNakedHint": {
+    "message": "直接把网址本身作为链接文字。"
+  },
+  "anchorBucketExact": {
+    "message": "精确关键词"
+  },
+  "anchorBucketExactHint": {
+    "message": "你要做的目标关键词，一字不差。"
+  },
+  "anchorBucketPartial": {
+    "message": "部分匹配词"
+  },
+  "anchorBucketPartialHint": {
+    "message": "围绕该关键词的变体说法。"
+  },
+  "anchorBucketGeneric": {
+    "message": "通用词"
+  },
+  "anchorBucketGenericHint": {
+    "message": "完全不带关键词的说法。"
+  },
+  "anchorBucketNatural": {
+    "message": "自然文本"
+  },
+  "anchorBucketNaturalHint": {
+    "message": "融进上下文句子里的一个短语。"
   }
 }

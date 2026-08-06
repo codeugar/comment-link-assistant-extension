@@ -1,3 +1,4 @@
+import { type AnchorPlan, createDefaultAnchorPlan } from '@/anchor/types';
 import type { BatchItem, BatchSnapshot } from '@/batch/types';
 import type {
   Attempt,
@@ -8,6 +9,12 @@ import type {
 } from '@/dashboard/model';
 import type { DashboardSummaryView } from '@/runtime/messages';
 import { sendToBackground } from '@/runtime/messages';
+import {
+  type AnchorLedger,
+  emptyAnchorLedger,
+  getAnchorLedger,
+} from '@/storage/anchor-ledger';
+import { getAnchorPlan, saveAnchorPlan } from '@/storage/anchor-plan';
 import { getBatch } from '@/storage/batch';
 import type { DataBackupFile } from '@/storage/data-backup';
 import {
@@ -695,6 +702,8 @@ export async function exportDataBackup(): Promise<DataBackupFile> {
         providerApiKeys: demoApiKeys,
         outboundLinkLibrary: [],
         filterList: [],
+        anchorPlans: {},
+        anchorLedgers: {},
         batchHistory: [],
         dashboard: {
           plans: demoPlans,
@@ -719,4 +728,38 @@ export async function importDataBackup(backup: DataBackupFile): Promise<void> {
     return;
   }
   await sendToBackground({ type: 'data-backup.import', backup });
+}
+
+/**
+ * The anchor plan and its tally live in chrome.storage, which the dashboard
+ * page reads directly the same way it reads settings. Only the fallback-wording
+ * generator needs the background worker, since it holds the provider keys and
+ * the promoted site's cached profile.
+ */
+export async function loadAnchorPlan(siteId: string): Promise<AnchorPlan> {
+  if (isPreviewMode()) return createDefaultAnchorPlan(siteId, Date.now());
+  return getAnchorPlan(siteId);
+}
+
+export async function storeAnchorPlan(plan: AnchorPlan): Promise<void> {
+  if (isPreviewMode()) return;
+  await saveAnchorPlan(plan);
+}
+
+export async function loadAnchorLedger(siteId: string): Promise<AnchorLedger> {
+  if (isPreviewMode()) return emptyAnchorLedger(siteId, Date.now());
+  return getAnchorLedger(siteId);
+}
+
+export async function generateNaturalAnchorTexts(
+  siteId: string,
+  count: number
+): Promise<string[]> {
+  if (isPreviewMode()) return [];
+  const result = await sendToBackground({
+    type: 'anchor.generateNaturalTexts',
+    siteId,
+    count,
+  });
+  return result.data;
 }

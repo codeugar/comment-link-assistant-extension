@@ -1,3 +1,4 @@
+import { ANCHOR_BUCKETS, type AnchorBucket } from '@/anchor/types';
 import type { PageAnalysis, PreparedPageSubmission } from '@/page/types';
 import type { CommentProvider, LinkMode } from '@/types';
 import type { WebsiteProfile } from '@/website/profile';
@@ -56,6 +57,14 @@ export interface BatchSettingsSnapshot {
   siteLabel?: string;
 }
 
+/** The anchor mix slot this comment was written for, and the wording that
+ *  actually shipped. Carried from generation to the terminal status so the
+ *  site's running mix is only credited once the comment is really out there. */
+export interface BatchItemAnchor {
+  bucket: AnchorBucket;
+  text: string;
+}
+
 export interface BatchItem {
   id: string;
   url: string;
@@ -66,6 +75,7 @@ export interface BatchItem {
   prepared: PreparedPageSubmission | null;
   events: BatchItemEvent[];
   partialPageAllowed?: boolean;
+  anchor?: BatchItemAnchor;
   message: string;
   createdAt: number;
   updatedAt: number;
@@ -212,6 +222,13 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
     prepared: preparedPageSubmissionSchema.nullable(),
     events: z.array(batchItemEventSchema).min(1).max(32),
     partialPageAllowed: z.boolean().optional(),
+    anchor: z
+      .object({
+        bucket: z.enum(ANCHOR_BUCKETS),
+        text: z.string().min(1).max(200),
+      })
+      .strict()
+      .optional(),
     message: z.string().max(500),
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
