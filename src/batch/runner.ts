@@ -1,4 +1,10 @@
-import { type GenerateCommentInput, generateComment } from '@/api/client';
+import { type AnchorSelection, selectAnchor } from '@/anchor/select';
+import type { AnchorBucket } from '@/anchor/types';
+import {
+  type GenerateCommentInput,
+  type GeneratedComment,
+  generateComment,
+} from '@/api/client';
 import type {
   CommentFrameReference,
   PageAnalysis,
@@ -20,6 +26,12 @@ import {
   prepareTabSubmission,
   verifyTabSubmission,
 } from '@/runtime/page-commands';
+import {
+  getAnchorLedger,
+  recordAnchorPending,
+  recordAnchorPublished,
+} from '@/storage/anchor-ledger';
+import { getAnchorPlan, saveAnchorPlan } from '@/storage/anchor-plan';
 import { getBatch, setBatch } from '@/storage/batch';
 import {
   addFilterListEntryWithResult,
@@ -90,7 +102,17 @@ export interface BatchRunnerDependencies {
   generateComment(
     keys: ProviderApiKeys,
     input: GenerateCommentInput
-  ): Promise<string>;
+  ): Promise<GeneratedComment>;
+  /** Picks the anchor mix slot for the next link, or null when the promoted
+   *  site has no mix configured. Advancing the rotation is persisted here. */
+  selectSiteAnchor(siteId: string): Promise<AnchorSelection | null>;
+  /** Credits the site's running mix once a comment has actually landed. */
+  recordSiteAnchor(
+    siteId: string,
+    bucket: AnchorBucket,
+    targetUrl: string,
+    status: 'published' | 'pending_moderation'
+  ): Promise<void>;
   prepareTabSubmission(
     tabId: number,
     input: PageSubmissionInput,
@@ -174,6 +196,28 @@ export const defaultDependencies: BatchRunnerDependencies = {
     return analyzeTab(tabId);
   },
   generateComment,
+  async selectSiteAnchor(siteId) {
+    const [plan, ledger] = await Promise.all([
+      getAnchorPlan(siteId),
+      getAnchorLedger(siteId),
+    ]);
+    const selection = selectAnchor(plan, ledger);
+    if (!selection) return null;
+    // The rotation advances on selection rather than on success. A target that
+    // fails skips one entry, which costs nothing: the mix is counted by bucket,
+    // and no wording gets stuck being reused after every failure.
+    if (selection.cursor !== plan.cursor) {
+      await saveAnchorPlan({ ...plan, cursor: selection.cursor });
+    }
+    return selection;
+  },
+  async recordSiteAnchor(siteId, bucket, targetUrl, status) {
+    if (status === 'published') {
+      await recordAnchorPublished(siteId, bucket);
+      return;
+    }
+    await recordAnchorPending(siteId, bucket, targetUrl);
+  },
   async prepareTabSubmission(tabId, input, target, batchId, frame) {
     await assertWorkerTabOwnership(batchId, tabId);
     return prepareTabSubmission(tabId, input, target, frame);
@@ -623,6 +667,12 @@ async function saveSubmissionResult(
         ? 'unconfirmed'
         : null;
   if (confirmedStatus && result.clickOccurred) {
+    // `unconfirmed` is deliberately not credited: the comment left no evidence
+    // it reached the page, so counting it would inflate the site's mix with
+    // links that may not exist.
+    if (confirmedStatus !== 'unconfirmed') {
+      await recordItemAnchor(batch, confirmedStatus, dependencies);
+    }
     const next = completeCurrentItem(
       batch,
       confirmedStatus,
@@ -635,6 +685,30 @@ async function saveSubmissionResult(
   // The click could never be dispatched and there is no page evidence at all:
   // treat it as an infrastructure failure.
   return saveFailure(batch, result.message, dependencies);
+}
+
+// Credits the anchor slot this comment was written for. A published comment
+// counts straight away; one held for review is parked until a moderation
+// recheck decides whether it ever went live.
+async function recordItemAnchor(
+  batch: BatchSnapshot,
+  status: 'published' | 'pending_moderation',
+  dependencies: BatchRunnerDependencies
+): Promise<void> {
+  const item = currentItem(batch);
+  const siteId = batch.settings.siteId;
+  if (!siteId || !item.anchor) return;
+  try {
+    await dependencies.recordSiteAnchor(
+      siteId,
+      item.anchor.bucket,
+      item.url,
+      status
+    );
+  } catch {
+    // Losing one tally entry is not worth failing a comment that already
+    // reached the page.
+  }
 }
 
 async function openWorkerTab(
@@ -950,9 +1024,11 @@ async function advanceAnalysis(
 
 async function saveGeneratedComment(
   batch: BatchSnapshot,
-  comment: string,
+  generated: GeneratedComment,
+  bucket: AnchorBucket | undefined,
   dependencies: BatchRunnerDependencies
 ): Promise<BatchStepResult> {
+  const comment = generated.comment;
   const fingerprint = commentFingerprint(comment);
   const duplicate = batch.items
     .slice(0, batch.currentIndex)
@@ -976,6 +1052,11 @@ async function saveGeneratedComment(
         status: 'generating',
         comment,
         commentFingerprint: fingerprint,
+        // Recorded with the wording that actually shipped, so the slot is only
+        // credited later if this comment reaches the page.
+        ...(bucket && generated.anchorText
+          ? { anchor: { bucket, text: generated.anchorText } }
+          : {}),
         message: '',
       },
     },
@@ -1098,6 +1179,8 @@ async function advanceGeneration(
     );
   }
 
+  const anchor = await selectItemAnchor(batch, dependencies);
+
   const requested = updateBatchProgress(
     batch,
     { item: { status: 'generating', message: GENERATION_REQUESTED } },
@@ -1105,7 +1188,7 @@ async function advanceGeneration(
   );
   await dependencies.setBatch(requested);
   try {
-    const comment = await dependencies.generateComment(keys, {
+    const generated = await dependencies.generateComment(keys, {
       provider: requested.settings.provider,
       websiteProfile: {
         ...(requested.websiteProfile as NonNullable<
@@ -1115,10 +1198,36 @@ async function advanceGeneration(
       },
       targetPage: item.analysis.page,
       linkMode: requested.settings.linkMode,
+      ...(anchor?.text ? { anchorText: anchor.text } : {}),
+      // The natural bucket is the one slot whose wording is worth writing per
+      // comment; its pool entry rides along as the fallback.
+      ...(anchor?.bucket === 'natural' ? { requestAnchorText: true } : {}),
     });
-    return saveGeneratedComment(requested, comment, dependencies);
+    return saveGeneratedComment(
+      requested,
+      generated,
+      anchor?.bucket,
+      dependencies
+    );
   } catch (error) {
     return saveFailure(requested, errorMessage(error), dependencies);
+  }
+}
+
+// Anchor control only applies where the comment body actually carries the link,
+// and only for a site the snapshot can name. Anything else runs exactly as it
+// did before, on the promoted site's own title.
+async function selectItemAnchor(
+  batch: BatchSnapshot,
+  dependencies: BatchRunnerDependencies
+): Promise<AnchorSelection | null> {
+  const siteId = batch.settings.siteId;
+  if (!siteId || !usesInlineAnchor(batch.settings.linkMode)) return null;
+  try {
+    return await dependencies.selectSiteAnchor(siteId);
+  } catch {
+    // A missing or unreadable anchor plan must never cost the run a target.
+    return null;
   }
 }
 

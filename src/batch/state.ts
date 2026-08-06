@@ -89,6 +89,7 @@ export interface BatchItemProgressUpdate {
   commentFingerprint?: BatchItem['commentFingerprint'];
   prepared?: BatchItem['prepared'];
   partialPageAllowed?: BatchItem['partialPageAllowed'];
+  anchor?: BatchItem['anchor'];
   message?: string;
 }
 

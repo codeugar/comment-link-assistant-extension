@@ -1,6 +1,8 @@
+import { createDefaultAnchorPlan, emptyAnchorPools } from '@/anchor/types';
 import type { DashboardBackupData } from '@/dashboard/model';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { emptyAnchorLedger } from './anchor-ledger';
 import type { BatchHistoryEntry } from './batch-history';
 import {
   DATA_BACKUP_FORMAT_VERSION,
@@ -104,6 +106,8 @@ function sampleSections(): DataBackupSections {
     filterList: [sampleFilterEntry()],
     batchHistory: [sampleBatchHistoryEntry()],
     dashboard: sampleDashboard(),
+    anchorPlans: {},
+    anchorLedgers: {},
   };
 }
 
@@ -165,6 +169,78 @@ describe('data backup format', () => {
       expect(error).toBeInstanceOf(DataBackupError);
       expect((error as DataBackupError).code).toBe(
         'BACKUP_SECTION_DASHBOARD_INVALID'
+      );
+    }
+  });
+
+  it('carries the anchor mix and its tally through a round trip', () => {
+    const sections = sampleSections();
+    sections.anchorPlans = {
+      'site-1': {
+        ...createDefaultAnchorPlan('site-1', 1_000),
+        pools: {
+          ...emptyAnchorPools(),
+          brand: ['Example'],
+        },
+      },
+    };
+    sections.anchorLedgers = {
+      'site-1': {
+        ...emptyAnchorLedger('site-1', 1_000),
+        published: {
+          brand: 3,
+          naked: 2,
+          exact: 2,
+          partial: 1,
+          generic: 1,
+          natural: 0,
+        },
+      },
+    };
+
+    const built = buildDataBackup(sections, '1.2.3');
+    const parsed = parseDataBackupFile(JSON.parse(JSON.stringify(built)));
+
+    expect(parsed.data.anchorPlans['site-1']?.pools.brand).toEqual(['Example']);
+    expect(parsed.data.anchorLedgers['site-1']?.published.brand).toBe(3);
+  });
+
+  it('restores a backup written before anchor ratios existed', () => {
+    const built = buildDataBackup(sampleSections(), '1.2.3');
+    const raw = JSON.parse(JSON.stringify(built));
+    raw.data.anchorPlans = undefined;
+    raw.data.anchorLedgers = undefined;
+
+    const parsed = parseDataBackupFile(raw);
+
+    expect(parsed.data.anchorPlans).toEqual({});
+    expect(parsed.data.anchorLedgers).toEqual({});
+  });
+
+  it('rejects a corrupted anchor mix section', () => {
+    const built = buildDataBackup(sampleSections(), '1.2.3');
+    const raw = JSON.parse(JSON.stringify(built));
+    // Targets that do not add up to 100 are not a usable mix.
+    raw.data.anchorPlans = {
+      'site-1': {
+        ...createDefaultAnchorPlan('site-1', 1_000),
+        targets: {
+          brand: 90,
+          naked: 0,
+          exact: 0,
+          partial: 0,
+          generic: 0,
+          natural: 0,
+        },
+      },
+    };
+    try {
+      parseDataBackupFile(raw);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(DataBackupError);
+      expect((error as DataBackupError).code).toBe(
+        'BACKUP_SECTION_ANCHOR_PLANS_INVALID'
       );
     }
   });

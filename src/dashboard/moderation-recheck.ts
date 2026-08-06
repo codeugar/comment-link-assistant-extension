@@ -408,13 +408,22 @@ function unavailableInput(
   };
 }
 
+/**
+ * Called once a held comment is confirmed live. This is where a link that was
+ * only provisional becomes part of the promoted site's real anchor mix.
+ */
+export type ModerationPublishedListener = (
+  check: PendingModerationCheck
+) => Promise<void>;
+
 export class PendingModerationRecheckCoordinator {
   private running: Promise<ModerationRecheckRunResult> | null = null;
 
   constructor(
     private readonly store: ModerationRecheckStore,
     private readonly tabs: ModerationVerificationTabPort,
-    private readonly limit = MAX_PENDING_MODERATION_CHECKS_PER_RUN
+    private readonly limit = MAX_PENDING_MODERATION_CHECKS_PER_RUN,
+    private readonly onPublished?: ModerationPublishedListener
   ) {}
 
   run(): Promise<ModerationRecheckRunResult> {
@@ -455,6 +464,9 @@ export class PendingModerationRecheckCoordinator {
               status: 'published',
               message: verification.message,
             });
+            // A listener failure must not turn a confirmed publication back
+            // into a pending one.
+            await this.onPublished?.(check).catch(() => undefined);
             result.published += 1;
           } else {
             await this.store.recordModerationCheck({

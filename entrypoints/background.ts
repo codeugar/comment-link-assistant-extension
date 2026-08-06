@@ -1,4 +1,4 @@
-import { generateComment } from '@/api/client';
+import { generateComment, generateNaturalAnchorTexts } from '@/api/client';
 import { ensureIdleAndArchive } from '@/batch/batch-lifecycle';
 import { runHistoryRetry } from '@/batch/history-retry';
 import { isDueToday, markChunkDone, splitIntoChunks } from '@/batch/plan';
@@ -71,6 +71,12 @@ import {
 } from '@/runtime/page-commands';
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
 import { configureSidePanel } from '@/runtime/side-panel';
+import {
+  ANCHOR_LEDGER_STORAGE_KEY,
+  getAnchorLedgers,
+  resolveAnchorPending,
+} from '@/storage/anchor-ledger';
+import { ANCHOR_PLAN_STORAGE_KEY, getAnchorPlans } from '@/storage/anchor-plan';
 import { clearBatch, getBatch, setBatch } from '@/storage/batch';
 import {
   HISTORY_STORAGE_KEY,
@@ -377,7 +383,14 @@ function requestPendingModerationRecheck(): Promise<ModerationRecheckLastRun> {
       const coordinator = new PendingModerationRecheckCoordinator(
         dashboardService,
         createChromeModerationVerificationTabPort(),
-        settings.maxChecksPerRun
+        settings.maxChecksPerRun,
+        async (check) => {
+          await resolveAnchorPending(
+            check.promotingSiteId,
+            check.url,
+            'published'
+          );
+        }
       );
       const storedResult = await coordinator.run();
       const manualResult = await runManualModerationRechecks(
@@ -613,7 +626,7 @@ async function prepareComment(): Promise<PopupMessageResult> {
   }
 
   const websiteProfile = await loadWebsiteProfile(site.websiteUrl);
-  const comment = await generateComment(keys, {
+  const generated = await generateComment(keys, {
     provider: settings.provider,
     websiteProfile,
     targetPage: analysis.page,
@@ -624,7 +637,7 @@ async function prepareComment(): Promise<PopupMessageResult> {
     data: {
       analysis,
       websiteProfile,
-      comment,
+      comment: generated.comment,
       target: {
         tabId,
         url: analysis.page.url,
@@ -1409,6 +1422,29 @@ async function deleteDashboardTarget(
 // envelope. IndexedDB access stays on this side of the runtime (the same side
 // DashboardService/dashboardRepository already live on) so the dashboard page
 // never opens the database directly; it always goes through this message.
+// Fallback wording for the natural bucket, written once from the settings page
+// rather than per comment. It runs through the promoted site's own profile so
+// the phrasing suits that site's language.
+async function generateNaturalAnchors(message: {
+  siteId: string;
+  count: number;
+}): Promise<string[]> {
+  const settings = await getSettings();
+  const site = settings.sites.find(
+    (candidate) => candidate.id === message.siteId
+  );
+  if (!site?.websiteUrl) throw new Error('WEBSITE_URL_REQUIRED');
+  const [keys, websiteProfile] = await Promise.all([
+    getProviderApiKeys(),
+    loadWebsiteProfile(site.websiteUrl),
+  ]);
+  return generateNaturalAnchorTexts(keys, {
+    provider: settings.provider,
+    websiteProfile,
+    count: message.count,
+  });
+}
+
 async function exportDataBackup(): Promise<DataBackupFile> {
   const [
     settings,
@@ -1417,6 +1453,8 @@ async function exportDataBackup(): Promise<DataBackupFile> {
     filterList,
     batchHistory,
     dashboard,
+    anchorPlans,
+    anchorLedgers,
   ] = await Promise.all([
     getSettings(),
     getProviderApiKeys(),
@@ -1424,6 +1462,8 @@ async function exportDataBackup(): Promise<DataBackupFile> {
     getFilterList(),
     getBatchHistory(),
     dashboardRepository.exportAll(),
+    getAnchorPlans(),
+    getAnchorLedgers(),
   ]);
   return buildDataBackup(
     {
@@ -1433,6 +1473,8 @@ async function exportDataBackup(): Promise<DataBackupFile> {
       filterList,
       batchHistory,
       dashboard,
+      anchorPlans,
+      anchorLedgers,
     },
     chrome.runtime.getManifest().version
   );
@@ -1452,6 +1494,8 @@ async function importDataBackup(raw: unknown): Promise<void> {
     [OUTBOUND_LINK_LIBRARY_STORAGE_KEY]: backup.data.outboundLinkLibrary,
     [FILTER_LIST_STORAGE_KEY]: backup.data.filterList,
     [HISTORY_STORAGE_KEY]: backup.data.batchHistory,
+    [ANCHOR_PLAN_STORAGE_KEY]: backup.data.anchorPlans,
+    [ANCHOR_LEDGER_STORAGE_KEY]: backup.data.anchorLedgers,
   });
   await clearFirstRunPending();
   await dashboardService.bumpRevision();
@@ -1658,6 +1702,10 @@ async function dispatch(
       message.target
     );
     return { type: message.type, data: result };
+  }
+  if (message.type === 'anchor.generateNaturalTexts') {
+    assertTrustedUiSender(sender);
+    return { type: message.type, data: await generateNaturalAnchors(message) };
   }
   if (message.type === 'data-backup.export') {
     assertTrustedUiSender(sender);

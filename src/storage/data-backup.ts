@@ -8,6 +8,10 @@ import {
 import type { DashboardBackupData } from '@/dashboard/model';
 import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
 import { z } from 'zod';
+import { anchorLedgersSchema } from './anchor-ledger';
+import type { AnchorLedgersMap } from './anchor-ledger';
+import { anchorPlansSchema } from './anchor-plan';
+import type { AnchorPlansMap } from './anchor-plan';
 import { batchHistorySchema } from './batch-history';
 import type { BatchHistoryEntry } from './batch-history';
 import { filterListSchema } from './filter-list';
@@ -39,6 +43,13 @@ export interface DataBackupSections {
   filterList: FilterListEntry[];
   batchHistory: BatchHistoryEntry[];
   dashboard: DashboardBackupData;
+  /**
+   * Anchor mix configuration and its running tally. Both are optional on read:
+   * a backup taken before anchor ratios existed simply restores as no mix
+   * configured and an empty tally, which is exactly the pre-feature behaviour.
+   */
+  anchorPlans: AnchorPlansMap;
+  anchorLedgers: AnchorLedgersMap;
 }
 
 export interface DataBackupFile {
@@ -56,7 +67,9 @@ export type DataBackupErrorCode =
   | 'BACKUP_SECTION_OUTBOUND_LINK_LIBRARY_INVALID'
   | 'BACKUP_SECTION_FILTER_LIST_INVALID'
   | 'BACKUP_SECTION_BATCH_HISTORY_INVALID'
-  | 'BACKUP_SECTION_DASHBOARD_INVALID';
+  | 'BACKUP_SECTION_DASHBOARD_INVALID'
+  | 'BACKUP_SECTION_ANCHOR_PLANS_INVALID'
+  | 'BACKUP_SECTION_ANCHOR_LEDGERS_INVALID';
 
 export class DataBackupError extends Error {
   constructor(
@@ -267,6 +280,16 @@ export function parseDataBackupFile(raw: unknown): DataBackupFile {
   if (!dashboard.success) {
     throw new DataBackupError('BACKUP_SECTION_DASHBOARD_INVALID');
   }
+  // Absent in any backup written before anchor ratios shipped, so a missing
+  // section restores as empty rather than rejecting the whole file.
+  const anchorPlans = anchorPlansSchema.safeParse(data.anchorPlans ?? {});
+  if (!anchorPlans.success) {
+    throw new DataBackupError('BACKUP_SECTION_ANCHOR_PLANS_INVALID');
+  }
+  const anchorLedgers = anchorLedgersSchema.safeParse(data.anchorLedgers ?? {});
+  if (!anchorLedgers.success) {
+    throw new DataBackupError('BACKUP_SECTION_ANCHOR_LEDGERS_INVALID');
+  }
 
   return {
     formatVersion: DATA_BACKUP_FORMAT_VERSION,
@@ -279,6 +302,8 @@ export function parseDataBackupFile(raw: unknown): DataBackupFile {
       filterList: filterList.data,
       batchHistory: batchHistory.data,
       dashboard: dashboard.data,
+      anchorPlans: anchorPlans.data,
+      anchorLedgers: anchorLedgers.data,
     },
   };
 }

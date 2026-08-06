@@ -24,6 +24,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function stubComment(comment: string): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ comment }) } }],
+          }),
+          { status: 200 }
+        )
+    )
+  );
+}
+
 describe('direct comment generation', () => {
   it('calls DeepSeek directly with the selected provider key', async () => {
     const fetchMock = vi.fn(
@@ -41,9 +56,10 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe(
-      'A useful comment. <a href="https://product.example\n">Product</a>'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'A useful comment. <a href="https://product.example\n">Product</a>',
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, request] = fetchMock.mock.calls[0] ?? [];
@@ -126,9 +142,10 @@ describe('direct comment generation', () => {
     );
     await vi.advanceTimersByTimeAsync(67_000);
 
-    await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example\n">Product</a>'
-    );
+    await expect(request).resolves.toMatchObject({
+      comment:
+        'A useful comment. <a href="https://product.example\n">Product</a>',
+    });
   });
 
   it('retries a request that times out on its first attempt', async () => {
@@ -163,9 +180,10 @@ describe('direct comment generation', () => {
     await vi.advanceTimersByTimeAsync(30_000); // per-attempt budget expires, aborting attempt 1
     await vi.advanceTimersByTimeAsync(250); // retry backoff before attempt 2
 
-    await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example\n">Product</a>'
-    );
+    await expect(request).resolves.toMatchObject({
+      comment:
+        'A useful comment. <a href="https://product.example\n">Product</a>',
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -238,9 +256,10 @@ describe('direct comment generation', () => {
     // deadline measured from call start, but before attempt 2's own deadline.
     await vi.advanceTimersByTimeAsync(30_100);
 
-    await expect(request).resolves.toBe(
-      'A useful comment. <a href="https://product.example\n">Product</a>'
-    );
+    await expect(request).resolves.toMatchObject({
+      comment:
+        'A useful comment. <a href="https://product.example\n">Product</a>',
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -273,9 +292,10 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe(
-      'Useful point. See <a href="https://product.example\n">Product</a>'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'Useful point. See <a href="https://product.example\n">Product</a>',
+    });
   });
 
   it('requires exactly the promoted URL for inline-link mode', async () => {
@@ -330,9 +350,10 @@ describe('direct comment generation', () => {
         { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
         { ...input, linkMode: 'inline' }
       )
-    ).resolves.toBe(
-      'A specific, useful observation. <a href="https://product.example\n">Product</a>'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'A specific, useful observation. <a href="https://product.example\n">Product</a>',
+    });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -364,9 +385,10 @@ describe('direct comment generation', () => {
         { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
         { ...input, linkMode: 'inline' }
       )
-    ).resolves.toBe(
-      'The resting tip is useful; <a href="https://product.example\n">Product</a> explains the related workflow clearly.'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'The resting tip is useful; <a href="https://product.example\n">Product</a> explains the related workflow clearly.',
+    });
   });
 
   it('keeps only the intended href line break, not one between the tag name and attribute', async () => {
@@ -395,8 +417,10 @@ describe('direct comment generation', () => {
       { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
       { ...input, linkMode: 'inline' }
     );
-    expect(result).toContain('<a href="https://product.example\n">Product</a>');
-    expect(result).not.toContain('<a\nhref=');
+    expect(result.comment).toContain(
+      '<a href="https://product.example\n">Product</a>'
+    );
+    expect(result.comment).not.toContain('<a\nhref=');
   });
 
   it('normalizes a legacy provider anchor through the deterministic placeholder path', async () => {
@@ -427,9 +451,10 @@ describe('direct comment generation', () => {
         { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
         { ...input, linkMode: 'inline' }
       )
-    ).resolves.toBe(
-      'See <a href="https://product.example\n">Product</a> for details.'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'See <a href="https://product.example\n">Product</a> for details.',
+    });
   });
 
   it('retries a transient provider failure with a capped backoff', async () => {
@@ -450,9 +475,10 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe(
-      'A useful comment. <a href="https://product.example\n">Product</a>'
-    );
+    ).resolves.toMatchObject({
+      comment:
+        'A useful comment. <a href="https://product.example\n">Product</a>',
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -478,9 +504,245 @@ describe('direct comment generation', () => {
 
     await expect(
       generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
-    ).resolves.toBe(
-      'One detail stood out: the example. <a href="https://product.example\n">Product</a>'
+    ).resolves.toMatchObject({
+      comment:
+        'One detail stood out: the example. <a href="https://product.example\n">Product</a>',
+    });
+  });
+
+  it('renders a caller-supplied anchor text instead of the site title', async () => {
+    stubComment('The pacing note is fair; {LINK} covers the same ground.');
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, anchorText: 'AI video generator' }
+      )
+    ).resolves.toMatchObject({
+      comment:
+        'The pacing note is fair; <a href="https://product.example\n">AI video generator</a> covers the same ground.',
+      anchorText: 'AI video generator',
+    });
+  });
+
+  it('tells the model what the token will read as without letting it author the link', async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _request?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ comment: 'A point about {LINK}.' }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        )
     );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateComment(
+      { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+      { ...input, anchorText: 'learn more' }
+    );
+
+    const system = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+      .messages[0].content;
+    expect(system).toContain('"learn more"');
+    expect(system).toContain('{"comment":"..."}');
+    expect(system).not.toContain('anchorText');
+  });
+
+  it('uses the anchor wording the model chose for the natural slot', async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _request?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    comment: 'That matches {LINK} almost exactly.',
+                    anchorText: 'a rundown I read recently',
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 }
+        )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, requestAnchorText: true, anchorText: 'this write-up' }
+      )
+    ).resolves.toMatchObject({
+      comment:
+        'That matches <a href="https://product.example\n">a rundown I read recently</a> almost exactly.',
+      anchorText: 'a rundown I read recently',
+    });
+
+    const system = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))
+      .messages[0].content;
+    expect(system).toContain('"anchorText"');
+  });
+
+  it.each([
+    ['a URL', 'see https://spam.example'],
+    ['markup', '<b>this tool</b>'],
+    ['an overlong phrase', 'x'.repeat(61)],
+    ['nothing at all', '   '],
+  ])(
+    'falls back to the caller wording when the model answers with %s',
+    async (_label, anchorText) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: {
+                      content: JSON.stringify({
+                        comment: 'That matches {LINK} almost exactly.',
+                        anchorText,
+                      }),
+                    },
+                  },
+                ],
+              }),
+              { status: 200 }
+            )
+        )
+      );
+
+      await expect(
+        generateComment(
+          { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+          { ...input, requestAnchorText: true, anchorText: 'this write-up' }
+        )
+      ).resolves.toMatchObject({
+        comment:
+          'That matches <a href="https://product.example\n">this write-up</a> almost exactly.',
+        anchorText: 'this write-up',
+      });
+    }
+  );
+
+  it('ignores a model anchor suggestion that was never asked for', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      comment: 'A point about {LINK}.',
+                      anchorText: 'best AI tool ever',
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, anchorText: 'Example' }
+      )
+    ).resolves.toMatchObject({
+      comment: 'A point about <a href="https://product.example\n">Example</a>.',
+      anchorText: 'Example',
+    });
+  });
+
+  it('renders a bare URL as the anchor text', async () => {
+    stubComment('Worth a look for the same workflow: {LINK}');
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, anchorText: 'https://product.example' }
+      )
+    ).resolves.toMatchObject({
+      comment:
+        'Worth a look for the same workflow: <a href="https://product.example\n">https://product.example</a>',
+    });
+  });
+
+  it('escapes markup in a caller-supplied anchor text', async () => {
+    stubComment('A useful point about {LINK} here.');
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, anchorText: '<b>Product</b>' }
+      )
+    ).resolves.toMatchObject({
+      comment:
+        'A useful point about <a href="https://product.example\n">&lt;b&gt;Product&lt;/b&gt;</a> here.',
+    });
+  });
+
+  it('falls back to the site title when the anchor text is blank', async () => {
+    stubComment('A useful point about {LINK} here.');
+
+    await expect(
+      generateComment(
+        { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
+        { ...input, anchorText: '   ' }
+      )
+    ).resolves.toMatchObject({
+      comment:
+        'A useful point about <a href="https://product.example\n">Product</a> here.',
+    });
+  });
+
+  it('rejects a template carrying more than one placeholder', async () => {
+    stubComment('{LINK} covers this, and {LINK} goes further.');
+
+    await expect(
+      generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
+    ).rejects.toThrow('COMMENT_PROVIDER_PAYLOAD_INVALID');
+  });
+
+  it('rejects a foreign URL sitting alongside the placeholder', async () => {
+    stubComment('Compare {LINK} against https://other.example for context.');
+
+    await expect(
+      generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
+    ).rejects.toThrow('COMMENT_RELEVANT_URL_REQUIRED');
+  });
+
+  it('rejects a template mixing the placeholder with a Markdown link', async () => {
+    stubComment('See {LINK} and [the docs](/docs) for the rest.');
+
+    await expect(
+      generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
+    ).rejects.toThrow('COMMENT_MUST_BE_SAFE_PLAIN_TEXT');
+  });
+
+  it('rejects a second model-authored anchor next to the promoted one', async () => {
+    stubComment(
+      'See <a href="https://product.example">Product</a> and <a href="https://other.example">more</a>.'
+    );
+
+    await expect(
+      generateComment({ deepseekApiKey: 'deepseek-key', kieApiKey: '' }, input)
+    ).rejects.toThrow('COMMENT_MUST_BE_SAFE_PLAIN_TEXT');
   });
 
   it.each(['prefer-website-field', 'comment-only'] as const)(
@@ -511,7 +773,9 @@ describe('direct comment generation', () => {
           { deepseekApiKey: 'deepseek-key', kieApiKey: '' },
           { ...input, linkMode }
         )
-      ).resolves.toBe('The example makes the trade-off clear.');
+      ).resolves.toMatchObject({
+        comment: 'The example makes the trade-off clear.',
+      });
 
       const request = fetchMock.mock.calls[0]?.[1];
       const body = JSON.parse(String(request?.body));

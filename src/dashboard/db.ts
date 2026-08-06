@@ -154,6 +154,9 @@ export interface PendingModerationCheck {
   targetId: string;
   attemptId: string;
   planId: string;
+  /** Promoted site behind this target, so a published verdict can credit that
+   *  site's anchor mix. */
+  promotingSiteId: string;
   url: string;
   targetWebsiteUrl: string;
   fingerprint: string;
@@ -1182,6 +1185,7 @@ export class DashboardRepository {
             targetId: target.id,
             attemptId: attempt.id,
             planId: target.planId,
+            promotingSiteId: plan.promotingSiteId,
             url: target.url,
             targetWebsiteUrl: plan.promotingWebsiteUrl,
             fingerprint,

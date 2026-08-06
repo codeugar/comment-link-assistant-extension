@@ -459,6 +459,126 @@ async function main() {
     return `persisted after reload: ${JSON.stringify(persisted)}`;
   }
 
+  /* --------------------------------------------------------------- T2X ---- */
+  await runTest('T2X', 'anchor mix editor persists a site anchor plan', async () => {
+    try {
+      return await anchorMixTest();
+    } finally {
+      await closeSettingsDrawer(dashboard).catch(() => undefined);
+    }
+  });
+
+  async function anchorMixTest() {
+    await openSettingsDrawer(dashboard);
+    // T2 left the site on a-tag-newline, the mode whose comment body carries
+    // the anchor, so the mix editor must be present.
+    await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
+
+    const defaults = await dashboard.evaluate(() =>
+      ['brand', 'naked', 'exact', 'partial', 'generic', 'natural'].map(
+        (bucket) => document.querySelector(`#anchor-target-${bucket}`)?.value ?? null
+      )
+    );
+    assertEqual(defaults.join(','), '30,20,20,15,10,5', 'Default anchor shares are wrong');
+
+    // A share that breaks the 100% total surfaces the normalize affordance.
+    await dashboard.fill('#anchor-target-brand', '40');
+    await dashboard.waitForSelector('.anchor-mix-total-invalid', { timeout: 5_000 });
+    await dashboard.click('.anchor-mix button:has-text("归一化到 100%")');
+    await dashboard.waitForSelector('.anchor-mix-total-invalid', { state: 'detached', timeout: 5_000 });
+    const normalized = await dashboard.evaluate(() =>
+      ['brand', 'naked', 'exact', 'partial', 'generic', 'natural'].reduce(
+        (sum, bucket) => sum + Number(document.querySelector(`#anchor-target-${bucket}`)?.value ?? 0),
+        0
+      )
+    );
+    assertEqual(normalized, 100, 'Normalize did not bring the shares back to 100');
+
+    await dashboard.fill('#anchor-pool-brand', 'E2E 品牌\nE2E Brand');
+    await dashboard.fill('#anchor-pool-exact', 'AI video generator');
+    await dashboard.click('.anchor-mix button:has-text("从网站链接填入")');
+    await dashboard.click('.anchor-mix button:has-text("添加推荐词")');
+    await shot(dashboard, 'T2X-anchor-mix');
+
+    const beforeReload = await readAnchorMix(dashboard);
+    assert(beforeReload.naked.includes(SETTINGS.websiteUrl), 'Bare URL fill did not add the website URL');
+    assert(beforeReload.generic.length > 0, 'Generic suggestions added nothing');
+
+    // The mix is stored outside the settings form, so it must survive a reload
+    // without the form ever being submitted.
+    await closeSettingsDrawer(dashboard);
+    await dashboard.reload({ waitUntil: 'domcontentloaded' });
+    await openSettingsDrawer(dashboard);
+    await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
+    const afterReload = await readAnchorMix(dashboard);
+
+    assertEqual(afterReload.brand, beforeReload.brand, 'Brand pool did not persist');
+    assertEqual(afterReload.exact, beforeReload.exact, 'Exact keyword pool did not persist');
+    assertEqual(afterReload.naked, beforeReload.naked, 'Bare URL pool did not persist');
+    assertEqual(afterReload.generic, beforeReload.generic, 'Generic pool did not persist');
+    assertEqual(afterReload.total, 100, 'Shares did not persist as a whole mix');
+
+    // Nothing has been published yet, so the tally must say so rather than
+    // implying a 0% mix.
+    const empty = await dashboard.locator('.anchor-mix-actual').first().innerText();
+    assertIncludes(empty, '还没有已发布的外链', 'Empty tally is not reported');
+
+    // Seed a tally the way the batch runner would, then confirm the editor
+    // reports the mix those links actually produced.
+    await closeSettingsDrawer(dashboard);
+    const siteId = await dashboard.evaluate(async () => {
+      const stored = await chrome.storage.local.get('comment-link-assistant.settings');
+      return stored['comment-link-assistant.settings'].activeSiteId;
+    });
+    await dashboard.evaluate(async (id) => {
+      await chrome.storage.local.set({
+        'comment-link-assistant.anchor-ledger': {
+          [id]: {
+            siteId: id,
+            published: { brand: 6, naked: 4, exact: 4, partial: 3, generic: 2, natural: 1 },
+            pending: [{ bucket: 'exact', targetUrl: 'https://blog.example/held', at: 1 }],
+            updatedAt: 1,
+          },
+        },
+      });
+    }, siteId);
+
+    await dashboard.reload({ waitUntil: 'domcontentloaded' });
+    await openSettingsDrawer(dashboard);
+    await dashboard.waitForSelector('.anchor-mix', { timeout: 10_000 });
+    const tally = await dashboard.$$eval('.anchor-mix-actual', (nodes) =>
+      nodes.map((node) => node.innerText.trim())
+    );
+    // 6 of 20 published links is 30%, matching the brand share exactly.
+    assertIncludes(tally[0], '当前 30%（6 条）', 'Brand tally is wrong');
+    assertIncludes(tally[2], '当前 20%（4 条）', 'Exact keyword tally is wrong');
+    assertIncludes(tally[2], '另有 1 条待审核', 'A held comment is not reported alongside the tally');
+    assertIncludes(tally[5], '当前 5%（1 条）', 'Natural tally is wrong');
+    await dashboard.locator('.anchor-mix').scrollIntoViewIfNeeded();
+    await shot(dashboard, 'T2X-anchor-mix-tally');
+
+    const errors = extensionErrorsFor('T2X');
+    assertEqual(errors.length, 0, `Uncaught page errors in the anchor mix editor:\n${JSON.stringify(errors, null, 2)}`);
+    return `persisted pools: ${JSON.stringify(afterReload)}`;
+  }
+
+  async function readAnchorMix(page) {
+    return page.evaluate(() => {
+      const pool = (bucket) => document.querySelector(`#anchor-pool-${bucket}`)?.value ?? '';
+      const buckets = ['brand', 'naked', 'exact', 'partial', 'generic', 'natural'];
+      return {
+        brand: pool('brand'),
+        naked: pool('naked'),
+        exact: pool('exact'),
+        generic: pool('generic'),
+        total: buckets.reduce(
+          (sum, bucket) => sum + Number(document.querySelector(`#anchor-target-${bucket}`)?.value ?? 0),
+          0
+        ),
+      };
+    });
+  }
+
   /* ---------------------------------------------------------------- T3 ---- */
   await runTest('T3', 'sidepanel is slimmed down', async () => {
     sidepanel = await context.newPage();
