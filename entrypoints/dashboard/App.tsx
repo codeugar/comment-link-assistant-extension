@@ -568,6 +568,16 @@ function EmptyState({
   );
 }
 
+/** Read from the manifest rather than written here, so it cannot drift away
+ *  from what was actually shipped. */
+function extensionVersion(): string {
+  try {
+    return chrome.runtime?.getManifest?.().version ?? '';
+  } catch {
+    return '';
+  }
+}
+
 function BrandMark() {
   return (
     <span className="brand-mark" aria-hidden="true">
@@ -682,7 +692,9 @@ function Sidebar({
           <WifiHigh size={17} weight="fill" aria-hidden />
           <span>{isConnected ? t('connected') : t('disconnected')}</span>
         </p>
-        <small>{t('version')} 0.4.0</small>
+        <small>
+          {t('version')} {extensionVersion()}
+        </small>
       </div>
       <button
         type="button"
