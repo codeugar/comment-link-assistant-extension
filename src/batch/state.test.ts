@@ -4,6 +4,7 @@ import {
   completeCurrentItem,
   createBatch,
   filterQueuedItems,
+  hasResumableItems,
   pauseCurrentItem,
   resumeBatch,
   resumeStoppedBatch,
@@ -460,6 +461,24 @@ describe('batch state', () => {
       expect(() => batchSnapshotSchema.parse(resumed)).not.toThrow();
     }
   );
+
+  it('agrees with resumeStoppedBatch about whether a stop left work behind', () => {
+    let batch = createTwoItemBatch();
+    batch = stopBatch(batch, 3_000);
+    expect(hasResumableItems(batch)).toBe(true);
+    expect(() => resumeStoppedBatch(batch, 4_000)).not.toThrow();
+  });
+
+  it('reports no resumable work once every target settled', () => {
+    let batch = createTwoItemBatch();
+    batch = completeCurrentItem(batch, 'submitted', '', 2_000);
+    batch = completeCurrentItem(batch, 'failed', 'BOOM', 3_000);
+
+    // A stop over a run with nothing left is a no-op, so the snapshot stays
+    // completed and never offers a resume.
+    expect(stopBatch(batch, 4_000)).toBe(batch);
+    expect(hasResumableItems(batch)).toBe(false);
+  });
 });
 
 function createThreeItemBatch() {

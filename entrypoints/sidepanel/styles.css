@@ -199,6 +199,13 @@ h2 {
   box-shadow: 0 0 0 3px rgba(31, 114, 83, 0.12);
 }
 
+.idle-panel p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .panel {
   position: relative;
   margin-bottom: 12px;
@@ -266,23 +273,8 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(211, 75, 44, 0.12);
 }
 
-.field-hint {
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.4;
-}
-
-.target-editor {
-  min-height: 132px;
-  resize: vertical;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 10px;
-  line-height: 1.55;
-}
-
 .primary-button,
-.secondary-button,
-.publish-button {
+.secondary-button {
   min-height: 37px;
   border-radius: 2px;
   padding: 9px 13px;
@@ -296,16 +288,14 @@ textarea:focus {
   margin-top: 12px;
 }
 
-.primary-button,
-.publish-button {
+.primary-button {
   border: 1px solid var(--ink);
   color: #fffaf0;
   background: var(--ink);
   box-shadow: 3px 3px 0 var(--accent);
 }
 
-.primary-button:hover,
-.publish-button:hover {
+.primary-button:hover {
   transform: translate(-1px, -1px);
   box-shadow: 4px 4px 0 var(--accent);
 }
@@ -377,55 +367,6 @@ textarea:focus {
   padding-top: 7px;
 }
 
-.profile-card {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--line);
-  padding: 11px;
-  background: rgba(255, 255, 255, 0.42);
-}
-
-.profile-card-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.profile-label {
-  margin-bottom: 0;
-  color: var(--accent-dark);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.profile-card dl {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-}
-
-.profile-card dl > div {
-  display: grid;
-  gap: 2px;
-}
-
-.profile-card dt {
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 700;
-}
-
-.profile-card dd {
-  margin: 0;
-  font-family: "Iowan Old Style", "Palatino Linotype", serif;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.confirmation-note,
 .pause-card,
 .batch-summary {
   margin: 12px 0 0;
@@ -435,10 +376,6 @@ textarea:focus {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.4;
-}
-
-.publish-button {
-  background: var(--accent-dark);
 }
 
 .batch-heading {
@@ -1049,113 +986,4 @@ textarea:focus {
   flex: none;
   align-items: center;
   gap: 6px;
-}
-
-.plan-due-banners {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.plan-due-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--yellow);
-  border-left: 3px solid var(--yellow);
-  background: rgba(166, 106, 9, 0.08);
-  font-size: 12px;
-}
-
-.plan-due-banner p {
-  margin: 0;
-}
-
-.plan-done-today {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.plan-section > summary {
-  cursor: pointer;
-  list-style: none;
-}
-
-.plan-section > summary::-webkit-details-marker {
-  display: none;
-}
-
-.plan-section > summary h3 {
-  display: inline;
-  margin: 0;
-  font-family: "Iowan Old Style", "Palatino Linotype", serif;
-  font-size: 14px;
-}
-
-.plan-create {
-  display: grid;
-  gap: 8px;
-  margin: 10px 0;
-}
-
-.plan-target-editor {
-  resize: vertical;
-}
-
-.plan-preview {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.plan-list {
-  display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.plan-entry {
-  border: 1px solid rgba(31, 33, 30, 0.13);
-  border-left: 3px solid var(--line);
-  padding: 9px 10px;
-  background: rgba(255, 255, 255, 0.4);
-}
-
-.plan-entry-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.plan-entry-head small {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.plan-next-peek {
-  display: grid;
-  gap: 3px;
-  margin: 6px 0;
-  padding: 0;
-  list-style: none;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.plan-next-peek li {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plan-empty {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 11px;
 }

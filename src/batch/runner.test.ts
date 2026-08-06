@@ -1020,11 +1020,11 @@ describe('batch runner', () => {
     );
   });
 
-  it('uses the canonical profile URL without a trailing slash for generation and validation', async () => {
+  it('uses the canonical promoted URL without a trailing slash for generation and validation', async () => {
     let batch = initialBatch();
     batch = {
       ...batch,
-      settings: { ...batch.settings, websiteUrl: 'http://product.example/' },
+      settings: { ...batch.settings, websiteUrl: 'https://product.example/' },
       websiteProfile: {
         ...batch.websiteProfile!,
         url: 'https://product.example/',
@@ -1058,6 +1058,50 @@ describe('batch runner', () => {
     expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
       7,
       expect.objectContaining({ websiteUrl: 'https://product.example' }),
+      expect.anything(),
+      'batch-1',
+      undefined
+    );
+  });
+
+  it('promotes the site the run was started for, not a profile left over from another site', async () => {
+    let batch = initialBatch();
+    batch = {
+      ...batch,
+      settings: { ...batch.settings, websiteUrl: 'https://second.example' },
+      websiteProfile: {
+        ...batch.websiteProfile!,
+        url: 'https://first.example',
+      },
+    };
+    batch = updateBatchProgress(
+      batch,
+      {
+        workerTabId: 7,
+        item: {
+          status: 'generating',
+          analysis: analysis(),
+          message: 'COMMENT_GENERATION_READY',
+        },
+      },
+      3
+    );
+    const context = dependencies(batch);
+
+    await advanceBatchStep(context.deps);
+    await advanceBatchStep(context.deps);
+
+    expect(context.deps.generateComment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        websiteProfile: expect.objectContaining({
+          url: 'https://second.example',
+        }),
+      })
+    );
+    expect(context.deps.prepareTabSubmission).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ websiteUrl: 'https://second.example' }),
       expect.anything(),
       'batch-1',
       undefined

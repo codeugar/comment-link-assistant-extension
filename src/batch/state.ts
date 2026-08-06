@@ -482,6 +482,15 @@ const preservedStopStatuses = new Set<BatchItemStatus>([
   'stopped',
 ]);
 
+/**
+ * Whether a stopped run still has work for `resumeStoppedBatch` to pick up.
+ * Exported so a view can offer a resume only when the request behind it would
+ * succeed, rather than keeping its own copy of this list.
+ */
+export function hasResumableItems(batch: BatchSnapshot): boolean {
+  return batch.items.some((item) => !settledItemStatuses.has(item.status));
+}
+
 const settledItemStatuses = new Set<BatchItemStatus>([
   'published',
   'pending_moderation',

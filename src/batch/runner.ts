@@ -250,9 +250,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR';
 }
 
+// The promoted site the run was started for is the snapshot's own setting, not
+// whatever the fetched profile happens to say. A profile can outlive the site it
+// was fetched for (a preview held across a site switch, a reused snapshot), and
+// promoting the wrong domain is silent and unrecoverable once the comment is
+// posted. The profile URL only stands in when the snapshot carries no site URL,
+// which start-time validation already rules out for a runnable batch.
 function promotedWebsiteUrl(batch: BatchSnapshot): string {
   return normalizeWebsiteUrl(
-    batch.websiteProfile?.url || batch.settings.websiteUrl
+    batch.settings.websiteUrl || batch.websiteProfile?.url || ''
   );
 }
 

@@ -1,8 +1,6 @@
 import { generateComment, generateNaturalAnchorTexts } from '@/api/client';
 import { ensureIdleAndArchive } from '@/batch/batch-lifecycle';
-import { runHistoryRetry } from '@/batch/history-retry';
 import { isDueToday, markChunkDone, splitIntoChunks } from '@/batch/plan';
-import { runPlanNext } from '@/batch/plan-runner';
 import { BATCH_RECOVERY_ALARM, armBatchRecoveryAlarm } from '@/batch/recovery';
 import {
   type BatchRunnerDependencies,
@@ -15,7 +13,6 @@ import {
   filterQueuedItems,
   resumeBatch,
   resumeStoppedBatch,
-  retryItems,
   skipCurrentManualGate,
   stopBatch,
   updateBatchProgress,
@@ -24,7 +21,11 @@ import {
   handleRemovedWorkerTabSafely,
   openCurrentTargetSafely,
 } from '@/batch/tab-coordinator';
-import type { BatchSettingsSnapshot, BatchSnapshot } from '@/batch/types';
+import type {
+  BatchItem,
+  BatchSettingsSnapshot,
+  BatchSnapshot,
+} from '@/batch/types';
 import { TargetUrlError, parseTargetUrls } from '@/batch/urls';
 import { createDashboardRepository } from '@/dashboard/db';
 import { processLegacyDashboardStorage } from '@/dashboard/legacy-bootstrap';
@@ -117,7 +118,6 @@ import {
 import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
-  buildBatchSettingsSnapshot,
   getActiveSite,
   getProviderApiKeys,
   getSettings,
@@ -130,7 +130,6 @@ import {
   requestBatchStop,
 } from '@/storage/stop-intent';
 import { releaseWorkerTab } from '@/storage/worker-tab-ownership';
-import type { WebsiteProfile } from '@/website/profile';
 import { loadWebsiteProfile } from '@/website/profile-cache';
 
 type SendResponse = (response: BackgroundResponse) => void;
@@ -155,20 +154,8 @@ const runnerDependencies: BatchRunnerDependencies = {
     generateComment(keys, input, { signal: runnerAbort.signal }),
 };
 let dashboardPlanOperationTail: Promise<void> = Promise.resolve();
-let batchRetryOperationTail: Promise<void> = Promise.resolve();
 let pendingModerationRecheckPromise: Promise<ModerationRecheckLastRun> | null =
   null;
-
-function serializeBatchRetryOperation<T>(
-  operation: () => Promise<T>
-): Promise<T> {
-  const queued = batchRetryOperationTail.then(operation, operation);
-  batchRetryOperationTail = queued.then(
-    () => undefined,
-    () => undefined
-  );
-  return queued;
-}
 
 function serializeDashboardPlanOperation<T>(
   operation: () => Promise<T>
@@ -651,15 +638,14 @@ async function prepareComment(): Promise<PopupMessageResult> {
   };
 }
 
-// Shared start path for both the sidepanel-confirmed batch and history reruns.
-// When a reviewed profile is supplied (batch.start) it is used as-is; otherwise
-// the promoted site's profile is loaded through the 30-day cache (history rerun,
-// which has no sidepanel preview payload). All start guards live here so callers
-// never duplicate them.
+// The single start path for a run. The promoted site's profile is always loaded
+// from the site named by this run's own settings snapshot, through the 30-day
+// cache — no caller supplies one, so a profile reviewed for one site can never
+// be carried into a run for another. All start guards live here so callers never
+// duplicate them.
 async function startBatchFromBackground(
   targetText: string,
   settings: BatchSettingsSnapshot,
-  websiteProfile?: WebsiteProfile,
   wake = true,
   trackStandalone = false
 ): Promise<BatchSnapshot> {
@@ -708,8 +694,7 @@ async function startBatchFromBackground(
 
   let batch = createBatch({ targetText, settings });
   if (runnableTargets.length > 0) {
-    const profile =
-      websiteProfile ?? (await loadWebsiteProfile(settings.websiteUrl));
+    const profile = await loadWebsiteProfile(settings.websiteUrl);
     batch = updateBatchProgress(batch, { websiteProfile: profile });
   }
   batch = filterQueuedItems(batch, filteredUrls);
@@ -728,25 +713,6 @@ async function startBatchFromBackground(
   }
   if (wake) wakeCountermandingStop();
   return batch;
-}
-
-async function startBatch(
-  message: Extract<PopupMessage, { type: 'batch.start' }>
-): Promise<PopupMessageResult> {
-  const settings = await getSettings();
-  const siteId = message.siteId ?? settings.activeSiteId;
-  const site =
-    settings.sites.find((candidate) => candidate.id === siteId) ??
-    getActiveSite(settings);
-  const snapshot = buildBatchSettingsSnapshot(settings.provider, site);
-  const data = await startBatchFromBackground(
-    message.targetText,
-    snapshot,
-    message.websiteProfile,
-    true,
-    true
-  );
-  return { type: 'batch.start', data };
 }
 
 async function continueBatch(): Promise<PopupMessageResult> {
@@ -812,126 +778,51 @@ async function stopCurrentBatch(): Promise<PopupMessageResult> {
   }
 }
 
-function isFailedDashboardTarget(target: PlanTarget): boolean {
-  return (
-    target.status === 'no_form' ||
-    target.status === 'validation_error' ||
-    target.status === 'failed'
-  );
-}
+// Picks a stopped run back up from the surface that stopped it, without needing
+// the plan it belongs to. A stop is not a discard: unfinished targets go back to
+// the queue, while a target whose click was already dispatched keeps its
+// prepared payload so the resume verifies that click instead of commenting a
+// second time (resumeStoppedBatch owns that distinction).
+async function resumeCurrentBatch(): Promise<PopupMessageResult> {
+  const current = await getBatch();
+  if (!current) throw new Error('BATCH_NOT_FOUND');
+  if (current.status !== 'stopped') throw new Error('BATCH_RESUME_UNAVAILABLE');
 
-async function dashboardBatchReference(
-  batch: BatchSnapshot
-): Promise<DashboardActiveRunReference | null> {
-  const active = await dashboardService.getActiveRunReference();
-  if (active?.externalBatchId === batch.id) return active;
+  // resumeStoppedBatch is the authority on whether anything is left to run; it
+  // raises BATCH_NOT_RUNNABLE below. Permissions are asked for the wider set of
+  // targets this run could still open.
+  await validateResumePermissions(
+    current,
+    unsettledItems(current).map((item) => item.url)
+  );
+
+  await ensureDashboardReady();
+  // The run this snapshot belongs to is looked up from the snapshot itself, so
+  // the sidepanel does not have to know which plan started it.
   const reference = await dashboardService.findBatchReferenceByExternalBatchId(
-    batch.id
+    current.id
   );
-  if (!reference) return null;
-  return {
-    kind: 'plan',
-    planId: reference.planId,
-    batchId: reference.batchId,
-    runId: reference.runId,
-    externalBatchId: reference.externalBatchId,
-  };
-}
-
-async function retryDashboardBatchItems(
-  batch: BatchSnapshot,
-  itemIds: string[],
-  planId: string,
-  planBatchId: string
-): Promise<BatchSnapshot> {
-  const uniqueItemIds = [...new Set(itemIds)];
-  const itemsById = new Map(batch.items.map((item) => [item.id, item]));
-  const selectedItems = uniqueItemIds.map((itemId) => itemsById.get(itemId));
-  if (selectedItems.some((item) => !item)) {
-    throw new Error('DASHBOARD_RETRY_UNAVAILABLE');
-  }
-
-  const targetsByUrl = new Map(
-    (await dashboardService.getBatchTargets(planBatchId)).map((target) => [
-      target.url,
-      target,
-    ])
-  );
-  const targets = selectedItems.map((item) => targetsByUrl.get(item!.url));
-  if (
-    targets.some((target) => !target) ||
-    targets.some((target) => !isFailedDashboardTarget(target!))
-  ) {
-    throw new Error('DASHBOARD_RETRY_UNAVAILABLE');
-  }
-
-  // Do not wake the runner until the IndexedDB retry run has been registered.
-  // If registration fails, restore the exact terminal snapshot instead of
-  // letting the old sidepanel retry create an untracked run.
-  const next = retryItems(batch, uniqueItemIds);
+  const next = resumeStoppedBatch(current);
   await setBatch(next);
   try {
-    await dashboardService.prepareRetry(
-      planId,
-      targets.map((target) => target!.id),
-      next
-    );
+    if (reference) {
+      await dashboardService.resumeBatchRun(
+        reference.planId,
+        reference.batchId,
+        next
+      );
+    } else {
+      // A snapshot with no dashboard run behind it (an older standalone batch)
+      // still resumes; it simply keeps reporting through the active reference.
+      await dashboardService.syncActiveBatch(next);
+    }
   } catch (error) {
-    await setBatch(batch);
+    await setBatch(current);
     throw error;
   }
-  return next;
-}
-
-function retryBatchItems(
-  message: Extract<PopupMessage, { type: 'batch.retry-items' }>
-): Promise<PopupMessageResult> {
-  // Keep the read/restore path atomic across double-clicks and two sidepanel
-  // instances. In particular, a later request must never restore its stale
-  // terminal snapshot after an earlier request has already started a retry.
-  return serializeBatchRetryOperation(() => retryBatchItemsNow(message));
-}
-
-async function retryBatchItemsNow(
-  message: Extract<PopupMessage, { type: 'batch.retry-items' }>
-): Promise<PopupMessageResult> {
-  // The terminal snapshot reaches storage before the runner's reconciliation
-  // updates its Dashboard run. A fast sidepanel retry used to race that sync,
-  // see the stale run as active, and fail with RUN_ALREADY_ACTIVE. Wait for
-  // the in-flight reconciliation, then re-read the terminal snapshot before
-  // creating a retry run.
-  const settlingRunner = runnerPromise;
-  if (settlingRunner) await settlingRunner;
-
-  const batch = await getBatch();
-  if (!batch) throw new Error('BATCH_NOT_FOUND');
-  await ensureDashboardReady();
-  await dashboardService.syncActiveBatch(batch);
-  const reference = await dashboardBatchReference(batch);
-  const next =
-    reference && isDashboardPlanRunReference(reference)
-      ? await retryDashboardBatchItems(
-          batch,
-          message.itemIds,
-          reference.planId,
-          reference.batchId
-        )
-      : retryItems(batch, message.itemIds);
-  if (!reference || !isDashboardPlanRunReference(reference)) {
-    await setBatch(next);
-    try {
-      await dashboardService.startStandaloneBatchRun(next, 'retry');
-    } catch (error) {
-      await setBatch(batch);
-      throw error;
-    }
-  }
-  // The finished run may have left a stop-intent flag behind (e.g. a service
-  // worker torn down mid-stop). Clear it so the fresh run is not immediately
-  // re-stopped by consumeBatchStopIntent on the next wake.
   await clearBatchStopIntent();
   requestBatchWake();
-  return { type: 'batch.retry-items', data: next };
+  return { type: 'batch.resume', data: next };
 }
 
 async function resetBatch(): Promise<PopupMessageResult> {
@@ -1009,28 +900,6 @@ async function removePlan(
   return { type: 'plan.delete', data: null };
 }
 
-async function runPlanChunk(
-  message: Extract<PopupMessage, { type: 'plan.run-next' }>
-): Promise<PopupMessageResult> {
-  const data = await runPlanNext(
-    {
-      getPlans,
-      getSettings,
-      getBatch,
-      archiveBatch,
-      clearBatch,
-      savePlan,
-      onArchive: (snapshot) => settlePlanChunk(snapshot.id),
-      startBatch: (targetText, settings) =>
-        startBatchFromBackground(targetText, settings),
-      buildSnapshot: buildBatchSettingsSnapshot,
-      now: Date.now,
-    },
-    message.siteId
-  );
-  return { type: 'plan.run-next', data };
-}
-
 async function getDashboardPlanContext(planId: string) {
   const [detail, settings] = await Promise.all([
     dashboardService.getPlanDetail(planId),
@@ -1068,10 +937,11 @@ async function beginDashboardBatch(
 ): Promise<BatchSnapshot> {
   if (urls.length === 0) throw new Error('BATCH_NOT_RUNNABLE');
   await ensureDashboardBatchIdle();
+  // Do not wake the runner here: the caller registers the dashboard run first,
+  // and only then wakes it.
   const snapshot = await startBatchFromBackground(
     urls.join('\n'),
     settings,
-    undefined,
     false
   );
   try {
@@ -1121,6 +991,23 @@ async function runDashboardPlanNext(
       dashboardService.startBatchRun(message.planId, batch.id, snapshot)
   );
   return { type: 'plan.runNext', data };
+}
+
+const SETTLED_ITEM_STATUSES = new Set<BatchItem['status']>([
+  'published',
+  'pending_moderation',
+  'unconfirmed',
+  'submitted',
+  'no_form',
+  'validation_error',
+  'failed',
+  'filtered',
+]);
+
+// The items a resume has to pick back up: everything a run has not already
+// finished with, one way or another.
+function unsettledItems(batch: BatchSnapshot): BatchItem[] {
+  return batch.items.filter((item) => !SETTLED_ITEM_STATUSES.has(item.status));
 }
 
 async function validateResumePermissions(
@@ -1189,20 +1076,10 @@ async function resumeDashboardPlan(
     return { type: 'plan.resume', data: current };
   }
   if (matchesCurrent && current.status === 'paused') {
-    const urls = current.items
-      .filter(
-        (item) =>
-          item.status !== 'published' &&
-          item.status !== 'pending_moderation' &&
-          item.status !== 'unconfirmed' &&
-          item.status !== 'submitted' &&
-          item.status !== 'no_form' &&
-          item.status !== 'validation_error' &&
-          item.status !== 'failed' &&
-          item.status !== 'filtered'
-      )
-      .map((item) => item.url);
-    await validateResumePermissions(current, urls);
+    await validateResumePermissions(
+      current,
+      unsettledItems(current).map((item) => item.url)
+    );
     const next = resumeBatch(current);
     await setBatch(next);
     await dashboardService.syncActiveBatch(next);
@@ -1211,17 +1088,7 @@ async function resumeDashboardPlan(
     return { type: 'plan.resume', data: next };
   }
   if (matchesCurrent && current.status === 'stopped') {
-    const resumable = current.items.filter(
-      (item) =>
-        item.status !== 'published' &&
-        item.status !== 'pending_moderation' &&
-        item.status !== 'unconfirmed' &&
-        item.status !== 'submitted' &&
-        item.status !== 'no_form' &&
-        item.status !== 'validation_error' &&
-        item.status !== 'failed' &&
-        item.status !== 'filtered'
-    );
+    const resumable = unsettledItems(current);
     if (resumable.length === 0) throw new Error('BATCH_NOT_RUNNABLE');
     await validateResumePermissions(
       current,
@@ -1317,24 +1184,6 @@ async function retryDashboardPlanTargets(
       dashboardService.prepareRetry(message.planId, uniqueIds, snapshot)
   );
   return { type: 'plan.retryTargets', data };
-}
-
-async function retryFromHistory(
-  message: Extract<PopupMessage, { type: 'batch.retry-from-history' }>
-): Promise<PopupMessageResult> {
-  const data = await runHistoryRetry(
-    {
-      getBatchHistory,
-      getBatch,
-      archiveBatch,
-      clearBatch,
-      startBatch: (targetText, settings) =>
-        startBatchFromBackground(targetText, settings, undefined, true, true),
-    },
-    message.historyId,
-    message.urls
-  );
-  return { type: 'batch.retry-from-history', data };
 }
 
 async function openCurrentBatchTarget(): Promise<PopupMessageResult> {
@@ -1509,31 +1358,22 @@ async function dispatch(
     return { type: message.type, data: await analyzeCurrentPage() };
   }
   if (message.type === 'comment.prepare') return prepareComment();
-  if (message.type === 'batch.preview') {
-    return {
-      type: message.type,
-      data: await loadWebsiteProfile(message.websiteUrl, {
-        refresh: message.refresh === true,
-      }),
-    };
-  }
-  if (message.type === 'batch.start') return startBatch(message);
   if (message.type === 'batch.continue') return continueBatch();
   if (message.type === 'batch.skip-current')
     return skipCurrentBatchManualGate();
   if (message.type === 'batch.stop') return stopCurrentBatch();
-  if (message.type === 'batch.reset') return resetBatch();
-  if (message.type === 'batch.retry-items') return retryBatchItems(message);
-  if (message.type === 'batch.retry-from-history') {
-    return retryFromHistory(message);
+  // Shares the dashboard plan queue: a resume and a plan run must never build
+  // two runs over the same batch.
+  if (message.type === 'batch.resume') {
+    return serializeDashboardPlanOperation(resumeCurrentBatch);
   }
+  if (message.type === 'batch.reset') return resetBatch();
   if (message.type === 'plan.create') {
     return 'name' in message
       ? createDashboardPlan(message)
       : createLegacyPlan(message);
   }
   if (message.type === 'plan.delete') return removePlan(message);
-  if (message.type === 'plan.run-next') return runPlanChunk(message);
   if (message.type === 'filter.list') {
     return { type: message.type, data: await getFilterList() };
   }

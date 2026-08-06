@@ -70,24 +70,15 @@ export interface DashboardPlanCreateMessage extends LegacyPlanCreateMessage {
 export type PopupMessage =
   | { type: 'page.analyze' }
   | { type: 'comment.prepare' }
-  | { type: 'batch.preview'; websiteUrl: string; refresh?: boolean }
-  | {
-      type: 'batch.start';
-      targetText: string;
-      websiteProfile?: WebsiteProfile;
-      siteId?: string;
-    }
   | { type: 'batch.continue' }
   | { type: 'batch.skip-current' }
   | { type: 'batch.stop' }
+  | { type: 'batch.resume' }
   | { type: 'batch.reset' }
-  | { type: 'batch.retry-items'; itemIds: string[] }
-  | { type: 'batch.retry-from-history'; historyId: string; urls?: string[] }
   | { type: 'batch.open-current' }
   | LegacyPlanCreateMessage
   | DashboardPlanCreateMessage
   | { type: 'plan.delete'; siteId: string }
-  | { type: 'plan.run-next'; siteId: string }
   | { type: 'filter.list' }
   | { type: 'filter.add'; value: string; kind?: FilterEntryKind }
   | { type: 'filter.remove'; id: string }
@@ -172,18 +163,14 @@ export type PopupMessageResult =
   | { type: 'page.analyze'; data: PageAnalysis }
   | { type: 'comment.prepare'; data: PreparedComment }
   | { type: 'comment.submit'; data: PageSubmissionResult }
-  | { type: 'batch.preview'; data: WebsiteProfile }
   | {
       type:
-        | 'batch.start'
         | 'batch.continue'
         | 'batch.skip-current'
         | 'batch.stop'
+        | 'batch.resume'
         | 'batch.reset'
-        | 'batch.retry-items'
-        | 'batch.retry-from-history'
-        | 'batch.open-current'
-        | 'plan.run-next';
+        | 'batch.open-current';
       data: BatchSnapshot | null;
     }
   | { type: 'plan.create'; data: SitePlan }
