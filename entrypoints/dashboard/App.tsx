@@ -342,6 +342,8 @@ function targetStatusCopy(status: string): string {
       return t('publishedStatus');
     case 'pending_moderation':
       return t('pendingModerationStatus');
+    case 'link_stripped':
+      return t('linkStrippedStatus');
     case 'unconfirmed':
       return t('unconfirmedStatus');
     case 'submitted':
@@ -412,7 +414,9 @@ function batchCounts(batch: BatchSnapshot | null) {
       submitted += 1;
     } else if (item.status === 'unconfirmed' || item.status === 'submitted') {
       unconfirmed += 1;
-    } else if (isFailedTarget(item.status)) failed += 1;
+    } else if (item.status === 'link_stripped' || isFailedTarget(item.status)) {
+      failed += 1;
+    }
   }
   const processed = submitted + unconfirmed + failed;
   return {
@@ -1466,7 +1470,9 @@ function PlanList({
 }
 
 function TargetStatusBadge({ status }: { status: string }) {
-  const failed = isFailedTarget(status);
+  // A public comment with no link reads as a failure here: the run produced
+  // nothing, and grouping it with successes would overstate the result.
+  const failed = isFailedTarget(status) || status === 'link_stripped';
   const success = status === 'published';
   const moderation = status === 'pending_moderation';
   const unconfirmed = status === 'unconfirmed' || status === 'submitted';

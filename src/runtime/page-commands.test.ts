@@ -1,73 +1,37 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   analyzeTab,
-  checkTabForPublishedComment,
   clickPreparedTabSubmission,
   prepareTabSubmission,
   submitCurrentPage,
   verifyTabSubmission,
 } from './page-commands';
 
+/** Minimal stand-ins for the anonymous public read the runtime now performs. */
+function htmlResponse(body: string, url = 'https://blog.example/article') {
+  return {
+    ok: true,
+    status: 200,
+    url,
+    text: async () => body,
+    json: async () => ({}),
+  } as unknown as Response;
+}
+
+function restResponse(payload: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    url: '',
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response;
+}
+
 describe('page command runtime', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-  });
-
-  it('routes a moderation recheck through the read-only page command', async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      type: 'moderation-check',
-      result: {
-        status: 'published',
-        message: 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT',
-        fingerprint: 'Useful fingerprint',
-      },
-    });
-    vi.stubGlobal('chrome', {
-      tabs: { sendMessage },
-      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
-    });
-
-    await expect(
-      checkTabForPublishedComment(42, 'Useful fingerprint')
-    ).resolves.toMatchObject({ status: 'published' });
-    expect(sendMessage).toHaveBeenCalledWith(
-      42,
-      expect.objectContaining({
-        command: {
-          type: 'moderation.check',
-          fingerprint: 'Useful fingerprint',
-        },
-      })
-    );
-  });
-
-  it('routes a target-website recheck without a comment fingerprint', async () => {
-    const sendMessage = vi.fn().mockResolvedValue({
-      type: 'moderation-check',
-      result: {
-        status: 'published',
-        message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
-        fingerprint: 'https://product.example',
-      },
-    });
-    vi.stubGlobal('chrome', {
-      tabs: { sendMessage },
-      scripting: { executeScript: vi.fn().mockResolvedValue([]) },
-    });
-
-    await expect(
-      checkTabForPublishedComment(42, '', 'https://product.example')
-    ).resolves.toMatchObject({ status: 'published' });
-    expect(sendMessage).toHaveBeenCalledWith(
-      42,
-      expect.objectContaining({
-        command: {
-          type: 'moderation.check',
-          targetWebsiteUrl: 'https://product.example',
-        },
-      })
-    );
   });
 
   it('analyzes the specified tab without depending on the active tab', async () => {
@@ -309,13 +273,20 @@ describe('page command runtime', () => {
     });
     const executeScript = vi.fn();
     vi.stubGlobal('chrome', {
-      tabs: { sendMessage },
+      tabs: {
+        sendMessage,
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article',
+          status: 'complete',
+        }),
+      },
       scripting: { executeScript },
     });
 
-    await expect(clickPreparedTabSubmission(42, prepared)).resolves.toEqual(
-      result
-    );
+    await expect(
+      clickPreparedTabSubmission(42, prepared)
+    ).resolves.toMatchObject(result);
 
     expect(executeScript).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(42, {
@@ -392,51 +363,196 @@ describe('page command runtime', () => {
     expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it('confirms a new WordPress comment anchor when in-page verification stays unconfirmed', async () => {
+  it('publishes only when the anonymous read finds the promoted link', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
       baseline: { feedbackMessages: [], renderedComment: false },
+      websiteUrl: 'https://product.example',
     };
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
         status: 'unconfirmed',
-        message: 'COMMENT_SUBMISSION_UNCONFIRMED',
+        message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
         fingerprint: prepared.fingerprint,
         clickOccurred: true,
+        acceptance: 'server_receipt',
       },
     });
-    const executeScript = vi.fn();
-    const onUpdated = {
-      addListener: vi.fn(
-        (listener: (tabId: number, changeInfo: { status?: string }) => void) =>
-          listener(42, { status: 'complete' })
-      ),
-      removeListener: vi.fn(),
-    };
+    const publicFetch = vi.fn().mockResolvedValue(
+      restResponse({
+        id: 539871,
+        content: {
+          rendered:
+            '<p>Useful <a href="https://product.example">Product</a></p>',
+        },
+      })
+    );
+    vi.stubGlobal('fetch', publicFetch);
     vi.stubGlobal('chrome', {
       tabs: {
         get: vi.fn().mockResolvedValue({
           id: 42,
           url: 'https://blog.example/article#comment-539871',
-          status: 'loading',
+          status: 'complete',
         }),
         sendMessage,
-        onUpdated,
       },
-      scripting: { executeScript },
+      scripting: { executeScript: vi.fn() },
     });
 
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article')
     ).resolves.toMatchObject({
       status: 'published',
-      message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
-      clickOccurred: true,
+      message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
+      receipt: { commentId: '539871' },
+      publicCheck: { visibility: 'visible', method: 'wp_rest' },
     });
 
-    expect(executeScript).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledOnce();
+    // The comment id from the receipt addresses the check, and it runs without
+    // the author's session.
+    expect(publicFetch).toHaveBeenCalledWith(
+      'https://blog.example/wp-json/wp/v2/comments/539871',
+      expect.objectContaining({ credentials: 'omit', cache: 'no-store' })
+    );
+  });
+
+  it('keeps a receipt-only comment pending when no visitor can see it', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      websiteUrl: 'https://product.example',
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result: {
+        status: 'unconfirmed',
+        message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
+        fingerprint: prepared.fingerprint,
+        clickOccurred: true,
+        acceptance: 'server_receipt',
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          restResponse({ code: 'rest_comment_invalid_id' }, 404)
+        )
+    );
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article#comment-539871',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript: vi.fn() },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
+    ).resolves.toMatchObject({
+      status: 'pending_moderation',
+      message: 'COMMENT_ACCEPTED_NOT_PUBLIC_YET',
+      publicCheck: { visibility: 'not_visible' },
+    });
+  });
+
+  it('settles a public comment whose link the site stripped', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      websiteUrl: 'https://product.example',
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result: {
+        status: 'unconfirmed',
+        message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
+        fingerprint: prepared.fingerprint,
+        clickOccurred: true,
+        acceptance: 'server_receipt',
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        restResponse({
+          id: 539871,
+          content: { rendered: '<p>Useful, and no link at all</p>' },
+        })
+      )
+    );
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article#comment-539871',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript: vi.fn() },
+    });
+
+    // Terminal, not pending: re-checking cannot bring the link back.
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
+    ).resolves.toMatchObject({
+      status: 'link_stripped',
+      message: 'COMMENT_PUBLIC_LINK_STRIPPED',
+      receipt: { commentId: '539871' },
+      publicCheck: { visibility: 'link_stripped' },
+    });
+  });
+
+  it('does not publish a comment only the submitting session can see', async () => {
+    const prepared = {
+      fingerprint: 'A relevant comment',
+      baseline: { feedbackMessages: [], renderedComment: false },
+      websiteUrl: 'https://product.example',
+    };
+    const sendMessage = vi.fn().mockResolvedValue({
+      type: 'submission',
+      result: {
+        status: 'unconfirmed',
+        message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
+        fingerprint: prepared.fingerprint,
+        clickOccurred: true,
+        acceptance: 'rendered_locally',
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          htmlResponse('<div id="comments">no comment of ours here</div>')
+        )
+    );
+    vi.stubGlobal('chrome', {
+      tabs: {
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article',
+          status: 'complete',
+        }),
+        sendMessage,
+      },
+      scripting: { executeScript: vi.fn() },
+    });
+
+    await expect(
+      verifyTabSubmission(42, prepared, 'https://blog.example/article')
+    ).resolves.toMatchObject({
+      status: 'pending_moderation',
+      message: 'COMMENT_ACCEPTED_NOT_PUBLIC_YET',
+    });
   });
 
   it('verifies a paginated anchor in-page using the promoted URL', async () => {
@@ -455,6 +571,18 @@ describe('page command runtime', () => {
       },
     });
     const executeScript = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        restResponse({
+          id: 99,
+          content: {
+            rendered:
+              '<p>Nice <a href="https://product.example">Product</a></p>',
+          },
+        })
+      )
+    );
     vi.stubGlobal('chrome', {
       tabs: {
         get: vi.fn().mockResolvedValue({
@@ -514,7 +642,7 @@ describe('page command runtime', () => {
 
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article')
-    ).resolves.toEqual(result);
+    ).resolves.toMatchObject(result);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -562,7 +690,7 @@ describe('page command runtime', () => {
 
     await expect(
       verifyTabSubmission(42, prepared, 'https://blog.example/article')
-    ).resolves.toEqual(result);
+    ).resolves.toMatchObject(result);
 
     // A slow page must not delay re-injection until document_idle.
     expect(executeScript).toHaveBeenCalledWith({
@@ -1168,13 +1296,20 @@ describe('jetpack remote-comment frame routing', () => {
       .fn()
       .mockResolvedValue([{ frameId: 7, url: committedFrameUrl }]);
     vi.stubGlobal('chrome', {
-      tabs: { sendMessage },
+      tabs: {
+        sendMessage,
+        get: vi.fn().mockResolvedValue({
+          id: 42,
+          url: 'https://blog.example/article',
+          status: 'complete',
+        }),
+      },
       webNavigation: { getAllFrames },
     });
 
     await expect(
       clickPreparedTabSubmission(42, prepared, frameHint)
-    ).resolves.toEqual(result);
+    ).resolves.toMatchObject(result);
 
     expect(sendMessage).toHaveBeenCalledWith(
       42,

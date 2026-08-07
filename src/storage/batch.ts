@@ -119,6 +119,7 @@ function migrateLegacyManualGatePause(value: unknown): unknown {
   const terminalStatuses = new Set([
     'published',
     'pending_moderation',
+    'link_stripped',
     'unconfirmed',
     'submitted',
     'login_required',

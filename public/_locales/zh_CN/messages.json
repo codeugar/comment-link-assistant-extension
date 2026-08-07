@@ -473,6 +473,9 @@
   "batchStatusPendingModeration": {
     "message": "已提交，等待审核"
   },
+  "batchStatusLinkStripped": {
+    "message": "已显示，链接被删"
+  },
   "batchStatusUnconfirmed": {
     "message": "提交结果未确认"
   },
@@ -487,6 +490,24 @@
   },
   "commentPendingModerationFeedback": {
     "message": "页面提示评论正在等待审核。"
+  },
+  "commentPublishedByPublicCheck": {
+    "message": "已通过匿名访问确认：评论和链接公开可见。"
+  },
+  "commentAcceptedAwaitingPublicCheck": {
+    "message": "网站已接收评论，正在确认是否公开可见。"
+  },
+  "commentAcceptedNotPublicYet": {
+    "message": "网站已接收评论，但匿名访问还看不到，等待公开。"
+  },
+  "commentPublicCheckInconclusive": {
+    "message": "无法匿名读取该页面，暂不判定；稍后自动复查。"
+  },
+  "commentNotPublic": {
+    "message": "匿名访问该页面找不到这条评论。"
+  },
+  "commentPublicLinkStripped": {
+    "message": "评论已公开，但其中的链接被移除。"
   },
   "linkModeATagNewline": {
     "message": "a 标签换行"

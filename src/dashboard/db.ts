@@ -160,6 +160,11 @@ export interface PendingModerationCheck {
   url: string;
   targetWebsiteUrl: string;
   fingerprint: string;
+  /** Server-assigned comment id from the submit receipt, when one was captured.
+   *  With it the public re-check is exact instead of text-matched. */
+  commentId?: string;
+  /** Receipt URL, which WordPress resolves to the right comment page. */
+  receiptUrl?: string;
   checkCount: number;
   lastCheckAt?: number;
   lastCheckMessage?: string;
@@ -178,7 +183,7 @@ export interface ModerationPublishedTransition {
 export interface RecordModerationCheckInput {
   targetId: string;
   attemptId: string;
-  status: 'pending_moderation' | 'published';
+  status: 'pending_moderation' | 'published' | 'link_stripped';
   message: string;
   at?: number;
   /** Used by an explicit history-row check: keep the old status when absent. */
@@ -656,8 +661,12 @@ function addTargetToCounts(
   if (isProcessedTargetStatus(target.status)) counts.processed += 1;
   if (target.status === 'published' || target.status === 'pending_moderation') {
     counts.submitted += 1;
-  } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
-  else if (target.status === 'pending') counts.pending += 1;
+  } else if (
+    target.status === 'link_stripped' ||
+    isFailedTargetStatus(target.status)
+  ) {
+    counts.failed += 1;
+  } else if (target.status === 'pending') counts.pending += 1;
   else if (target.status === 'running') counts.running += 1;
   else if (target.status === 'blocked') counts.blocked += 1;
   else if (target.status === 'interrupted') counts.interrupted += 1;
@@ -1189,6 +1198,12 @@ export class DashboardRepository {
             url: target.url,
             targetWebsiteUrl: plan.promotingWebsiteUrl,
             fingerprint,
+            ...(attempt.receipt?.commentId
+              ? { commentId: attempt.receipt.commentId }
+              : {}),
+            ...(attempt.receipt?.url
+              ? { receiptUrl: attempt.receipt.url }
+              : {}),
             checkCount: attempt.timeline.filter(
               (event) => event.stage === 'moderation_recheck'
             ).length,
@@ -1230,13 +1245,15 @@ export class DashboardRepository {
         )) as Attempt[];
         const transitions: ModerationPublishedTransition[] = [];
         for (const attempt of attempts) {
-          const published = [...attempt.timeline]
-            .reverse()
-            .find(
-              (event) =>
-                event.stage === 'moderation_recheck' &&
-                event.status === 'published'
-            );
+          const published = [...attempt.timeline].reverse().find(
+            (event) =>
+              event.stage === 'moderation_recheck' &&
+              (event.status === 'published' ||
+                // Settled, not published: the comment is public and its link
+                // is not. It belongs in this history so the outcome is
+                // visible instead of the row silently disappearing.
+                event.status === 'link_stripped')
+          );
           const target = attempt.targetId
             ? targetById.get(attempt.targetId)
             : undefined;
@@ -1320,20 +1337,22 @@ export class DashboardRepository {
           return null;
         }
 
-        const targetStatus =
-          input.status === 'published' ? 'published' : originalTarget.status;
+        // Both outcomes are terminal and take the row out of the queue: the
+        // comment is public either way. Only `published` means the link is on
+        // the page; `link_stripped` means the site kept the comment and
+        // removed it. Anything else leaves the row where it was, still pending.
+        const settled =
+          input.status === 'published' || input.status === 'link_stripped';
+        const targetStatus = settled ? input.status : originalTarget.status;
         const target: PlanTarget = {
           ...originalTarget,
-          status:
-            input.status === 'published' ? 'published' : originalTarget.status,
-          ...(targetStatus === 'published'
-            ? { latestMessage: input.message }
-            : {}),
+          status: targetStatus,
+          ...(settled ? { latestMessage: input.message } : {}),
           lastModerationCheckAt: at,
           lastModerationCheckMessage: input.message,
           updatedAt: at,
         };
-        if (targetStatus === 'published') {
+        if (settled) {
           Reflect.deleteProperty(target, 'lastError');
         }
         const attempt: Attempt = {
@@ -1349,7 +1368,7 @@ export class DashboardRepository {
             },
           ].slice(-100),
           updatedAt: at,
-          ...(targetStatus === 'published' ? { completedAt: at } : {}),
+          ...(settled ? { completedAt: at } : {}),
         };
         targetStore.put(target);
         attemptStore.put(attempt);
@@ -2126,6 +2145,9 @@ export class DashboardRepository {
             })),
             ...(comment ? { comment } : {}),
             ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+            ...((item.receipt ?? existing?.receipt)
+              ? { receipt: item.receipt ?? existing?.receipt }
+              : {}),
             ...(error ? { error } : {}),
             createdAt:
               existing?.createdAt ?? item.events[0]?.at ?? item.createdAt,
@@ -2326,6 +2348,9 @@ export class DashboardRepository {
               })),
               ...(comment ? { comment } : {}),
               ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+              ...((item.receipt ?? existingAttempt?.receipt)
+                ? { receipt: item.receipt ?? existingAttempt?.receipt }
+                : {}),
               ...(error ? { error } : {}),
               createdAt:
                 existingAttempt?.createdAt ??

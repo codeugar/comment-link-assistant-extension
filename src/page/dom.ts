@@ -1670,37 +1670,6 @@ function hasWordPressModerationReceipt(document: Document): boolean {
   }
 }
 
-/**
- * Checks only public rendering of an already accepted comment. It never reads
- * or mutates a form, so normal articles without a comment form stay eligible
- * for a future moderation re-check.
- */
-export function checkModerationDocument(
-  document: Document,
-  fingerprint: string,
-  targetWebsiteUrl?: string
-): ModerationCheckResult {
-  if (renderedTargetWebsiteExists(document, targetWebsiteUrl)) {
-    return {
-      status: 'published',
-      message: 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
-      fingerprint: fingerprint || targetWebsiteUrl || '',
-    };
-  }
-  const form = buildFormSummary(document);
-  if (
-    form.readiness === 'login_required' ||
-    form.readiness === 'captcha_required'
-  ) {
-    return { status: form.readiness, message: form.message, fingerprint };
-  }
-  return {
-    status: 'pending_moderation',
-    message: 'COMMENT_PENDING_MODERATION_NOT_VISIBLE',
-    fingerprint,
-  };
-}
-
 export function verifySubmissionDocument(
   document: Document,
   fingerprint: string,
@@ -1783,14 +1752,16 @@ export function verifySubmissionDocument(
     });
   }
   // A WordPress redirect carrying a fresh `#comment-<id>` anchor proves the
-  // server accepted and published the comment, even when the rendered list is
-  // paginated onto another comment page or still loading.
+  // server took the comment and gave it an id. It does not prove any visitor
+  // can see it: sites that hold or spam-file a comment still redirect to its
+  // anchor. Publication is decided by an anonymous read, outside this document.
   if (receipt === 'published') {
     return finalize({
-      status: 'published',
-      message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
+      status: 'unconfirmed',
+      message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
       fingerprint,
       clickOccurred: true,
+      acceptance: 'server_receipt',
     });
   }
   // WordPress moderation receipts and fresh moderation feedback prove server
@@ -1812,6 +1783,18 @@ export function verifySubmissionDocument(
       message: scopedFeedback.slice(0, 240) || 'COMMENT_SUBMISSION_FAILED',
       fingerprint,
       clickOccurred: true,
+    });
+  }
+  // The comment rendered into this session's copy of the page. WordPress shows
+  // a held comment to its own author, so this is acceptance evidence only, and
+  // it too hands the verdict to the anonymous read.
+  if (renderedCommentAdded) {
+    return finalize({
+      status: 'unconfirmed',
+      message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
+      fingerprint,
+      clickOccurred: true,
+      acceptance: 'rendered_locally',
     });
   }
   // A click (or generic "thanks" copy) is not a receipt of either public

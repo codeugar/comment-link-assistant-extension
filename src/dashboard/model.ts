@@ -25,6 +25,9 @@ export const PLAN_TARGET_STATUSES = [
   'filtered',
   'published',
   'pending_moderation',
+  // Public, with the promoted link removed by the site. Terminal: no amount of
+  // re-checking brings a stripped link back.
+  'link_stripped',
   'unconfirmed',
   // Legacy rows that collapsed every click result into a generic success.
   'submitted',
@@ -156,6 +159,9 @@ export interface Attempt {
   comment?: string;
   /** Normalized comment prefix used for read-only public-render checks. */
   commentFingerprint?: string;
+  /** Submit receipt: the page the comment landed on and the id the server gave
+   *  it. Carried so an anonymous re-check can address this exact comment. */
+  receipt?: { url: string; commentId?: string };
   error?: AttemptError;
   createdAt: number;
   updatedAt: number;
@@ -319,6 +325,7 @@ export function isProcessedTargetStatus(status: PlanTargetStatus): boolean {
     status === 'blocked' ||
     status === 'published' ||
     status === 'pending_moderation' ||
+    status === 'link_stripped' ||
     status === 'unconfirmed' ||
     status === 'submitted' ||
     status === 'filtered' ||
@@ -350,8 +357,14 @@ export function countTargetStatuses(
       target.status === 'pending_moderation'
     ) {
       counts.submitted += 1;
-    } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
-    else if (target.status === 'pending') counts.pending += 1;
+    } else if (
+      // The comment landed and the link did not: for a link-building run that
+      // is a failure, not a success with an asterisk.
+      target.status === 'link_stripped' ||
+      isFailedTargetStatus(target.status)
+    ) {
+      counts.failed += 1;
+    } else if (target.status === 'pending') counts.pending += 1;
     else if (target.status === 'running') counts.running += 1;
     else if (target.status === 'blocked') counts.blocked += 1;
     else if (target.status === 'interrupted') counts.interrupted += 1;

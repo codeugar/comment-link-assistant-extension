@@ -1,12 +1,10 @@
 import {
   analyzePageDocument,
-  checkModerationDocument,
   clickPreparedSubmissionDocument,
   prepareSubmissionDocument,
   verifySubmissionDocument,
 } from './dom';
 import type {
-  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionBaseline,
   PageSubmissionExpectation,
@@ -20,11 +18,6 @@ export const PAGE_COMMAND_MESSAGE_TYPE = 'comment-link-assistant:page-command';
 
 export type PageCommand =
   | { type: 'analyze' }
-  | {
-      type: 'moderation.check';
-      fingerprint?: string;
-      targetWebsiteUrl?: string;
-    }
   | {
       type: 'submit.prepare';
       input: PageSubmissionInput;
@@ -46,7 +39,6 @@ export interface PageCommandMessage {
 
 export type PageCommandResult =
   | { type: 'analysis'; analysis: PageAnalysis }
-  | { type: 'moderation-check'; result: ModerationCheckResult }
   | { type: 'preparation'; preparation: PageSubmissionPreparation }
   | { type: 'submission'; result: PageSubmissionResult }
   | { type: 'error'; message: string };
@@ -55,14 +47,6 @@ export function isPageCommand(value: unknown): value is PageCommand {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   if (record.type === 'analyze') return true;
-  if (record.type === 'moderation.check') {
-    return (
-      (typeof record.fingerprint === 'string' &&
-        record.fingerprint.length > 0) ||
-      (typeof record.targetWebsiteUrl === 'string' &&
-        record.targetWebsiteUrl.length > 0)
-    );
-  }
   if (record.type === 'verify') {
     return (
       typeof record.fingerprint === 'string' &&
@@ -142,16 +126,6 @@ export async function runPageCommand(
 ): Promise<PageCommandResult> {
   if (command.type === 'analyze') {
     return { type: 'analysis', analysis: await analyzePageDocument(document) };
-  }
-  if (command.type === 'moderation.check') {
-    return {
-      type: 'moderation-check',
-      result: checkModerationDocument(
-        document,
-        command.fingerprint ?? '',
-        command.targetWebsiteUrl
-      ),
-    };
   }
   if (command.type === 'verify') {
     if (

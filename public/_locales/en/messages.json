@@ -473,6 +473,9 @@
   "batchStatusPendingModeration": {
     "message": "Submitted — awaiting moderation"
   },
+  "batchStatusLinkStripped": {
+    "message": "Displayed, link removed"
+  },
   "batchStatusUnconfirmed": {
     "message": "Submission result unconfirmed"
   },
@@ -487,6 +490,24 @@
   },
   "commentPendingModerationFeedback": {
     "message": "The page reports that the comment is awaiting moderation."
+  },
+  "commentPublishedByPublicCheck": {
+    "message": "Confirmed by an anonymous read: the comment and its link are public."
+  },
+  "commentAcceptedAwaitingPublicCheck": {
+    "message": "The site accepted the comment; checking whether it is publicly visible."
+  },
+  "commentAcceptedNotPublicYet": {
+    "message": "The site accepted the comment, but no anonymous visitor can see it yet."
+  },
+  "commentPublicCheckInconclusive": {
+    "message": "The page could not be read anonymously. It will be rechecked later."
+  },
+  "commentNotPublic": {
+    "message": "An anonymous read of the page does not find this comment."
+  },
+  "commentPublicLinkStripped": {
+    "message": "The comment is public, but its link was removed."
   },
   "linkModeATagNewline": {
     "message": "A tag + line break"

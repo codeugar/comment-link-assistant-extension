@@ -450,6 +450,7 @@ function hasAttemptedCanonicalTarget(
       item.id !== currentId &&
       (item.status === 'published' ||
         item.status === 'pending_moderation' ||
+        item.status === 'link_stripped' ||
         item.status === 'submitted') &&
       canonicalTargetKey(item.url) === key
   );
@@ -668,23 +669,30 @@ async function saveSubmissionResult(
     return afterTerminal(next);
   }
   const confirmedStatus =
-    result.status === 'published' || result.status === 'pending_moderation'
+    result.status === 'published' ||
+    result.status === 'pending_moderation' ||
+    result.status === 'link_stripped'
       ? result.status
       : result.status === 'unconfirmed' || result.status === 'submitted'
         ? 'unconfirmed'
         : null;
   if (confirmedStatus && result.clickOccurred) {
-    // `unconfirmed` is deliberately not credited: the comment left no evidence
-    // it reached the page, so counting it would inflate the site's mix with
-    // links that may not exist.
-    if (confirmedStatus !== 'unconfirmed') {
+    // Neither `unconfirmed` nor `link_stripped` is credited: one left no
+    // evidence it reached the page, the other reached it without the link.
+    // Counting either would inflate the site's mix with links that do not
+    // exist.
+    if (
+      confirmedStatus === 'published' ||
+      confirmedStatus === 'pending_moderation'
+    ) {
       await recordItemAnchor(batch, confirmedStatus, dependencies);
     }
     const next = completeCurrentItem(
       batch,
       confirmedStatus,
       result.message,
-      dependencies.now()
+      dependencies.now(),
+      result.receipt
     );
     await dependencies.setBatch(next);
     return afterTerminal(next);

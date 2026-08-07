@@ -4,12 +4,12 @@ import {
   type PageCommandResult,
 } from '@/page/command';
 import {
-  getWordPressSubmitReceipt,
+  type WordPressReceipt,
   matchesWordPressCommentPathname,
+  readWordPressSubmitReceipt,
 } from '@/page/receipts';
 import type {
   CommentFrameReference,
-  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionExpectation,
   PageSubmissionInput,
@@ -18,6 +18,7 @@ import type {
   PageSubmissionTarget,
   PreparedPageSubmission,
 } from '@/page/types';
+import { checkPublicComment } from '@/verify/public-comment';
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
 // Ad-heavy recipe pages can keep the content-script message channel busy well
@@ -248,13 +249,6 @@ function readSubmission(result: PageCommandResult): PageSubmissionResult {
   );
 }
 
-function readModerationCheck(result: PageCommandResult): ModerationCheckResult {
-  if (result.type === 'moderation-check') return result.result;
-  throw new Error(
-    result.type === 'error' ? result.message : 'PAGE_MODERATION_CHECK_FAILED'
-  );
-}
-
 function readPreparation(result: PageCommandResult): PageSubmissionPreparation {
   if (result.type === 'preparation') return result.preparation;
   throw new Error(
@@ -439,11 +433,10 @@ export async function verifyTabSubmission(
   // failure; the in-page verdict poll only starts once the load settles.
   await waitForTabLoad(tabId);
   const current = await chrome.tabs.get(tabId).catch(() => null);
-  // Both WordPress redirect receipts are authoritative: `unapproved` proves
-  // moderation acceptance, a fresh `#comment-<id>` anchor proves publication —
-  // even when the rendered comment list is paginated or still loading.
+  // A redirect receipt proves the server took the comment, and carries the id
+  // the anonymous read needs. It never proves the comment is public.
   const receipt = current
-    ? getWordPressSubmitReceipt(current.url ?? '', expectedUrl)
+    ? readWordPressSubmitReceipt(current.url ?? '', expectedUrl)
     : null;
   if (
     !current ||
@@ -461,37 +454,16 @@ export async function verifyTabSubmission(
         targetWebsiteUrl: prepared.websiteUrl ?? '',
       })
     );
-    if (receipt === 'pending_moderation' && result.status !== 'published') {
-      return pendingModerationSubmission(prepared.fingerprint);
-    }
-    if (receipt === 'published' && result.status === 'unconfirmed') {
-      return publishedSubmission(prepared.fingerprint);
-    }
-    return result;
+    return await settlePublicly(result, receipt, prepared, expectedUrl);
   } catch (error) {
-    if (receipt === 'pending_moderation') {
-      return pendingModerationSubmission(prepared.fingerprint);
-    }
-    if (receipt === 'published') {
-      return publishedSubmission(prepared.fingerprint);
-    }
-    throw error;
+    if (!receipt) throw error;
+    return await settlePublicly(
+      acceptedSubmission(prepared.fingerprint),
+      receipt,
+      prepared,
+      expectedUrl
+    );
   }
-}
-
-/** Executes the dedicated read-only follow-up command; it never submits. */
-export async function checkTabForPublishedComment(
-  tabId: number,
-  fingerprint: string,
-  targetWebsiteUrl?: string
-): Promise<ModerationCheckResult> {
-  return readModerationCheck(
-    await executePageCommand(tabId, {
-      type: 'moderation.check',
-      ...(fingerprint ? { fingerprint } : {}),
-      ...(targetWebsiteUrl ? { targetWebsiteUrl } : {}),
-    })
-  );
 }
 
 export async function analyzeActivePage(): Promise<{
@@ -549,7 +521,7 @@ export async function submitCurrentPage(
       await waitForTabLoad(tabId);
       const current = await chrome.tabs.get(tabId).catch(() => null);
       const receipt = current
-        ? getWordPressSubmitReceipt(current.url ?? '', target.url)
+        ? readWordPressSubmitReceipt(current.url ?? '', target.url)
         : null;
       if (
         !current ||
@@ -557,6 +529,7 @@ export async function submitCurrentPage(
       ) {
         return unconfirmedSubmission(preparation.prepared.fingerprint);
       }
+      const promoted = { websiteUrl: input.websiteUrl };
       try {
         const result = readSubmission(
           await executePageCommand(tabId, {
@@ -567,21 +540,17 @@ export async function submitCurrentPage(
             targetWebsiteUrl: input.websiteUrl,
           })
         );
-        if (receipt === 'pending_moderation' && result.status !== 'published') {
-          return pendingModerationSubmission(preparation.prepared.fingerprint);
-        }
-        if (receipt === 'published' && result.status === 'unconfirmed') {
-          return publishedSubmission(preparation.prepared.fingerprint);
-        }
-        return result;
+        return await settlePublicly(result, receipt, promoted, target.url);
       } catch {
-        if (receipt === 'pending_moderation') {
-          return pendingModerationSubmission(preparation.prepared.fingerprint);
+        if (!receipt) {
+          return unconfirmedSubmission(preparation.prepared.fingerprint);
         }
-        if (receipt === 'published') {
-          return publishedSubmission(preparation.prepared.fingerprint);
-        }
-        return unconfirmedSubmission(preparation.prepared.fingerprint);
+        return await settlePublicly(
+          acceptedSubmission(preparation.prepared.fingerprint),
+          receipt,
+          promoted,
+          target.url
+        );
       }
     }
   } finally {
@@ -636,22 +605,94 @@ function unconfirmedSubmission(fingerprint: string): PageSubmissionResult {
   };
 }
 
-function pendingModerationSubmission(
-  fingerprint: string
-): PageSubmissionResult {
+/** The server took the comment; whether anyone else can see it is unknown. */
+function acceptedSubmission(fingerprint: string): PageSubmissionResult {
   return {
-    status: 'pending_moderation',
-    message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
+    status: 'unconfirmed',
+    message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
     fingerprint,
     clickOccurred: true,
+    acceptance: 'server_receipt',
   };
 }
 
-function publishedSubmission(fingerprint: string): PageSubmissionResult {
-  return {
-    status: 'published',
-    message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
-    fingerprint,
-    clickOccurred: true,
-  };
+/**
+ * Turns acceptance into a verdict by reading the page as a stranger.
+ *
+ * Everything upstream of this function was observed inside the submitting
+ * session, which the site treats differently from a visitor. Only what an
+ * anonymous read finds may set `published`; a read that fails leaves the
+ * in-page result alone rather than inventing either outcome.
+ */
+async function settlePublicly(
+  result: PageSubmissionResult,
+  receipt: WordPressReceipt | null,
+  prepared: Pick<PreparedPageSubmission, 'websiteUrl'>,
+  expectedUrl: string
+): Promise<PageSubmissionResult> {
+  const carried: PageSubmissionResult = receipt
+    ? {
+        ...result,
+        receipt: {
+          url: receipt.url,
+          ...(receipt.commentId ? { commentId: receipt.commentId } : {}),
+        },
+      }
+    : result;
+  // The site said in its own redirect that it is holding the comment. A held
+  // comment is not public by definition, so there is nothing left to read.
+  if (receipt?.type === 'pending_moderation') {
+    return {
+      ...carried,
+      status: 'pending_moderation',
+      message: 'COMMENT_PENDING_WORDPRESS_MODERATION',
+      clickOccurred: true,
+    };
+  }
+  if (carried.status === 'pending_moderation') return carried;
+  const websiteUrl = prepared.websiteUrl ?? '';
+  const accepted =
+    Boolean(receipt) ||
+    Boolean(carried.acceptance) ||
+    carried.status === 'published';
+  // Nothing was accepted, or there is no promoted link to look for: a public
+  // read has no question to answer.
+  if (!accepted || !websiteUrl) return carried;
+  const publicCheck = await checkPublicComment({
+    // The receipt URL resolves to the right comment page by itself.
+    pageUrl: receipt?.url ?? expectedUrl,
+    websiteUrl,
+    ...(receipt?.commentId ? { commentId: receipt.commentId } : {}),
+  });
+  if (publicCheck.visibility === 'visible') {
+    return {
+      ...carried,
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
+      clickOccurred: true,
+      publicCheck,
+    };
+  }
+  // The comment is public and the link is not in it. Nothing to wait for.
+  if (publicCheck.visibility === 'link_stripped') {
+    return {
+      ...carried,
+      status: 'link_stripped',
+      message: 'COMMENT_PUBLIC_LINK_STRIPPED',
+      clickOccurred: true,
+      publicCheck,
+    };
+  }
+  if (publicCheck.visibility === 'not_visible') {
+    return {
+      ...carried,
+      status: 'pending_moderation',
+      message: 'COMMENT_ACCEPTED_NOT_PUBLIC_YET',
+      clickOccurred: true,
+      publicCheck,
+    };
+  }
+  // Inconclusive: the page could not be read at all. Keep what the page said
+  // and let the re-check job ask again later.
+  return { ...carried, publicCheck };
 }
