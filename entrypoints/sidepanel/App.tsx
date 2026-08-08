@@ -89,6 +89,8 @@ function batchItemStatusCopy(status: BatchItemStatus): string {
       return translate('batchStatusPublished');
     case 'pending_moderation':
       return translate('batchStatusPendingModeration');
+    case 'link_stripped':
+      return translate('batchStatusLinkStripped');
     case 'unconfirmed':
       return translate('batchStatusUnconfirmed');
     case 'submitted':
@@ -165,6 +167,24 @@ function batchItemMessageCopy(message: string): string | null {
   if (message === 'COMMENT_SUBMISSION_UNCONFIRMED') {
     return translate('submissionUnconfirmed');
   }
+  if (message === 'COMMENT_PUBLISHED_PUBLIC_CHECK') {
+    return translate('commentPublishedByPublicCheck');
+  }
+  if (message === 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK') {
+    return translate('commentAcceptedAwaitingPublicCheck');
+  }
+  if (message === 'COMMENT_ACCEPTED_NOT_PUBLIC_YET') {
+    return translate('commentAcceptedNotPublicYet');
+  }
+  if (message === 'COMMENT_PUBLIC_CHECK_INCONCLUSIVE') {
+    return translate('commentPublicCheckInconclusive');
+  }
+  if (message === 'COMMENT_NOT_PUBLIC') {
+    return translate('commentNotPublic');
+  }
+  if (message === 'COMMENT_PUBLIC_LINK_STRIPPED') {
+    return translate('commentPublicLinkStripped');
+  }
   return null;
 }
 
@@ -176,6 +196,7 @@ const failureDetailStatuses = new Set<BatchItemStatus>([
   'failed',
   'no_form',
   'validation_error',
+  'link_stripped',
   'login_required',
   'captcha_required',
 ]);
@@ -231,7 +252,9 @@ function batchSummary(batch: BatchSnapshot): [string, string, string, string] {
     } else if (
       item.status === 'no_form' ||
       item.status === 'validation_error' ||
-      item.status === 'failed'
+      item.status === 'failed' ||
+      // The comment is public and its link is not: nothing was gained.
+      item.status === 'link_stripped'
     ) {
       failed += 1;
     }
@@ -295,6 +318,7 @@ function isTerminalItem(item: BatchItem): boolean {
     'submitted',
     'published',
     'pending_moderation',
+    'link_stripped',
     'unconfirmed',
     'no_form',
     'validation_error',
@@ -396,6 +420,7 @@ export default function App() {
             'submitted',
             'published',
             'pending_moderation',
+            'link_stripped',
             'unconfirmed',
             'no_form',
             'validation_error',

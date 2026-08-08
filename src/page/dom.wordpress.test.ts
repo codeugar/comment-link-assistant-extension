@@ -277,7 +277,7 @@ describe('WordPress submit-receipt confirmation', () => {
     });
   });
 
-  it('confirms a fresh #comment-<id> receipt as published without the promoted URL', async () => {
+  it('records a fresh #comment-<id> receipt as acceptance, not publication', async () => {
     const origin = document.location.origin;
     document.defaultView?.history.replaceState(
       {},
@@ -297,8 +297,9 @@ describe('WordPress submit-receipt confirmation', () => {
     expect(result).toMatchObject({
       type: 'submission',
       result: {
-        status: 'published',
-        message: 'COMMENT_PUBLISHED_WORDPRESS_RECEIPT',
+        status: 'unconfirmed',
+        message: 'COMMENT_ACCEPTED_AWAITING_PUBLIC_CHECK',
+        acceptance: 'server_receipt',
       },
     });
   });

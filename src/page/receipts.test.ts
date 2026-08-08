@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getWordPressSubmitReceipt,
   hasWordPressSubmitReceipt,
+  readWordPressSubmitReceipt,
 } from './receipts';
 
 describe('WordPress submit receipts', () => {
@@ -93,5 +94,43 @@ describe('WordPress submit receipts', () => {
         'https://blog.example/article'
       )
     ).toBe(false);
+  });
+
+  it('reads the comment id a published receipt carries', () => {
+    expect(
+      readWordPressSubmitReceipt(
+        'https://blog.example/article#comment-88213',
+        'https://blog.example/article'
+      )
+    ).toEqual({
+      type: 'published',
+      url: 'https://blog.example/article#comment-88213',
+      commentId: '88213',
+    });
+  });
+
+  it('reads the comment id a moderation receipt carries', () => {
+    expect(
+      readWordPressSubmitReceipt(
+        'https://blog.example/article?unapproved=4242&moderation-hash=abc',
+        'https://blog.example/article'
+      )
+    ).toEqual({
+      type: 'pending_moderation',
+      url: 'https://blog.example/article?unapproved=4242&moderation-hash=abc',
+      commentId: '4242',
+    });
+  });
+
+  it('keeps a receipt whose id is not a number id-less', () => {
+    expect(
+      readWordPressSubmitReceipt(
+        'https://blog.example/article?unapproved=abc&moderation-hash=abc',
+        'https://blog.example/article'
+      )
+    ).toEqual({
+      type: 'pending_moderation',
+      url: 'https://blog.example/article?unapproved=abc&moderation-hash=abc',
+    });
   });
 });

@@ -38,10 +38,12 @@ import {
   PendingModerationRecheckCoordinator,
   addManualModerationEntry,
   armPendingModerationRecheckAlarm,
-  createChromeModerationVerificationTabPort,
+  createPublicCommentPort,
   loadManualModerationEntries,
   loadModerationRecheckLastRun,
   loadModerationRecheckSettings,
+  moderationResultFromPublicCheck,
+  publicCommentCriterion,
   recheckManualModerationEntry,
   runManualModerationRechecks,
   saveModerationRecheckLastRun,
@@ -54,6 +56,7 @@ import {
   isDashboardPlanRunReference,
   shouldSettlePlanBatch,
 } from '@/dashboard/service';
+import type { ModerationCheckResult } from '@/page/types';
 import type {
   BackgroundResponse,
   DashboardPlanCreateMessage,
@@ -67,7 +70,6 @@ import {
 import {
   analyzeActivePage,
   analyzeCurrentPage,
-  type checkTabForPublishedComment,
   submitCurrentPage,
 } from '@/runtime/page-commands';
 import { hasBatchOriginPermissions } from '@/runtime/permissions';
@@ -369,7 +371,7 @@ function requestPendingModerationRecheck(): Promise<ModerationRecheckLastRun> {
       const settings = await loadModerationRecheckSettings();
       const coordinator = new PendingModerationRecheckCoordinator(
         dashboardService,
-        createChromeModerationVerificationTabPort(),
+        createPublicCommentPort(),
         settings.maxChecksPerRun,
         async (check) => {
           await resolveAnchorPending(
@@ -377,17 +379,27 @@ function requestPendingModerationRecheck(): Promise<ModerationRecheckLastRun> {
             check.url,
             'published'
           );
+        },
+        // The comment is public and the link is not, so the slot this link was
+        // holding is released rather than credited.
+        async (check) => {
+          await resolveAnchorPending(
+            check.promotingSiteId,
+            check.url,
+            'dropped'
+          );
         }
       );
       const storedResult = await coordinator.run();
       const manualResult = await runManualModerationRechecks(
-        createChromeModerationVerificationTabPort(),
+        createPublicCommentPort(),
         settings.maxChecksPerRun - storedResult.selected
       );
       const result = {
         selected: storedResult.selected + manualResult.selected,
         checked: storedResult.checked + manualResult.checked,
         published: storedResult.published + manualResult.published,
+        linkStripped: storedResult.linkStripped + manualResult.linkStripped,
         stillPending: storedResult.stillPending + manualResult.stillPending,
       };
       const lastRun: ModerationRecheckLastRun = {
@@ -439,6 +451,7 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
           fingerprint: entry.targetWebsiteUrl,
           targetWebsiteUrl: entry.targetWebsiteUrl,
           checkCount: entry.checkCount,
+          needsCommentPermalink: entry.needsCommentPermalink,
           ...(entry.lastCheckAt ? { lastCheckAt: entry.lastCheckAt } : {}),
           ...(entry.lastCheckMessage
             ? { lastCheckMessage: entry.lastCheckMessage }
@@ -451,6 +464,9 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
         source: 'plan' as const,
         ...item,
       })),
+      // Only real publications belong here: this list drives the "now
+      // published" counter, and a comment whose link was stripped is counted as
+      // a failure everywhere else.
       ...manual
         .filter((entry) => entry.status === 'published' && entry.publishedAt)
         .map((entry) => ({
@@ -473,7 +489,7 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
 async function recheckDashboardTarget(
   planId: string,
   targetId: string
-): Promise<Awaited<ReturnType<typeof checkTabForPublishedComment>>> {
+): Promise<ModerationCheckResult> {
   const [target, planDetail] = await Promise.all([
     dashboardService.getTargetWithAttempts(planId, targetId),
     dashboardService.getPlanDetail(planId),
@@ -492,15 +508,21 @@ async function recheckDashboardTarget(
   if (!attempt || !fingerprint) {
     throw new Error('COMMENT_FINGERPRINT_MISSING');
   }
-  const tabs = createChromeModerationVerificationTabPort();
-  let tabId: number | null = null;
-  let result: Awaited<ReturnType<typeof checkTabForPublishedComment>>;
+  let result: ModerationCheckResult;
   try {
-    tabId = await tabs.create(target.url);
-    result = await tabs.check(
-      tabId,
-      fingerprint,
-      planDetail.plan.promotingWebsiteUrl
+    result = moderationResultFromPublicCheck(
+      await createPublicCommentPort().check({
+        pageUrl: attempt.receipt?.url ?? target.url,
+        fingerprint,
+        criterion: publicCommentCriterion(
+          attempt.linkMode,
+          planDetail.plan.promotingWebsiteUrl
+        ),
+        ...(attempt.receipt?.commentId
+          ? { commentId: attempt.receipt.commentId }
+          : {}),
+      }),
+      fingerprint
     );
   } catch {
     result = {
@@ -508,13 +530,17 @@ async function recheckDashboardTarget(
       message: 'COMMENT_PENDING_MODERATION_RECHECK_UNAVAILABLE',
       fingerprint,
     };
-  } finally {
-    if (tabId !== null) await tabs.close(tabId).catch(() => undefined);
   }
   await dashboardService.recordModerationCheck({
     targetId: target.id,
     attemptId: attempt.id,
-    status: result.status === 'published' ? 'published' : 'pending_moderation',
+    // `published` and `link_stripped` are both terminal; anything else leaves
+    // the row pending. Collapsing them all to pending kept a settled comment in
+    // the re-check queue for good.
+    status:
+      result.status === 'published' || result.status === 'link_stripped'
+        ? result.status
+        : 'pending_moderation',
     message: result.message,
     preserveCurrentStatus: true,
   });
@@ -1441,7 +1467,7 @@ async function dispatch(
   if (message.type === 'moderation.recheckManual') {
     await recheckManualModerationEntry(
       message.entryId,
-      createChromeModerationVerificationTabPort()
+      createPublicCommentPort()
     );
     return {
       type: message.type,

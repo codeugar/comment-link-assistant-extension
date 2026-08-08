@@ -1,3 +1,4 @@
+import type { SubmissionReceipt } from '@/page/types';
 import type {
   BatchItem,
   BatchItemStatus,
@@ -25,6 +26,7 @@ const pauseStatuses = [
 const completionStatuses = [
   'published',
   'pending_moderation',
+  'link_stripped',
   'unconfirmed',
   'submitted',
   'login_required',
@@ -51,6 +53,7 @@ const retryableItemStatuses = new Set<BatchItemStatus>(RETRYABLE_ITEM_STATUSES);
 const terminalItemStatuses = new Set<BatchItemStatus>([
   'published',
   'pending_moderation',
+  'link_stripped',
   'unconfirmed',
   'submitted',
   'login_required',
@@ -300,7 +303,8 @@ export function completeCurrentItem(
   batch: BatchSnapshot,
   status: CompletionStatus,
   message = '',
-  at?: number
+  at?: number,
+  receipt?: SubmissionReceipt
 ): BatchSnapshot {
   requireRunning(batch);
   const now = timestamp(at);
@@ -326,6 +330,11 @@ export function completeCurrentItem(
       status,
       analysis: null,
       prepared: null,
+      // Kept on the item so a later public re-check can address the comment by
+      // the id the server assigned it.
+      ...((receipt ?? item.receipt)
+        ? { receipt: receipt ?? item.receipt }
+        : {}),
       message: boundedMessage(message),
       events: appendStatusEvent(item, status, message, now),
       updatedAt: now,
@@ -473,6 +482,7 @@ const preservedStopStatuses = new Set<BatchItemStatus>([
   'verifying',
   'published',
   'pending_moderation',
+  'link_stripped',
   'unconfirmed',
   'submitted',
   'no_form',
@@ -494,6 +504,7 @@ export function hasResumableItems(batch: BatchSnapshot): boolean {
 const settledItemStatuses = new Set<BatchItemStatus>([
   'published',
   'pending_moderation',
+  'link_stripped',
   'unconfirmed',
   'submitted',
   'login_required',

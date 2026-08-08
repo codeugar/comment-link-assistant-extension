@@ -3,13 +3,12 @@ import type { PendingModerationCheck } from './db';
 import {
   MAX_PENDING_MODERATION_CHECKS_PER_RUN,
   type ModerationRecheckStore,
-  type ModerationVerificationTabPort,
   PENDING_MODERATION_RECHECK_ALARM,
   PENDING_MODERATION_RECHECK_INTERVAL_MINUTES,
   PendingModerationRecheckCoordinator,
+  type PublicCommentPort,
   addManualModerationEntry,
   armPendingModerationRecheckAlarm,
-  createChromeModerationVerificationTabPort,
   loadManualModerationEntries,
   loadModerationRecheckSettings,
   recheckManualModerationEntry,
@@ -25,6 +24,7 @@ const checks: PendingModerationCheck[] = [
     url: 'https://blog.example/one',
     targetWebsiteUrl: 'https://product.example',
     fingerprint: 'A useful generated comment',
+    criterion: { kind: 'link', websiteUrl: 'https://product.example' },
     checkCount: 0,
   },
   {
@@ -35,6 +35,7 @@ const checks: PendingModerationCheck[] = [
     url: 'https://blog.example/two',
     targetWebsiteUrl: 'https://product.example',
     fingerprint: 'Another useful generated comment',
+    criterion: { kind: 'link', websiteUrl: 'https://product.example' },
     checkCount: 0,
   },
 ];
@@ -51,26 +52,20 @@ function storeFor(
   };
 }
 
-function tabsFor(
-  status: 'published' | 'pending_moderation' = 'pending_moderation'
-): ModerationVerificationTabPort & {
-  create: ReturnType<typeof vi.fn>;
-  navigate: ReturnType<typeof vi.fn>;
-  check: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-} {
+function portFor(
+  visibility:
+    | 'visible'
+    | 'not_visible'
+    | 'link_stripped'
+    | 'inconclusive' = 'not_visible'
+): PublicCommentPort & { check: ReturnType<typeof vi.fn> } {
   return {
-    create: vi.fn().mockResolvedValue(91),
-    navigate: vi.fn().mockResolvedValue(undefined),
     check: vi.fn().mockResolvedValue({
-      status,
-      message:
-        status === 'published'
-          ? 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT'
-          : 'COMMENT_PENDING_MODERATION_NOT_VISIBLE',
-      fingerprint: checks[0]!.fingerprint,
+      visibility,
+      method: 'wp_rest',
+      message: 'PUBLIC_COMMENT_CHECK',
+      checkedAt: 1_700_000_000_000,
     }),
-    close: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -132,7 +127,7 @@ describe('pending moderation recheck', () => {
         Object.assign(state, values);
       }),
     };
-    const tabs = tabsFor('published');
+    const port = portFor('visible');
     const entry = await addManualModerationEntry(
       {
         pageUrl: 'https://blog.example/article#comment-42',
@@ -150,23 +145,28 @@ describe('pending moderation recheck', () => {
       status: 'pending_moderation',
     });
     await expect(
-      recheckManualModerationEntry('manual-1', tabs, storage as never)
+      recheckManualModerationEntry('manual-1', port, storage as never)
     ).resolves.toMatchObject({
       status: 'published',
       checkCount: 1,
     });
-    expect(tabs.check).toHaveBeenCalledWith(91, '', 'https://product.example');
+    // The pasted permalink already names the comment, so the check is exact.
+    expect(port.check).toHaveBeenCalledWith({
+      pageUrl: 'https://blog.example/article#comment-42',
+      criterion: { kind: 'link', websiteUrl: 'https://product.example' },
+      commentId: '42',
+    });
     expect(await loadManualModerationEntries(storage as never)).toEqual([
       expect.objectContaining({ id: 'manual-1', status: 'published' }),
     ]);
   });
 
-  it('selects only the durable pending records and reuses one verification tab', async () => {
+  it('checks every durable pending record without opening a tab', async () => {
     const store = storeFor();
-    const tabs = tabsFor();
+    const port = portFor();
     const scanner = new PendingModerationRecheckCoordinator(
       store,
-      tabs,
+      port,
       MAX_PENDING_MODERATION_CHECKS_PER_RUN
     );
 
@@ -174,22 +174,20 @@ describe('pending moderation recheck', () => {
       selected: 2,
       checked: 2,
       published: 0,
+      linkStripped: 0,
       stillPending: 2,
     });
     expect(store.getPendingModerationChecks).toHaveBeenCalledWith(
       MAX_PENDING_MODERATION_CHECKS_PER_RUN
     );
-    expect(tabs.create).toHaveBeenCalledOnce();
-    expect(tabs.navigate).toHaveBeenCalledWith(91, checks[1]!.url);
-    expect(tabs.check).toHaveBeenCalledTimes(2);
-    expect(tabs.close).toHaveBeenCalledWith(91);
+    expect(port.check).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a not-yet-rendered comment pending and records the check metadata', async () => {
     const store = storeFor([checks[0]!]);
-    const tabs = tabsFor('pending_moderation');
+    const port = portFor('not_visible');
 
-    await new PendingModerationRecheckCoordinator(store, tabs).run();
+    await new PendingModerationRecheckCoordinator(store, port).run();
 
     expect(store.recordModerationCheck).toHaveBeenCalledWith({
       targetId: 'target-1',
@@ -199,42 +197,61 @@ describe('pending moderation recheck', () => {
     });
   });
 
-  it('transitions a publicly rendered fingerprint to published without a submit command', async () => {
-    const store = storeFor([checks[0]!]);
-    const tabs = tabsFor('published');
+  it('settles a public comment whose link was stripped instead of re-queuing it', async () => {
+    const store = storeFor([{ ...checks[0]!, commentId: '4242' }]);
+    const port = portFor('link_stripped');
 
-    await new PendingModerationRecheckCoordinator(store, tabs).run();
+    await expect(
+      new PendingModerationRecheckCoordinator(store, port).run()
+    ).resolves.toMatchObject({ linkStripped: 1, stillPending: 0 });
+
+    expect(store.recordModerationCheck).toHaveBeenCalledWith({
+      targetId: 'target-1',
+      attemptId: 'attempt-1',
+      status: 'link_stripped',
+      message: 'COMMENT_PUBLIC_LINK_STRIPPED',
+    });
+  });
+
+  it('publishes a held comment once an anonymous reader can see it', async () => {
+    const store = storeFor([
+      {
+        ...checks[0]!,
+        commentId: '4242',
+        receiptUrl: 'https://blog.example/one#comment-4242',
+      },
+    ]);
+    const port = portFor('visible');
+
+    await new PendingModerationRecheckCoordinator(store, port).run();
 
     expect(store.recordModerationCheck).toHaveBeenCalledWith({
       targetId: 'target-1',
       attemptId: 'attempt-1',
       status: 'published',
-      message: 'COMMENT_PUBLISHED_RENDERED_FINGERPRINT',
+      message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
     });
-    expect(tabs.check).toHaveBeenCalledWith(
-      91,
-      checks[0]!.fingerprint,
-      checks[0]!.targetWebsiteUrl
-    );
+    // Addressed by the id the server assigned, on the receipt URL.
+    expect(port.check).toHaveBeenCalledWith({
+      pageUrl: 'https://blog.example/one#comment-4242',
+      criterion: checks[0]!.criterion,
+      fingerprint: checks[0]!.fingerprint,
+      commentId: '4242',
+    });
   });
 
-  it('closes a scanner-owned tab when its initial load fails', async () => {
-    const remove = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('chrome', {
-      tabs: {
-        create: vi.fn().mockResolvedValue({ id: 92, status: 'loading' }),
-        get: vi.fn().mockRejectedValue(new Error('network unavailable')),
-        remove,
-        onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
-      },
-    });
+  it('keeps an unreadable page pending instead of recording a verdict', async () => {
+    const store = storeFor([checks[0]!]);
+    const port = portFor('inconclusive');
 
-    await expect(
-      createChromeModerationVerificationTabPort().create(
-        'https://blog.example/unavailable'
-      )
-    ).rejects.toThrow('MODERATION_RECHECK_TAB_UNAVAILABLE');
-    expect(remove).toHaveBeenCalledWith(92);
+    await new PendingModerationRecheckCoordinator(store, port).run();
+
+    expect(store.recordModerationCheck).toHaveBeenCalledWith({
+      targetId: 'target-1',
+      attemptId: 'attempt-1',
+      status: 'pending_moderation',
+      message: 'COMMENT_PENDING_MODERATION_RECHECK_UNAVAILABLE',
+    });
   });
 
   it('coalesces overlapping alarms into one scan', async () => {
@@ -247,7 +264,7 @@ describe('pending moderation recheck', () => {
       await waiting;
       return [];
     });
-    const scanner = new PendingModerationRecheckCoordinator(store, tabsFor());
+    const scanner = new PendingModerationRecheckCoordinator(store, portFor());
 
     const first = scanner.run();
     const second = scanner.run();

@@ -73,6 +73,49 @@ export function getWordPressSubmitReceipt(
   return null;
 }
 
+/** A receipt plus the two things a later anonymous re-read needs: the page to
+ *  read, and the id the server gave the comment. */
+export interface WordPressReceipt {
+  type: WordPressSubmitReceipt;
+  url: string;
+  commentId?: string;
+}
+
+const NUMERIC_COMMENT_ID = /^\d+$/;
+
+function readCommentId(url: URL, type: WordPressSubmitReceipt): string | null {
+  const raw =
+    type === 'pending_moderation'
+      ? (url.searchParams.get('unapproved') ?? '')
+      : url.hash.replace(/^#comment-/i, '');
+  return NUMERIC_COMMENT_ID.test(raw) ? raw : null;
+}
+
+/**
+ * The receipt with its comment id, when the redirect carried one. A receipt
+ * whose id is not a plain number is kept id-less rather than guessed at: a
+ * wrong id would address someone else's comment on the re-read.
+ */
+export function readWordPressSubmitReceipt(
+  currentValue: string,
+  expectedValue: string
+): WordPressReceipt | null {
+  const type = getWordPressSubmitReceipt(currentValue, expectedValue);
+  if (!type) return null;
+  let current: URL;
+  try {
+    current = new URL(currentValue);
+  } catch {
+    return null;
+  }
+  const commentId = readCommentId(current, type);
+  return {
+    type,
+    url: currentValue,
+    ...(commentId ? { commentId } : {}),
+  };
+}
+
 // True when the current URL alone proves the comment was accepted: same origin,
 // on the expected permalink (or its comment-page variant), carrying either the
 // moderation receipt or a newly added `#comment-<id>` anchor.

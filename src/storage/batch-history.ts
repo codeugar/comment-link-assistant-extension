@@ -15,6 +15,8 @@ const failedItemStatuses = new Set<BatchItemStatus>([
   'failed',
   'no_form',
   'validation_error',
+  // Public with the link removed: the run produced no backlink here.
+  'link_stripped',
 ]);
 
 export interface BatchHistoryItem {

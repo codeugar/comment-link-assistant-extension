@@ -1,4 +1,5 @@
 import type { BatchItemStatus, BatchSnapshot } from '@/batch/types';
+import type { PublicCommentCriterion } from '@/verify/public-comment';
 import {
   type Attempt,
   type AttemptError,
@@ -10,6 +11,7 @@ import {
   type DashboardRunKind,
   type DashboardRunStatus,
   type DashboardSummary,
+  type FailedPlanTargetStatus,
   type LegacyImportBundle,
   type LegacyImportResult,
   type Plan,
@@ -27,7 +29,9 @@ import {
   countTargetStatuses,
   isFailedTargetStatus,
   isProcessedTargetStatus,
+  isRetryableTargetStatus,
 } from './model';
+import { publicCommentCriterion } from './moderation-recheck';
 
 export const DASHBOARD_DB_NAME = 'comment-link-assistant.dashboard';
 export const DASHBOARD_DB_VERSION = 1;
@@ -160,6 +164,15 @@ export interface PendingModerationCheck {
   url: string;
   targetWebsiteUrl: string;
   fingerprint: string;
+  /** What "published" meant for this target: a link inside the comment, or
+   *  just the comment itself. Comes from the attempt's own linkMode so this
+   *  job never has to reconstruct it from the plan's promoted URL. */
+  criterion: PublicCommentCriterion;
+  /** Server-assigned comment id from the submit receipt, when one was captured.
+   *  With it the public re-check is exact instead of text-matched. */
+  commentId?: string;
+  /** Receipt URL, which WordPress resolves to the right comment page. */
+  receiptUrl?: string;
   checkCount: number;
   lastCheckAt?: number;
   lastCheckMessage?: string;
@@ -178,7 +191,7 @@ export interface ModerationPublishedTransition {
 export interface RecordModerationCheckInput {
   targetId: string;
   attemptId: string;
-  status: 'pending_moderation' | 'published';
+  status: 'pending_moderation' | 'published' | 'link_stripped';
   message: string;
   at?: number;
   /** Used by an explicit history-row check: keep the old status when absent. */
@@ -523,13 +536,11 @@ function friendlyError(
   at: number
 ): AttemptError | undefined {
   if (!isFailedTargetStatus(status)) return undefined;
-  const friendlyMessages: Record<
-    'no_form' | 'validation_error' | 'failed',
-    string
-  > = {
+  const friendlyMessages: Record<FailedPlanTargetStatus, string> = {
     no_form: '没有找到可用的评论表单',
     validation_error: '评论表单未通过网站校验',
     failed: '处理外链时发生错误',
+    link_stripped: '评论已公开显示，但其中的链接被网站删除',
   };
   const rawCode = message.trim();
   const code = /^[A-Z][A-Z0-9_:-]{1,120}$/.test(rawCode)
@@ -1189,6 +1200,16 @@ export class DashboardRepository {
             url: target.url,
             targetWebsiteUrl: plan.promotingWebsiteUrl,
             fingerprint,
+            criterion: publicCommentCriterion(
+              attempt.linkMode,
+              plan.promotingWebsiteUrl
+            ),
+            ...(attempt.receipt?.commentId
+              ? { commentId: attempt.receipt.commentId }
+              : {}),
+            ...(attempt.receipt?.url
+              ? { receiptUrl: attempt.receipt.url }
+              : {}),
             checkCount: attempt.timeline.filter(
               (event) => event.stage === 'moderation_recheck'
             ).length,
@@ -1230,6 +1251,8 @@ export class DashboardRepository {
         )) as Attempt[];
         const transitions: ModerationPublishedTransition[] = [];
         for (const attempt of attempts) {
+          // Only real publications: this feed is the "pending → published"
+          // history, and a stripped link is a failure, not a publication.
           const published = [...attempt.timeline]
             .reverse()
             .find(
@@ -1320,20 +1343,22 @@ export class DashboardRepository {
           return null;
         }
 
-        const targetStatus =
-          input.status === 'published' ? 'published' : originalTarget.status;
+        // Both outcomes are terminal and take the row out of the queue: the
+        // comment is public either way. Only `published` means the link is on
+        // the page; `link_stripped` means the site kept the comment and
+        // removed it. Anything else leaves the row where it was, still pending.
+        const settled =
+          input.status === 'published' || input.status === 'link_stripped';
+        const targetStatus = settled ? input.status : originalTarget.status;
         const target: PlanTarget = {
           ...originalTarget,
-          status:
-            input.status === 'published' ? 'published' : originalTarget.status,
-          ...(targetStatus === 'published'
-            ? { latestMessage: input.message }
-            : {}),
+          status: targetStatus,
+          ...(settled ? { latestMessage: input.message } : {}),
           lastModerationCheckAt: at,
           lastModerationCheckMessage: input.message,
           updatedAt: at,
         };
-        if (targetStatus === 'published') {
+        if (settled) {
           Reflect.deleteProperty(target, 'lastError');
         }
         const attempt: Attempt = {
@@ -1349,7 +1374,7 @@ export class DashboardRepository {
             },
           ].slice(-100),
           updatedAt: at,
-          ...(targetStatus === 'published' ? { completedAt: at } : {}),
+          ...(settled ? { completedAt: at } : {}),
         };
         targetStore.put(target);
         attemptStore.put(attempt);
@@ -1900,7 +1925,7 @@ export class DashboardRepository {
           if (requestedTargetIds && !requestedTargetIds.has(target.id)) {
             return false;
           }
-          if (kind === 'retry') return isFailedTargetStatus(target.status);
+          if (kind === 'retry') return isRetryableTargetStatus(target.status);
           if (kind === 'resume') {
             return (
               target.status === 'pending' ||
@@ -2112,6 +2137,9 @@ export class DashboardRepository {
           const fingerprint = comment
             ? commentFingerprint(comment)
             : existing?.commentFingerprint;
+          // Legacy snapshots predate this field, so a synced update from one
+          // must not erase the linkMode an earlier sync already recorded.
+          const linkMode = snapshot.settings.linkMode ?? existing?.linkMode;
           const attempt: Attempt = {
             id: identifier,
             runId: run.id,
@@ -2126,6 +2154,10 @@ export class DashboardRepository {
             })),
             ...(comment ? { comment } : {}),
             ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+            ...(linkMode ? { linkMode } : {}),
+            ...((item.receipt ?? existing?.receipt)
+              ? { receipt: item.receipt ?? existing?.receipt }
+              : {}),
             ...(error ? { error } : {}),
             createdAt:
               existing?.createdAt ?? item.events[0]?.at ?? item.createdAt,
@@ -2309,6 +2341,10 @@ export class DashboardRepository {
             const fingerprint = comment
               ? commentFingerprint(comment)
               : existingAttempt?.commentFingerprint;
+            // Legacy snapshots predate this field, so a synced update from one
+            // must not erase the linkMode an earlier sync already recorded.
+            const linkMode =
+              snapshot.settings.linkMode ?? existingAttempt?.linkMode;
             const attempt: Attempt = {
               id: existingAttempt?.id ?? attemptId(run.id, target.id),
               runId: run.id,
@@ -2326,6 +2362,10 @@ export class DashboardRepository {
               })),
               ...(comment ? { comment } : {}),
               ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+              ...(linkMode ? { linkMode } : {}),
+              ...((item.receipt ?? existingAttempt?.receipt)
+                ? { receipt: item.receipt ?? existingAttempt?.receipt }
+                : {}),
               ...(error ? { error } : {}),
               createdAt:
                 existingAttempt?.createdAt ??

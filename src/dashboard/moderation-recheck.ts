@@ -1,5 +1,11 @@
 import type { ModerationCheckResult } from '@/page/types';
-import { checkTabForPublishedComment } from '@/runtime/page-commands';
+import type { LinkMode } from '@/types';
+import {
+  type PublicCommentCheck,
+  type PublicCommentCriterion,
+  type PublicCommentQuery,
+  checkPublicComment,
+} from '@/verify/public-comment';
 import type { PendingModerationCheck, RecordModerationCheckInput } from './db';
 import type { PlanTarget } from './model';
 
@@ -13,7 +19,6 @@ export const MODERATION_RECHECK_LAST_RUN_STORAGE_KEY =
   'comment-link-assistant.moderation-recheck-last-run';
 export const MANUAL_MODERATION_ENTRIES_STORAGE_KEY =
   'comment-link-assistant.manual-moderation-entries';
-const TAB_LOAD_TIMEOUT_MS = 20_000;
 
 export interface ModerationRecheckSettings {
   intervalMinutes: number;
@@ -34,7 +39,14 @@ export interface ManualModerationEntry {
   id: string;
   pageUrl: string;
   targetWebsiteUrl: string;
-  status: 'pending_moderation' | 'published';
+  /** WordPress comment id, when the submit receipt captured one. */
+  commentId?: string;
+  /** True when no `#comment-<id>` could be read out of the pasted URL. A
+   *  manual entry carries no comment text, so that permalink is the only
+   *  thing that can say which comment on the page belongs to the user —
+   *  without it, no read of the page may settle this entry. */
+  needsCommentPermalink: boolean;
+  status: 'pending_moderation' | 'published' | 'link_stripped';
   checkCount: number;
   lastCheckAt?: number;
   lastCheckMessage?: string;
@@ -55,6 +67,9 @@ export interface ModerationQueueItem {
   checkCount: number;
   lastCheckAt?: number;
   lastCheckMessage?: string;
+  /** Manual entries only: the pasted URL names no comment, so no read of that
+   *  page can be attributed to this user and the entry can never settle. */
+  needsCommentPermalink?: boolean;
 }
 
 export interface ModerationPublishedRecord {
@@ -148,12 +163,24 @@ function normalizedHttpUrl(value: string, preserveHash = false): string {
   return url.href.replace(/\/$/, '');
 }
 
+/** The comment id a `#comment-<id>` permalink carries, when it has one. */
+function readCommentIdFromUrl(value: string): string | null {
+  const match = /#comment-(\d+)$/i.exec(value);
+  return match?.[1] ?? null;
+}
+
 export async function loadManualModerationEntries(
   storage: StoragePort = chrome.storage.local
 ): Promise<ManualModerationEntry[]> {
   const stored = await storage.get(MANUAL_MODERATION_ENTRIES_STORAGE_KEY);
   const entries = stored[MANUAL_MODERATION_ENTRIES_STORAGE_KEY];
-  return Array.isArray(entries) ? (entries as ManualModerationEntry[]) : [];
+  if (!Array.isArray(entries)) return [];
+  // Derived from the comment id rather than trusted from storage, so rows
+  // written before this flag existed do not read back as identified.
+  return (entries as ManualModerationEntry[]).map((entry) => ({
+    ...entry,
+    needsCommentPermalink: !entry.commentId,
+  }));
 }
 
 export async function addManualModerationEntry(
@@ -175,10 +202,15 @@ export async function addManualModerationEntry(
   ) {
     throw new Error('MODERATION_RECHECK_ENTRY_EXISTS');
   }
+  // A pasted `#comment-<id>` link is the exact handle the re-check wants; the
+  // hash is preserved above precisely so it can be read here.
+  const commentId = readCommentIdFromUrl(pageUrl);
   const entry: ManualModerationEntry = {
     id: idFactory(),
     pageUrl,
     targetWebsiteUrl,
+    ...(commentId ? { commentId } : {}),
+    needsCommentPermalink: !commentId,
     status: 'pending_moderation',
     checkCount: 0,
     createdAt: now,
@@ -200,9 +232,14 @@ async function recordManualModerationResult(
   const original = entries.find((entry) => entry.id === entryId);
   if (!original) throw new Error('MODERATION_RECHECK_ENTRY_NOT_FOUND');
   const published = result.status === 'published';
+  // A stripped link settles the entry too: the comment is public, just useless.
+  const settled =
+    result.status === 'published' || result.status === 'link_stripped'
+      ? result.status
+      : null;
   const updated: ManualModerationEntry = {
     ...original,
-    status: published ? 'published' : 'pending_moderation',
+    status: settled ?? 'pending_moderation',
     checkCount: original.checkCount + 1,
     lastCheckAt: at,
     lastCheckMessage: result.message,
@@ -224,32 +261,96 @@ export interface ModerationRecheckStore {
   ): Promise<PlanTarget | null>;
 }
 
-/** A scanner-owned tab is reused for every target in one bounded scan. */
-export interface ModerationVerificationTabPort {
-  create(url: string): Promise<number>;
-  navigate(tabId: number, url: string): Promise<void>;
-  check(
-    tabId: number,
-    fingerprint: string,
-    targetWebsiteUrl?: string
-  ): Promise<ModerationCheckResult>;
-  close(tabId: number): Promise<void>;
+/**
+ * Reads the target page as an anonymous visitor. No tab, no session: a comment
+ * counts as published here for the same reason it does at submit time — someone
+ * who is not its author can see it.
+ */
+export interface PublicCommentPort {
+  check(query: PublicCommentQuery): Promise<PublicCommentCheck>;
+}
+
+export function createPublicCommentPort(): PublicCommentPort {
+  return { check: (query) => checkPublicComment(query) };
+}
+
+/**
+ * The success criterion a target was submitted under: a link inside the
+ * comment, or the comment by itself. This is the one place that rule is
+ * written down; both the queue builder and a one-off manual re-check call it
+ * so a `comment-only` attempt is never re-judged as if it needed a link. An
+ * attempt from before `linkMode` was recorded has no way to say that, so it
+ * falls to `link` — the only behaviour it ever had.
+ */
+export function publicCommentCriterion(
+  linkMode: LinkMode | undefined,
+  promotedWebsiteUrl: string
+): PublicCommentCriterion {
+  return linkMode === 'comment-only'
+    ? { kind: 'comment_only' }
+    : { kind: 'link', websiteUrl: promotedWebsiteUrl };
+}
+
+/** Maps a public read onto the states this job records. Only `visible` and
+ *  `link_stripped` are decisions; everything else keeps the item queued. */
+export function moderationResultFromPublicCheck(
+  check: PublicCommentCheck,
+  fingerprint = ''
+): ModerationCheckResult {
+  if (check.visibility === 'visible') {
+    return {
+      status: 'published',
+      message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
+      fingerprint,
+    };
+  }
+  // The comment is public with no link in it. Re-checking it forever would
+  // never change the answer, so this leaves the queue.
+  if (check.visibility === 'link_stripped') {
+    return {
+      status: 'link_stripped',
+      message: 'COMMENT_PUBLIC_LINK_STRIPPED',
+      fingerprint,
+    };
+  }
+  return {
+    status: 'pending_moderation',
+    message:
+      check.visibility === 'not_visible'
+        ? 'COMMENT_PENDING_MODERATION_NOT_VISIBLE'
+        : 'COMMENT_PENDING_MODERATION_RECHECK_UNAVAILABLE',
+    fingerprint,
+  };
 }
 
 export async function recheckManualModerationEntry(
   entryId: string,
-  tabs: ModerationVerificationTabPort,
+  port: PublicCommentPort,
   storage: StoragePort = chrome.storage.local
 ): Promise<ManualModerationEntry> {
   const entry = (await loadManualModerationEntries(storage)).find(
     (candidate) => candidate.id === entryId
   );
   if (!entry) throw new Error('MODERATION_RECHECK_ENTRY_NOT_FOUND');
-  let tabId: number | null = null;
   try {
-    tabId = await tabs.create(entry.pageUrl);
-    const result = await tabs.check(tabId, '', entry.targetWebsiteUrl);
-    return await recordManualModerationResult(entry.id, result, storage);
+    const check = await port.check({
+      pageUrl: entry.pageUrl,
+      criterion: { kind: 'link', websiteUrl: entry.targetWebsiteUrl },
+      ...(entry.commentId ? { commentId: entry.commentId } : {}),
+    });
+    const result = moderationResultFromPublicCheck(check);
+    // A manual entry carries no comment text, so a pasted `#comment-<id>`
+    // permalink is the only thing that ties a page-wide read to this user's
+    // comment. Without one, a "published" or "link_stripped" verdict could
+    // belong to any comment on the page and must not settle this entry.
+    const settled: Pick<ModerationCheckResult, 'status' | 'message'> =
+      entry.commentId || result.status === 'pending_moderation'
+        ? result
+        : {
+            status: 'pending_moderation',
+            message: 'COMMENT_PENDING_MODERATION_NEEDS_PERMALINK',
+          };
+    return await recordManualModerationResult(entry.id, settled, storage);
   } catch {
     return await recordManualModerationResult(
       entry.id,
@@ -259,18 +360,22 @@ export async function recheckManualModerationEntry(
       },
       storage
     );
-  } finally {
-    if (tabId !== null) await tabs.close(tabId).catch(() => undefined);
   }
 }
 
 export async function runManualModerationRechecks(
-  tabs: ModerationVerificationTabPort,
+  port: PublicCommentPort,
   limit: number,
   storage: StoragePort = chrome.storage.local
 ): Promise<ModerationRecheckRunResult> {
   if (!Number.isFinite(limit) || limit <= 0) {
-    return { selected: 0, checked: 0, published: 0, stillPending: 0 };
+    return {
+      selected: 0,
+      checked: 0,
+      published: 0,
+      linkStripped: 0,
+      stillPending: 0,
+    };
   }
   const selected = (await loadManualModerationEntries(storage))
     .filter((entry) => entry.status === 'pending_moderation')
@@ -284,12 +389,14 @@ export async function runManualModerationRechecks(
     selected: selected.length,
     checked: 0,
     published: 0,
+    linkStripped: 0,
     stillPending: 0,
   };
   for (const entry of selected) {
-    const result = await recheckManualModerationEntry(entry.id, tabs, storage);
+    const result = await recheckManualModerationEntry(entry.id, port, storage);
     summary.checked += 1;
     if (result.status === 'published') summary.published += 1;
+    else if (result.status === 'link_stripped') summary.linkStripped += 1;
     else summary.stillPending += 1;
   }
   return summary;
@@ -299,6 +406,9 @@ export interface ModerationRecheckRunResult {
   selected: number;
   checked: number;
   published: number;
+  /** Public, but with the promoted link removed. Counted apart from published:
+   *  the comment landed and the link did not. */
+  linkStripped: number;
   stillPending: number;
 }
 
@@ -319,72 +429,6 @@ export async function armPendingModerationRecheckAlarm(
     delayInMinutes: settings.intervalMinutes,
     periodInMinutes: settings.intervalMinutes,
   });
-}
-
-function waitForTabComplete(
-  tabId: number,
-  timeoutMs = TAB_LOAD_TIMEOUT_MS
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      if (error) reject(error);
-      else resolve();
-    };
-    const timer = setTimeout(
-      () => finish(new Error('MODERATION_RECHECK_LOAD_TIMEOUT')),
-      timeoutMs
-    );
-    const onUpdated = (
-      updatedTabId: number,
-      changeInfo: chrome.tabs.TabChangeInfo
-    ) => {
-      if (updatedTabId === tabId && changeInfo.status === 'complete') finish();
-    };
-    chrome.tabs.onUpdated.addListener(onUpdated);
-    void chrome.tabs.get(tabId).then(
-      (tab) => {
-        if (tab.status === 'complete') finish();
-      },
-      () => finish(new Error('MODERATION_RECHECK_TAB_UNAVAILABLE'))
-    );
-  });
-}
-
-/**
- * The only Chrome adapter used by the scanner. It opens an inactive, owned
- * verification tab, navigates it read-only, and always lets the caller close it.
- */
-export function createChromeModerationVerificationTabPort(): ModerationVerificationTabPort {
-  return {
-    async create(url: string): Promise<number> {
-      const tab = await chrome.tabs.create({ active: false, url });
-      if (typeof tab.id !== 'number') {
-        throw new Error('MODERATION_RECHECK_TAB_CREATE_FAILED');
-      }
-      try {
-        await waitForTabComplete(tab.id);
-        return tab.id;
-      } catch (error) {
-        // The coordinator only receives an id after create resolves. Reclaim a
-        // tab whose first navigation failed before it can reach that finally.
-        await chrome.tabs.remove(tab.id).catch(() => undefined);
-        throw error;
-      }
-    },
-    async navigate(tabId: number, url: string): Promise<void> {
-      await chrome.tabs.update(tabId, { url });
-      await waitForTabComplete(tabId);
-    },
-    check: checkTabForPublishedComment,
-    async close(tabId: number): Promise<void> {
-      await chrome.tabs.remove(tabId);
-    },
-  };
 }
 
 function pendingMessage(result: ModerationCheckResult): string {
@@ -416,14 +460,21 @@ export type ModerationPublishedListener = (
   check: PendingModerationCheck
 ) => Promise<void>;
 
+/** Called once a comment turns out to be public without its link, so the mix
+ *  slot it was holding can be released instead of waiting forever. */
+export type ModerationLinkStrippedListener = (
+  check: PendingModerationCheck
+) => Promise<void>;
+
 export class PendingModerationRecheckCoordinator {
   private running: Promise<ModerationRecheckRunResult> | null = null;
 
   constructor(
     private readonly store: ModerationRecheckStore,
-    private readonly tabs: ModerationVerificationTabPort,
+    private readonly port: PublicCommentPort,
     private readonly limit = MAX_PENDING_MODERATION_CHECKS_PER_RUN,
-    private readonly onPublished?: ModerationPublishedListener
+    private readonly onPublished?: ModerationPublishedListener,
+    private readonly onLinkStripped?: ModerationLinkStrippedListener
   ) {}
 
   run(): Promise<ModerationRecheckRunResult> {
@@ -441,51 +492,66 @@ export class PendingModerationRecheckCoordinator {
       selected: checks.length,
       checked: 0,
       published: 0,
+      linkStripped: 0,
       stillPending: 0,
     };
     if (checks.length === 0) return result;
 
-    let tabId: number | null = null;
-    try {
-      for (const check of checks) {
-        try {
-          if (tabId === null) tabId = await this.tabs.create(check.url);
-          else await this.tabs.navigate(tabId, check.url);
-          const verification = await this.tabs.check(
-            tabId,
-            check.fingerprint,
-            check.targetWebsiteUrl
-          );
-          result.checked += 1;
-          if (verification.status === 'published') {
-            await this.store.recordModerationCheck({
-              targetId: check.targetId,
-              attemptId: check.attemptId,
-              status: 'published',
-              message: verification.message,
-            });
-            // A listener failure must not turn a confirmed publication back
-            // into a pending one.
-            await this.onPublished?.(check).catch(() => undefined);
-            result.published += 1;
-          } else {
-            await this.store.recordModerationCheck({
-              targetId: check.targetId,
-              attemptId: check.attemptId,
-              status: 'pending_moderation',
-              message: pendingMessage(verification),
-            });
-            result.stillPending += 1;
-          }
-        } catch {
-          // Network failures, restricted pages, and missing forms all preserve
-          // the pending state. This job intentionally has no submit operation.
-          await this.store.recordModerationCheck(unavailableInput(check));
+    // No tab is opened at all: each check is a plain anonymous request.
+    for (const check of checks) {
+      try {
+        const verification = moderationResultFromPublicCheck(
+          await this.port.check({
+            // The receipt URL resolves to the right comment page by itself.
+            pageUrl: check.receiptUrl ?? check.url,
+            // The task that created this comment already decided what success
+            // means; forward that decision instead of rebuilding it from
+            // `targetWebsiteUrl`, which is what recorded every `comment-only`
+            // comment as a terminal `link_stripped` failure.
+            criterion: check.criterion,
+            fingerprint: check.fingerprint,
+            ...(check.commentId ? { commentId: check.commentId } : {}),
+          }),
+          check.fingerprint
+        );
+        result.checked += 1;
+        if (verification.status === 'published') {
+          await this.store.recordModerationCheck({
+            targetId: check.targetId,
+            attemptId: check.attemptId,
+            status: 'published',
+            message: verification.message,
+          });
+          // A listener failure must not turn a confirmed publication back
+          // into a pending one.
+          await this.onPublished?.(check).catch(() => undefined);
+          result.published += 1;
+        } else if (verification.status === 'link_stripped') {
+          // Terminal: the comment is public and carries no link. It leaves the
+          // queue without ever counting toward the promoted site's anchor mix.
+          await this.store.recordModerationCheck({
+            targetId: check.targetId,
+            attemptId: check.attemptId,
+            status: 'link_stripped',
+            message: verification.message,
+          });
+          await this.onLinkStripped?.(check).catch(() => undefined);
+          result.linkStripped += 1;
+        } else {
+          await this.store.recordModerationCheck({
+            targetId: check.targetId,
+            attemptId: check.attemptId,
+            status: 'pending_moderation',
+            message: pendingMessage(verification),
+          });
           result.stillPending += 1;
         }
+      } catch {
+        // An unreadable page preserves the pending state: "could not check"
+        // is never recorded as a verdict. This job has no submit operation.
+        await this.store.recordModerationCheck(unavailableInput(check));
+        result.stillPending += 1;
       }
-    } finally {
-      if (tabId !== null) await this.tabs.close(tabId).catch(() => undefined);
     }
     return result;
   }

@@ -1,5 +1,9 @@
 import { ANCHOR_BUCKETS, type AnchorBucket } from '@/anchor/types';
-import type { PageAnalysis, PreparedPageSubmission } from '@/page/types';
+import type {
+  PageAnalysis,
+  PreparedPageSubmission,
+  SubmissionReceipt,
+} from '@/page/types';
 import type { CommentProvider, LinkMode } from '@/types';
 import type { WebsiteProfile } from '@/website/profile';
 import { z } from 'zod';
@@ -14,6 +18,8 @@ export const BATCH_ITEM_STATUSES = [
   'verifying',
   'published',
   'pending_moderation',
+  // Public, with the promoted link removed by the site.
+  'link_stripped',
   'unconfirmed',
   // Persisted by versions before result verification was split. It is accepted
   // for migration only; newly completed items use one of the three states
@@ -76,6 +82,9 @@ export interface BatchItem {
   events: BatchItemEvent[];
   partialPageAllowed?: boolean;
   anchor?: BatchItemAnchor;
+  /** What the server handed back at submit time. The comment id is the only
+   *  exact handle a later public re-check has on this comment. */
+  receipt?: SubmissionReceipt;
   message: string;
   createdAt: number;
   updatedAt: number;
@@ -222,6 +231,13 @@ export const batchItemSchema: z.ZodType<BatchItem> = z
     prepared: preparedPageSubmissionSchema.nullable(),
     events: z.array(batchItemEventSchema).min(1).max(32),
     partialPageAllowed: z.boolean().optional(),
+    receipt: z
+      .object({
+        url: httpUrlSchema,
+        commentId: z.string().max(32).optional(),
+      })
+      .strict()
+      .optional(),
     anchor: z
       .object({
         bucket: z.enum(ANCHOR_BUCKETS),
@@ -243,6 +259,7 @@ const pausedItemStatuses = new Set<BatchItemStatus>([
 const completedItemStatuses = new Set<BatchItemStatus>([
   'published',
   'pending_moderation',
+  'link_stripped',
   'unconfirmed',
   'submitted',
   'login_required',

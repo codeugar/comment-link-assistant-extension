@@ -14,13 +14,15 @@ import {
   type AnchorPlan,
 } from '@/anchor/types';
 import type { BatchItem, BatchSnapshot } from '@/batch/types';
-import type {
-  DashboardSummary,
-  Plan,
-  PlanBatch,
-  RecentFailureSummary,
-  ScheduledBatchSummary,
-  TargetHostSummary,
+import {
+  type DashboardSummary,
+  type Plan,
+  type PlanBatch,
+  type PlanTargetStatus,
+  type RecentFailureSummary,
+  type ScheduledBatchSummary,
+  type TargetHostSummary,
+  isFailedTargetStatus,
 } from '@/dashboard/model';
 import {
   type NewPlanSource,
@@ -311,10 +313,10 @@ function percent(value: number, total: number): number {
   return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
 }
 
+// Delegates rather than repeating the list: a second copy is how the badge and
+// the target detail ended up disagreeing about `link_stripped`.
 function isFailedTarget(status: string): boolean {
-  return (
-    status === 'failed' || status === 'no_form' || status === 'validation_error'
-  );
+  return isFailedTargetStatus(status as PlanTargetStatus);
 }
 
 function isFinishedBatch(status: PlanBatch['status']): boolean {
@@ -342,6 +344,8 @@ function targetStatusCopy(status: string): string {
       return t('publishedStatus');
     case 'pending_moderation':
       return t('pendingModerationStatus');
+    case 'link_stripped':
+      return t('linkStrippedStatus');
     case 'unconfirmed':
       return t('unconfirmedStatus');
     case 'submitted':

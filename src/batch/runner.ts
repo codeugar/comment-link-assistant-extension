@@ -129,7 +129,10 @@ export interface BatchRunnerDependencies {
   ): Promise<PageSubmissionResult>;
   verifyTabSubmission(
     tabId: number,
-    prepared: Pick<PreparedPageSubmission, 'fingerprint' | 'baseline'>,
+    prepared: Pick<
+      PreparedPageSubmission,
+      'fingerprint' | 'baseline' | 'websiteUrl' | 'comment'
+    >,
     expectedUrl: string,
     batchId: string
   ): Promise<PageSubmissionResult>;
@@ -450,6 +453,7 @@ function hasAttemptedCanonicalTarget(
       item.id !== currentId &&
       (item.status === 'published' ||
         item.status === 'pending_moderation' ||
+        item.status === 'link_stripped' ||
         item.status === 'submitted') &&
       canonicalTargetKey(item.url) === key
   );
@@ -668,23 +672,35 @@ async function saveSubmissionResult(
     return afterTerminal(next);
   }
   const confirmedStatus =
-    result.status === 'published' || result.status === 'pending_moderation'
+    result.status === 'published' ||
+    result.status === 'pending_moderation' ||
+    result.status === 'link_stripped'
       ? result.status
       : result.status === 'unconfirmed' || result.status === 'submitted'
         ? 'unconfirmed'
         : null;
   if (confirmedStatus && result.clickOccurred) {
-    // `unconfirmed` is deliberately not credited: the comment left no evidence
-    // it reached the page, so counting it would inflate the site's mix with
-    // links that may not exist.
-    if (confirmedStatus !== 'unconfirmed') {
-      await recordItemAnchor(batch, confirmedStatus, dependencies);
+    // `link_stripped` is never credited: the comment reached the page without
+    // its link. `unconfirmed` is credited only as pending, and only when the
+    // site is known to have accepted the comment — that row is what a later
+    // re-check settles when it finds the comment live; without it, a target on
+    // a host that blocks the anonymous read could never be counted at all.
+    const anchorStatus =
+      confirmedStatus === 'published' ||
+      confirmedStatus === 'pending_moderation'
+        ? confirmedStatus
+        : confirmedStatus === 'unconfirmed' && result.acceptance
+          ? ('pending_moderation' as const)
+          : null;
+    if (anchorStatus) {
+      await recordItemAnchor(batch, anchorStatus, dependencies);
     }
     const next = completeCurrentItem(
       batch,
       confirmedStatus,
       result.message,
-      dependencies.now()
+      dependencies.now(),
+      result.receipt
     );
     await dependencies.setBatch(next);
     return afterTerminal(next);

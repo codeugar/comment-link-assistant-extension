@@ -1,3 +1,5 @@
+import type { PublicCommentCheck } from '@/verify/public-comment';
+
 export type PageReadiness =
   | 'ready'
   | 'login_required'
@@ -81,6 +83,10 @@ export type PageSubmissionPreparation =
 export type SubmissionStatus =
   | 'published'
   | 'pending_moderation'
+  // Public, and the promoted link is gone. Terminal on purpose: waiting longer
+  // cannot bring a stripped link back, so it must never sit in the re-check
+  // queue behind comments that still might go live.
+  | 'link_stripped'
   | 'unconfirmed'
   // Kept only to decode result messages produced by an older content script
   // during an extension update. New code never emits this ambiguous status.
@@ -89,12 +95,34 @@ export type SubmissionStatus =
   | 'captcha_required'
   | 'validation_error';
 
+/** What the server handed back when it took the comment. The comment id is the
+ *  only exact handle a later anonymous re-read has on this specific comment. */
+export interface SubmissionReceipt {
+  /** The URL the submit landed on; WordPress resolves it to the right comment
+   *  page on its own, so it is the best page to re-read. */
+  url: string;
+  commentId?: string;
+}
+
+/**
+ * How the submitting session learned the site took the comment. Acceptance is
+ * never publication: WordPress deliberately renders a held comment to its own
+ * author, so evidence collected inside the submitting session cannot prove that
+ * a visitor sees anything. Only an anonymous read can.
+ */
+export type SubmissionAcceptance = 'server_receipt' | 'rendered_locally';
+
 export interface PageSubmissionResult {
   status: SubmissionStatus;
   message: string;
   fingerprint: string;
   clickOccurred: boolean;
   linkFollow?: LinkFollowVerification;
+  /** Set when the site accepted the comment, saying how that was learned. */
+  acceptance?: SubmissionAcceptance;
+  receipt?: SubmissionReceipt;
+  /** The anonymous read that decided `published` versus `pending_moderation`. */
+  publicCheck?: PublicCommentCheck;
 }
 
 /** Result of a read-only follow-up check for an already submitted comment. */
@@ -102,6 +130,7 @@ export interface ModerationCheckResult {
   status:
     | 'published'
     | 'pending_moderation'
+    | 'link_stripped'
     | 'login_required'
     | 'captcha_required';
   message: string;
