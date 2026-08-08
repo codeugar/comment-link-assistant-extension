@@ -10,6 +10,7 @@ import {
   type DashboardRunKind,
   type DashboardRunStatus,
   type DashboardSummary,
+  type FailedPlanTargetStatus,
   type LegacyImportBundle,
   type LegacyImportResult,
   type Plan,
@@ -528,13 +529,11 @@ function friendlyError(
   at: number
 ): AttemptError | undefined {
   if (!isFailedTargetStatus(status)) return undefined;
-  const friendlyMessages: Record<
-    'no_form' | 'validation_error' | 'failed',
-    string
-  > = {
+  const friendlyMessages: Record<FailedPlanTargetStatus, string> = {
     no_form: '没有找到可用的评论表单',
     validation_error: '评论表单未通过网站校验',
     failed: '处理外链时发生错误',
+    link_stripped: '评论已公开显示，但其中的链接被网站删除',
   };
   const rawCode = message.trim();
   const code = /^[A-Z][A-Z0-9_:-]{1,120}$/.test(rawCode)
@@ -661,12 +660,8 @@ function addTargetToCounts(
   if (isProcessedTargetStatus(target.status)) counts.processed += 1;
   if (target.status === 'published' || target.status === 'pending_moderation') {
     counts.submitted += 1;
-  } else if (
-    target.status === 'link_stripped' ||
-    isFailedTargetStatus(target.status)
-  ) {
-    counts.failed += 1;
-  } else if (target.status === 'pending') counts.pending += 1;
+  } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
+  else if (target.status === 'pending') counts.pending += 1;
   else if (target.status === 'running') counts.running += 1;
   else if (target.status === 'blocked') counts.blocked += 1;
   else if (target.status === 'interrupted') counts.interrupted += 1;
@@ -1245,15 +1240,15 @@ export class DashboardRepository {
         )) as Attempt[];
         const transitions: ModerationPublishedTransition[] = [];
         for (const attempt of attempts) {
-          const published = [...attempt.timeline].reverse().find(
-            (event) =>
-              event.stage === 'moderation_recheck' &&
-              (event.status === 'published' ||
-                // Settled, not published: the comment is public and its link
-                // is not. It belongs in this history so the outcome is
-                // visible instead of the row silently disappearing.
-                event.status === 'link_stripped')
-          );
+          // Only real publications: this feed is the "pending → published"
+          // history, and a stripped link is a failure, not a publication.
+          const published = [...attempt.timeline]
+            .reverse()
+            .find(
+              (event) =>
+                event.stage === 'moderation_recheck' &&
+                event.status === 'published'
+            );
           const target = attempt.targetId
             ? targetById.get(attempt.targetId)
             : undefined;

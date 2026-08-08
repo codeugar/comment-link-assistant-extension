@@ -382,6 +382,7 @@ describe('page command runtime', () => {
     const publicFetch = vi.fn().mockResolvedValue(
       restResponse({
         id: 539871,
+        link: 'https://blog.example/article#comment-539871',
         content: {
           rendered:
             '<p>Useful <a href="https://product.example">Product</a></p>',
@@ -484,6 +485,7 @@ describe('page command runtime', () => {
       vi.fn().mockResolvedValue(
         restResponse({
           id: 539871,
+          link: 'https://blog.example/article#comment-539871',
           content: { rendered: '<p>Useful, and no link at all</p>' },
         })
       )
@@ -576,6 +578,7 @@ describe('page command runtime', () => {
       vi.fn().mockResolvedValue(
         restResponse({
           id: 99,
+          link: 'https://blog.example/article/comment-page-2/#comment-99',
           content: {
             rendered:
               '<p>Nice <a href="https://product.example">Product</a></p>',

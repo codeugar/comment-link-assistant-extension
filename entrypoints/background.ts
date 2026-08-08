@@ -462,12 +462,11 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
         source: 'plan' as const,
         ...item,
       })),
+      // Only real publications belong here: this list drives the "now
+      // published" counter, and a comment whose link was stripped is counted as
+      // a failure everywhere else.
       ...manual
-        .filter(
-          (entry) =>
-            (entry.status === 'published' && entry.publishedAt) ||
-            entry.status === 'link_stripped'
-        )
+        .filter((entry) => entry.status === 'published' && entry.publishedAt)
         .map((entry) => ({
           id: entry.id,
           source: 'manual' as const,
@@ -475,8 +474,7 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
           fingerprint: entry.targetWebsiteUrl,
           targetWebsiteUrl: entry.targetWebsiteUrl,
           checkCount: entry.checkCount,
-          publishedAt:
-            entry.publishedAt ?? entry.lastCheckAt ?? entry.updatedAt,
+          publishedAt: entry.publishedAt as number,
           message:
             entry.lastCheckMessage ?? 'COMMENT_PUBLISHED_RENDERED_TARGET_URL',
         })),
@@ -530,7 +528,13 @@ async function recheckDashboardTarget(
   await dashboardService.recordModerationCheck({
     targetId: target.id,
     attemptId: attempt.id,
-    status: result.status === 'published' ? 'published' : 'pending_moderation',
+    // `published` and `link_stripped` are both terminal; anything else leaves
+    // the row pending. Collapsing them all to pending kept a settled comment in
+    // the re-check queue for good.
+    status:
+      result.status === 'published' || result.status === 'link_stripped'
+        ? result.status
+        : 'pending_moderation',
     message: result.message,
     preserveCurrentStatus: true,
   });

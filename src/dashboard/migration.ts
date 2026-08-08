@@ -150,6 +150,7 @@ function errorForLegacyItem(
     no_form: '没有找到可用的评论表单',
     validation_error: '评论表单未通过网站校验',
     failed: '处理外链时发生错误',
+    link_stripped: '评论已公开显示，但其中的链接被网站删除',
   } as const;
   return {
     code: status.toUpperCase(),

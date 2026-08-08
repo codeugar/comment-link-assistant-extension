@@ -196,6 +196,7 @@ const failureDetailStatuses = new Set<BatchItemStatus>([
   'failed',
   'no_form',
   'validation_error',
+  'link_stripped',
   'login_required',
   'captcha_required',
 ]);

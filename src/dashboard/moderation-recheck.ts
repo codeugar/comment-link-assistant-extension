@@ -153,6 +153,12 @@ function normalizedHttpUrl(value: string, preserveHash = false): string {
   return url.href.replace(/\/$/, '');
 }
 
+/** The comment id a `#comment-<id>` permalink carries, when it has one. */
+function readCommentIdFromUrl(value: string): string | null {
+  const match = /#comment-(\d+)$/i.exec(value);
+  return match?.[1] ?? null;
+}
+
 export async function loadManualModerationEntries(
   storage: StoragePort = chrome.storage.local
 ): Promise<ManualModerationEntry[]> {
@@ -184,6 +190,11 @@ export async function addManualModerationEntry(
     id: idFactory(),
     pageUrl,
     targetWebsiteUrl,
+    // A pasted `#comment-<id>` link is the exact handle the re-check wants; the
+    // hash is preserved above precisely so it can be read here.
+    ...(readCommentIdFromUrl(pageUrl)
+      ? { commentId: readCommentIdFromUrl(pageUrl) as string }
+      : {}),
     status: 'pending_moderation',
     checkCount: 0,
     createdAt: now,

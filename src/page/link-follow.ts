@@ -224,11 +224,15 @@ function attachLinkFollow(
   targetUrl?: string,
   fingerprint?: string
 ): PageSubmissionResult {
-  if (
-    (result.status !== 'published' && result.status !== 'pending_moderation') ||
-    !targetUrl ||
-    !fingerprint
-  ) {
+  // `unconfirmed` carries an acceptance marker when the site took the comment
+  // but publication has not been settled by an anonymous read yet. The rel
+  // attribute is readable on that page and nowhere else later, so it is read
+  // here rather than lost.
+  const accepted =
+    result.status === 'published' ||
+    result.status === 'pending_moderation' ||
+    Boolean(result.acceptance);
+  if (!accepted || !targetUrl || !fingerprint) {
     return result;
   }
   return {

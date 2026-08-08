@@ -306,12 +306,18 @@ export interface DashboardBackupData {
   meta: DashboardMeta[];
 }
 
-export type FailedPlanTargetStatus = 'no_form' | 'validation_error' | 'failed';
+export type FailedPlanTargetStatus =
+  | 'no_form'
+  | 'validation_error'
+  | 'failed'
+  // The comment landed and its link did not, so the run produced nothing here.
+  | 'link_stripped';
 
 const failedStatuses = new Set<PlanTargetStatus>([
   'no_form',
   'validation_error',
   'failed',
+  'link_stripped',
 ]);
 
 export function isFailedTargetStatus(
@@ -325,7 +331,6 @@ export function isProcessedTargetStatus(status: PlanTargetStatus): boolean {
     status === 'blocked' ||
     status === 'published' ||
     status === 'pending_moderation' ||
-    status === 'link_stripped' ||
     status === 'unconfirmed' ||
     status === 'submitted' ||
     status === 'filtered' ||
@@ -357,14 +362,8 @@ export function countTargetStatuses(
       target.status === 'pending_moderation'
     ) {
       counts.submitted += 1;
-    } else if (
-      // The comment landed and the link did not: for a link-building run that
-      // is a failure, not a success with an asterisk.
-      target.status === 'link_stripped' ||
-      isFailedTargetStatus(target.status)
-    ) {
-      counts.failed += 1;
-    } else if (target.status === 'pending') counts.pending += 1;
+    } else if (isFailedTargetStatus(target.status)) counts.failed += 1;
+    else if (target.status === 'pending') counts.pending += 1;
     else if (target.status === 'running') counts.running += 1;
     else if (target.status === 'blocked') counts.blocked += 1;
     else if (target.status === 'interrupted') counts.interrupted += 1;

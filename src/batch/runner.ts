@@ -677,15 +677,20 @@ async function saveSubmissionResult(
         ? 'unconfirmed'
         : null;
   if (confirmedStatus && result.clickOccurred) {
-    // Neither `unconfirmed` nor `link_stripped` is credited: one left no
-    // evidence it reached the page, the other reached it without the link.
-    // Counting either would inflate the site's mix with links that do not
-    // exist.
-    if (
+    // `link_stripped` is never credited: the comment reached the page without
+    // its link. `unconfirmed` is credited only as pending, and only when the
+    // site is known to have accepted the comment — that row is what a later
+    // re-check settles when it finds the comment live; without it, a target on
+    // a host that blocks the anonymous read could never be counted at all.
+    const anchorStatus =
       confirmedStatus === 'published' ||
       confirmedStatus === 'pending_moderation'
-    ) {
-      await recordItemAnchor(batch, confirmedStatus, dependencies);
+        ? confirmedStatus
+        : confirmedStatus === 'unconfirmed' && result.acceptance
+          ? ('pending_moderation' as const)
+          : null;
+    if (anchorStatus) {
+      await recordItemAnchor(batch, anchorStatus, dependencies);
     }
     const next = completeCurrentItem(
       batch,

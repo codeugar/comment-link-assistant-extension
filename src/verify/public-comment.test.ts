@@ -33,6 +33,7 @@ describe('anonymous public comment check', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       restResponse({
         id: 88213,
+        link: 'https://blog.example/article#comment-88213',
         content: {
           rendered: '<p>Nice <a href="https://product.example">P</a></p>',
         },
@@ -60,6 +61,7 @@ describe('anonymous public comment check', () => {
       vi.fn().mockResolvedValue(
         restResponse({
           id: 1,
+          link: 'https://blog.example/article#comment-1',
           content: {
             rendered: '<p>See <a href="https://product.example\n">P</a></p>',
           },
@@ -74,6 +76,127 @@ describe('anonymous public comment check', () => {
         commentId: '1',
       })
     ).resolves.toMatchObject({ visibility: 'visible' });
+  });
+
+  it('accepts the promoted link on the author byline, not only in the body', async () => {
+    // Default link mode puts the promoted URL in the comment form's website
+    // field, so it renders on the author name and never in the body.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        restResponse({
+          id: 500,
+          link: 'https://blog.example/article#comment-500',
+          author_url: 'https://product.example/',
+          content: { rendered: '<p>Nice post, thanks for the roundup.</p>' },
+        })
+      )
+    );
+
+    await expect(
+      checkPublicComment({
+        pageUrl: PAGE,
+        websiteUrl: PROMOTED,
+        commentId: '500',
+      })
+    ).resolves.toMatchObject({ visibility: 'visible', method: 'wp_rest' });
+  });
+
+  it('ignores a REST comment that belongs to another install on the origin', async () => {
+    // WordPress under /blog/, something else at the root: comment 500 there is
+    // a different comment that happens to share the id.
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          restResponse({
+            id: 500,
+            link: 'https://blog.example/unrelated-root-post#comment-500',
+            content: { rendered: '<p>Someone else entirely</p>' },
+          })
+        )
+        .mockResolvedValueOnce(
+          htmlResponse(
+            `<ol class="comment-list"><li id="comment-500"><p>Ours <a href="https://product.example">P</a></p></li></ol>`
+          )
+        )
+    );
+
+    await expect(
+      checkPublicComment({
+        pageUrl: 'https://blog.example/blog/post/',
+        websiteUrl: PROMOTED,
+        commentId: '500',
+      })
+    ).resolves.toMatchObject({ visibility: 'visible', method: 'html' });
+  });
+
+  it('never reads a page through its moderation-hash preview URL', async () => {
+    // That URL shows a held comment to anyone who has the hash, so reading it
+    // would prove nothing about the public page.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        htmlResponse('<ol class="comment-list"><li id="comment-7">x</li></ol>')
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await checkPublicComment({
+      pageUrl: `${PAGE}?unapproved=7&moderation-hash=abc`,
+      websiteUrl: PROMOTED,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://blog.example/article',
+      expect.objectContaining({ credentials: 'omit' })
+    );
+  });
+
+  it('cannot decide from a page with no recognizable comments region', async () => {
+    // The article itself links to the promoted site, which proves nothing
+    // about a comment.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        htmlResponse(
+          `<article>Read more at <a href="https://product.example">Product</a></article>
+           <section class="post-conversation">no markers here</section>`
+        )
+      )
+    );
+
+    await expect(
+      checkPublicComment({ pageUrl: PAGE, websiteUrl: PROMOTED })
+    ).resolves.toMatchObject({ visibility: 'inconclusive', method: 'html' });
+  });
+
+  it('stops the last comment block before the reply form and the footer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(restResponse({ code: 'rest_no_route' }, 404))
+        .mockResolvedValueOnce(
+          htmlResponse(
+            `<ol class="comment-list">
+               <li id="comment-88"><p>Ours, link removed</p></li>
+             </ol>
+             <div id="respond"><form></form></div>
+             <aside class="widget recent-comments">
+               <a href="https://product.example">P</a>
+             </aside>`
+          )
+        )
+    );
+
+    await expect(
+      checkPublicComment({
+        pageUrl: PAGE,
+        websiteUrl: PROMOTED,
+        commentId: '88',
+      })
+    ).resolves.toMatchObject({ visibility: 'link_stripped', method: 'html' });
   });
 
   it('treats a refused comment id as decisively not visible', async () => {
@@ -157,6 +280,7 @@ describe('anonymous public comment check', () => {
       vi.fn().mockResolvedValue(
         restResponse({
           id: 88,
+          link: 'https://blog.example/article#comment-88',
           content: { rendered: '<p>Ours, link gone</p>' },
         })
       )

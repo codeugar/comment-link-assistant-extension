@@ -15,6 +15,8 @@ const failedItemStatuses = new Set<BatchItemStatus>([
   'failed',
   'no_form',
   'validation_error',
+  // Public with the link removed: the run produced no backlink here.
+  'link_stripped',
 ]);
 
 export interface BatchHistoryItem {
@@ -93,12 +95,7 @@ function toHistoryEntry(
     else if (item.status === 'pending_moderation') pendingModeration += 1;
     else if (item.status === 'unconfirmed' || item.status === 'submitted') {
       unconfirmed += 1;
-    } else if (
-      item.status === 'link_stripped' ||
-      failedItemStatuses.has(item.status)
-    ) {
-      failed += 1;
-    }
+    } else if (failedItemStatuses.has(item.status)) failed += 1;
   }
   return {
     id: snapshot.id,

@@ -148,9 +148,11 @@ describe('pending moderation recheck', () => {
       status: 'published',
       checkCount: 1,
     });
+    // The pasted permalink already names the comment, so the check is exact.
     expect(port.check).toHaveBeenCalledWith({
       pageUrl: 'https://blog.example/article#comment-42',
       websiteUrl: 'https://product.example',
+      commentId: '42',
     });
     expect(await loadManualModerationEntries(storage as never)).toEqual([
       expect.objectContaining({ id: 'manual-1', status: 'published' }),
