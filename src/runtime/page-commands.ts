@@ -3,6 +3,7 @@ import {
   type PageCommand,
   type PageCommandResult,
 } from '@/page/command';
+import { extractPromotedUrl } from '@/page/link-follow';
 import {
   type WordPressReceipt,
   matchesWordPressCommentPathname,
@@ -18,7 +19,10 @@ import type {
   PageSubmissionTarget,
   PreparedPageSubmission,
 } from '@/page/types';
-import { checkPublicComment } from '@/verify/public-comment';
+import {
+  type PublicCommentCriterion,
+  checkPublicComment,
+} from '@/verify/public-comment';
 
 const PAGE_COMMAND_SCRIPT = 'content-scripts/page-command.js';
 // Ad-heavy recipe pages can keep the content-script message channel busy well
@@ -425,7 +429,7 @@ export async function verifyTabSubmission(
   tabId: number,
   prepared: Pick<
     PreparedPageSubmission,
-    'fingerprint' | 'baseline' | 'websiteUrl'
+    'fingerprint' | 'baseline' | 'websiteUrl' | 'comment'
   >,
   expectedUrl: string
 ): Promise<PageSubmissionResult> {
@@ -529,7 +533,7 @@ export async function submitCurrentPage(
       ) {
         return unconfirmedSubmission(preparation.prepared.fingerprint);
       }
-      const promoted = { websiteUrl: input.websiteUrl };
+      const promoted = preparation.prepared;
       try {
         const result = readSubmission(
           await executePageCommand(tabId, {
@@ -624,10 +628,33 @@ function acceptedSubmission(fingerprint: string): PageSubmissionResult {
  * anonymous read finds may set `published`; a read that fails leaves the
  * in-page result alone rather than inventing either outcome.
  */
+/** The comment as a reader sees it. Whatever markup a link mode added is not
+ *  text, and the rendered page will not contain it either. */
+function commentText(comment: string): string {
+  return comment.replace(/<[^>]*>/g, ' ');
+}
+
+/**
+ * What "published" means for this particular submission, read off what was
+ * actually posted rather than off a settings flag. A promoted URL reaches the
+ * page either through the form's website field or as an anchor inside the
+ * comment body; when neither carries one, no link was ever meant to appear and
+ * demanding one would record every such comment as a stripped link.
+ */
+function publicationCriterion(
+  prepared: Pick<PreparedPageSubmission, 'comment' | 'websiteUrl'>
+): PublicCommentCriterion {
+  const promoted =
+    prepared.websiteUrl?.trim() || extractPromotedUrl(prepared.comment) || '';
+  return promoted
+    ? { kind: 'link', websiteUrl: promoted }
+    : { kind: 'comment_only' };
+}
+
 async function settlePublicly(
   result: PageSubmissionResult,
   receipt: WordPressReceipt | null,
-  prepared: Pick<PreparedPageSubmission, 'websiteUrl'>,
+  prepared: Pick<PreparedPageSubmission, 'comment' | 'websiteUrl'>,
   expectedUrl: string
 ): Promise<PageSubmissionResult> {
   const carried: PageSubmissionResult = receipt
@@ -650,19 +677,22 @@ async function settlePublicly(
     };
   }
   if (carried.status === 'pending_moderation') return carried;
-  const websiteUrl = prepared.websiteUrl ?? '';
   const accepted =
     Boolean(receipt) ||
     Boolean(carried.acceptance) ||
     carried.status === 'published';
-  // Nothing was accepted, or there is no promoted link to look for: a public
-  // read has no question to answer.
-  if (!accepted || !websiteUrl) return carried;
+  // Nothing was accepted, so a public read has no question to answer.
+  if (!accepted) return carried;
   const publicCheck = await checkPublicComment({
     // The receipt URL resolves to the right comment page by itself.
     pageUrl: receipt?.url ?? expectedUrl,
-    websiteUrl,
+    criterion: publicationCriterion(prepared),
     ...(receipt?.commentId ? { commentId: receipt.commentId } : {}),
+    // Without a server-assigned id, the comment's own text is the only handle
+    // the read has on it.
+    ...(receipt?.commentId
+      ? {}
+      : { fingerprint: commentText(prepared.comment) }),
   });
   if (publicCheck.visibility === 'visible') {
     return {

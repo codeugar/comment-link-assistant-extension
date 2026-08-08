@@ -1,3 +1,5 @@
+import type { LinkMode } from '@/types';
+
 export const DASHBOARD_PLAN_STATUSES = [
   'active',
   'completed',
@@ -162,6 +164,10 @@ export interface Attempt {
   /** Submit receipt: the page the comment landed on and the id the server gave
    *  it. Carried so an anonymous re-check can address this exact comment. */
   receipt?: { url: string; commentId?: string };
+  /** How this attempt was told to place its link. A `comment-only` attempt
+   *  never had a link to strip, so later verification needs this to know
+   *  what success meant instead of guessing from the outcome. */
+  linkMode?: LinkMode;
   error?: AttemptError;
   createdAt: number;
   updatedAt: number;
@@ -324,6 +330,24 @@ export function isFailedTargetStatus(
   status: PlanTargetStatus
 ): status is FailedPlanTargetStatus {
   return failedStatuses.has(status);
+}
+
+const retryableStatuses = new Set<PlanTargetStatus>([
+  'no_form',
+  'validation_error',
+  'failed',
+]);
+
+/**
+ * "Did this target produce a backlink?" and "is there any point running it
+ * again?" are different questions. `link_stripped` is where they diverge: the
+ * target failed, but a retry would post a second comment underneath one that
+ * is already public — which reads as spam to a moderator and can get the
+ * whole account's earlier comments deleted. So `link_stripped` stays inside
+ * `isFailedTargetStatus` but is never offered here.
+ */
+export function isRetryableTargetStatus(status: PlanTargetStatus): boolean {
+  return retryableStatuses.has(status);
 }
 
 export function isProcessedTargetStatus(status: PlanTargetStatus): boolean {

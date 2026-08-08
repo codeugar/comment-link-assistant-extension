@@ -1636,6 +1636,18 @@ input[type="checkbox"] {
   border-bottom: 0;
 }
 
+/* An entry that names no comment can never settle, so it reads as an action
+   the user has to take rather than as one more pending result. */
+.moderation-needs-permalink {
+  display: inline-block;
+  padding: 2px 7px;
+  color: var(--red-deep);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--red-deep) 10%, transparent);
+  border-radius: 5px;
+  cursor: help;
+}
+
 .moderation-table td:first-child strong,
 .moderation-table code {
   display: block;

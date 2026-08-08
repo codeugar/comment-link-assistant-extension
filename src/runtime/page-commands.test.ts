@@ -13,6 +13,7 @@ function htmlResponse(body: string, url = 'https://blog.example/article') {
     ok: true,
     status: 200,
     url,
+    headers: new Headers(),
     text: async () => body,
     json: async () => ({}),
   } as unknown as Response;
@@ -23,10 +24,45 @@ function restResponse(payload: unknown, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     url: '',
+    headers: new Headers(),
     json: async () => payload,
     text: async () => JSON.stringify(payload),
   } as unknown as Response;
 }
+
+const COMMENT_TEXT =
+  'A relevant comment about how the pricing table finally made sense.';
+
+/** The comment as WordPress core renders it, with the promoted URL on the
+ *  author byline where the default link mode puts it. */
+function publicComment(id: string, withLink = true): string {
+  const author = withLink
+    ? '<b class="fn"><a href="https://product.example" class="url">Wes</a></b>'
+    : '<b class="fn">Wes</b>';
+  return `<li id="comment-${id}" class="comment">
+    <article id="div-comment-${id}" class="comment-body">
+      <footer class="comment-meta"><div class="comment-author vcard">${author}</div></footer>
+      <div class="comment-content"><p>${COMMENT_TEXT}</p></div>
+    </article>
+  </li>`;
+}
+
+/** A page carrying a comments region and the REST root WordPress publishes, so
+ *  the read can fall through to `wp-json` when the HTML does not decide. */
+function wordPressPage(comments = ''): string {
+  return `<html><head>
+      <link rel="https://api.w.org/" href="https://blog.example/wp-json/" />
+    </head><body>
+      <div id="comments"><ol class="comment-list">${comments}</ol></div>
+    </body></html>`;
+}
+
+const preparedComment = {
+  fingerprint: 'A relevant comment',
+  comment: COMMENT_TEXT,
+  baseline: { feedbackMessages: [], renderedComment: false },
+  websiteUrl: 'https://product.example',
+};
 
 describe('page command runtime', () => {
   afterEach(() => {
@@ -364,11 +400,7 @@ describe('page command runtime', () => {
   });
 
   it('publishes only when the anonymous read finds the promoted link', async () => {
-    const prepared = {
-      fingerprint: 'A relevant comment',
-      baseline: { feedbackMessages: [], renderedComment: false },
-      websiteUrl: 'https://product.example',
-    };
+    const prepared = preparedComment;
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
@@ -379,16 +411,9 @@ describe('page command runtime', () => {
         acceptance: 'server_receipt',
       },
     });
-    const publicFetch = vi.fn().mockResolvedValue(
-      restResponse({
-        id: 539871,
-        link: 'https://blog.example/article#comment-539871',
-        content: {
-          rendered:
-            '<p>Useful <a href="https://product.example">Product</a></p>',
-        },
-      })
-    );
+    const publicFetch = vi
+      .fn()
+      .mockResolvedValue(htmlResponse(wordPressPage(publicComment('539871'))));
     vi.stubGlobal('fetch', publicFetch);
     vi.stubGlobal('chrome', {
       tabs: {
@@ -408,23 +433,20 @@ describe('page command runtime', () => {
       status: 'published',
       message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
       receipt: { commentId: '539871' },
-      publicCheck: { visibility: 'visible', method: 'wp_rest' },
+      publicCheck: { visibility: 'visible', method: 'html' },
     });
 
-    // The comment id from the receipt addresses the check, and it runs without
-    // the author's session.
+    // The page itself answers, so `wp-json` is never asked, and the one request
+    // made carries none of the author's session.
+    expect(publicFetch).toHaveBeenCalledTimes(1);
     expect(publicFetch).toHaveBeenCalledWith(
-      'https://blog.example/wp-json/wp/v2/comments/539871',
+      expect.stringContaining('https://blog.example/article'),
       expect.objectContaining({ credentials: 'omit', cache: 'no-store' })
     );
   });
 
   it('keeps a receipt-only comment pending when no visitor can see it', async () => {
-    const prepared = {
-      fingerprint: 'A relevant comment',
-      baseline: { feedbackMessages: [], renderedComment: false },
-      websiteUrl: 'https://product.example',
-    };
+    const prepared = preparedComment;
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
@@ -435,11 +457,14 @@ describe('page command runtime', () => {
         acceptance: 'server_receipt',
       },
     });
+    // The comment is on neither the public page nor the public REST route:
+    // the site took it and is holding it back.
     vi.stubGlobal(
       'fetch',
       vi
         .fn()
-        .mockResolvedValue(
+        .mockResolvedValueOnce(htmlResponse(wordPressPage()))
+        .mockResolvedValueOnce(
           restResponse({ code: 'rest_comment_invalid_id' }, 404)
         )
     );
@@ -465,11 +490,7 @@ describe('page command runtime', () => {
   });
 
   it('settles a public comment whose link the site stripped', async () => {
-    const prepared = {
-      fingerprint: 'A relevant comment',
-      baseline: { feedbackMessages: [], renderedComment: false },
-      websiteUrl: 'https://product.example',
-    };
+    const prepared = preparedComment;
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
@@ -482,13 +503,11 @@ describe('page command runtime', () => {
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        restResponse({
-          id: 539871,
-          link: 'https://blog.example/article#comment-539871',
-          content: { rendered: '<p>Useful, and no link at all</p>' },
-        })
-      )
+      vi
+        .fn()
+        .mockResolvedValue(
+          htmlResponse(wordPressPage(publicComment('539871', false)))
+        )
     );
     vi.stubGlobal('chrome', {
       tabs: {
@@ -514,11 +533,7 @@ describe('page command runtime', () => {
   });
 
   it('does not publish a comment only the submitting session can see', async () => {
-    const prepared = {
-      fingerprint: 'A relevant comment',
-      baseline: { feedbackMessages: [], renderedComment: false },
-      websiteUrl: 'https://product.example',
-    };
+    const prepared = preparedComment;
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
@@ -529,13 +544,19 @@ describe('page command runtime', () => {
         acceptance: 'rendered_locally',
       },
     });
+    // No receipt to name the comment, so the read looks for its text — and the
+    // public comment list holds someone else's comment, not ours.
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          htmlResponse('<div id="comments">no comment of ours here</div>')
+      vi.fn().mockResolvedValue(
+        htmlResponse(
+          wordPressPage(
+            `<li id="comment-7" class="comment"><div class="comment-content">
+                 <p>Someone else entirely, writing about something different.</p>
+               </div></li>`
+          )
         )
+      )
     );
     vi.stubGlobal('chrome', {
       tabs: {
@@ -558,11 +579,7 @@ describe('page command runtime', () => {
   });
 
   it('verifies a paginated anchor in-page using the promoted URL', async () => {
-    const prepared = {
-      fingerprint: 'A relevant comment',
-      baseline: { feedbackMessages: [], renderedComment: false },
-      websiteUrl: 'https://product.example',
-    };
+    const prepared = preparedComment;
     const sendMessage = vi.fn().mockResolvedValue({
       type: 'submission',
       result: {
@@ -573,18 +590,23 @@ describe('page command runtime', () => {
       },
     });
     const executeScript = vi.fn();
+    // The rendered list is paginated, so the comment is not in this page's
+    // HTML. The REST route the page itself publishes settles it.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        restResponse({
-          id: 99,
-          link: 'https://blog.example/article/comment-page-2/#comment-99',
-          content: {
-            rendered:
-              '<p>Nice <a href="https://product.example">Product</a></p>',
-          },
-        })
-      )
+      vi
+        .fn()
+        .mockResolvedValueOnce(htmlResponse(wordPressPage()))
+        .mockResolvedValueOnce(
+          restResponse({
+            id: 99,
+            link: 'https://blog.example/article/comment-page-2/#comment-99',
+            content: {
+              rendered:
+                '<p>Nice <a href="https://product.example">Product</a></p>',
+            },
+          })
+        )
     );
     vi.stubGlobal('chrome', {
       tabs: {
@@ -620,6 +642,7 @@ describe('page command runtime', () => {
   it('verifies in-page on a paginated-comments path without a receipt', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
+      comment: COMMENT_TEXT,
       baseline: { feedbackMessages: [], renderedComment: false },
     };
     const result = {
@@ -652,6 +675,7 @@ describe('page command runtime', () => {
   it('injects immediately when verification needs the content script', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
+      comment: COMMENT_TEXT,
       baseline: { feedbackMessages: [], renderedComment: false },
     };
     const result = {
@@ -706,6 +730,7 @@ describe('page command runtime', () => {
   it('rejects verification after the tab navigates to another article', async () => {
     const prepared = {
       fingerprint: 'A relevant comment',
+      comment: COMMENT_TEXT,
       baseline: { feedbackMessages: [], renderedComment: false },
     };
     const executeScript = vi.fn().mockResolvedValue([]);

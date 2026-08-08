@@ -14,13 +14,15 @@ import {
   type AnchorPlan,
 } from '@/anchor/types';
 import type { BatchItem, BatchSnapshot } from '@/batch/types';
-import type {
-  DashboardSummary,
-  Plan,
-  PlanBatch,
-  RecentFailureSummary,
-  ScheduledBatchSummary,
-  TargetHostSummary,
+import {
+  type DashboardSummary,
+  type Plan,
+  type PlanBatch,
+  type PlanTargetStatus,
+  type RecentFailureSummary,
+  type ScheduledBatchSummary,
+  type TargetHostSummary,
+  isFailedTargetStatus,
 } from '@/dashboard/model';
 import {
   type NewPlanSource,
@@ -311,10 +313,10 @@ function percent(value: number, total: number): number {
   return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
 }
 
+// Delegates rather than repeating the list: a second copy is how the badge and
+// the target detail ended up disagreeing about `link_stripped`.
 function isFailedTarget(status: string): boolean {
-  return (
-    status === 'failed' || status === 'no_form' || status === 'validation_error'
-  );
+  return isFailedTargetStatus(status as PlanTargetStatus);
 }
 
 function isFinishedBatch(status: PlanBatch['status']): boolean {
@@ -414,9 +416,7 @@ function batchCounts(batch: BatchSnapshot | null) {
       submitted += 1;
     } else if (item.status === 'unconfirmed' || item.status === 'submitted') {
       unconfirmed += 1;
-    } else if (item.status === 'link_stripped' || isFailedTarget(item.status)) {
-      failed += 1;
-    }
+    } else if (isFailedTarget(item.status)) failed += 1;
   }
   const processed = submitted + unconfirmed + failed;
   return {
@@ -1470,9 +1470,7 @@ function PlanList({
 }
 
 function TargetStatusBadge({ status }: { status: string }) {
-  // A public comment with no link reads as a failure here: the run produced
-  // nothing, and grouping it with successes would overstate the result.
-  const failed = isFailedTarget(status) || status === 'link_stripped';
+  const failed = isFailedTarget(status);
   const success = status === 'published';
   const moderation = status === 'pending_moderation';
   const unconfirmed = status === 'unconfirmed' || status === 'submitted';

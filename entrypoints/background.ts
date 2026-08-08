@@ -43,6 +43,7 @@ import {
   loadModerationRecheckLastRun,
   loadModerationRecheckSettings,
   moderationResultFromPublicCheck,
+  publicCommentCriterion,
   recheckManualModerationEntry,
   runManualModerationRechecks,
   saveModerationRecheckLastRun,
@@ -450,6 +451,7 @@ async function getModerationRecheckDashboard(): Promise<ModerationRecheckDashboa
           fingerprint: entry.targetWebsiteUrl,
           targetWebsiteUrl: entry.targetWebsiteUrl,
           checkCount: entry.checkCount,
+          needsCommentPermalink: entry.needsCommentPermalink,
           ...(entry.lastCheckAt ? { lastCheckAt: entry.lastCheckAt } : {}),
           ...(entry.lastCheckMessage
             ? { lastCheckMessage: entry.lastCheckMessage }
@@ -511,7 +513,11 @@ async function recheckDashboardTarget(
     result = moderationResultFromPublicCheck(
       await createPublicCommentPort().check({
         pageUrl: attempt.receipt?.url ?? target.url,
-        websiteUrl: planDetail.plan.promotingWebsiteUrl,
+        fingerprint,
+        criterion: publicCommentCriterion(
+          attempt.linkMode,
+          planDetail.plan.promotingWebsiteUrl
+        ),
         ...(attempt.receipt?.commentId
           ? { commentId: attempt.receipt.commentId }
           : {}),

@@ -2,7 +2,6 @@ import { attachLinkFollow, extractPromotedUrl } from './link-follow';
 import { getWordPressSubmitReceipt } from './receipts';
 import type {
   CommentFormSummary,
-  ModerationCheckResult,
   PageAnalysis,
   PageSubmissionBaseline,
   PageSubmissionExpectation,

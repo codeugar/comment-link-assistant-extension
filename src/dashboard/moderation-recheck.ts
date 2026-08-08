@@ -1,6 +1,8 @@
 import type { ModerationCheckResult } from '@/page/types';
+import type { LinkMode } from '@/types';
 import {
   type PublicCommentCheck,
+  type PublicCommentCriterion,
   type PublicCommentQuery,
   checkPublicComment,
 } from '@/verify/public-comment';
@@ -39,6 +41,11 @@ export interface ManualModerationEntry {
   targetWebsiteUrl: string;
   /** WordPress comment id, when the submit receipt captured one. */
   commentId?: string;
+  /** True when no `#comment-<id>` could be read out of the pasted URL. A
+   *  manual entry carries no comment text, so that permalink is the only
+   *  thing that can say which comment on the page belongs to the user —
+   *  without it, no read of the page may settle this entry. */
+  needsCommentPermalink: boolean;
   status: 'pending_moderation' | 'published' | 'link_stripped';
   checkCount: number;
   lastCheckAt?: number;
@@ -60,6 +67,9 @@ export interface ModerationQueueItem {
   checkCount: number;
   lastCheckAt?: number;
   lastCheckMessage?: string;
+  /** Manual entries only: the pasted URL names no comment, so no read of that
+   *  page can be attributed to this user and the entry can never settle. */
+  needsCommentPermalink?: boolean;
 }
 
 export interface ModerationPublishedRecord {
@@ -164,7 +174,13 @@ export async function loadManualModerationEntries(
 ): Promise<ManualModerationEntry[]> {
   const stored = await storage.get(MANUAL_MODERATION_ENTRIES_STORAGE_KEY);
   const entries = stored[MANUAL_MODERATION_ENTRIES_STORAGE_KEY];
-  return Array.isArray(entries) ? (entries as ManualModerationEntry[]) : [];
+  if (!Array.isArray(entries)) return [];
+  // Derived from the comment id rather than trusted from storage, so rows
+  // written before this flag existed do not read back as identified.
+  return (entries as ManualModerationEntry[]).map((entry) => ({
+    ...entry,
+    needsCommentPermalink: !entry.commentId,
+  }));
 }
 
 export async function addManualModerationEntry(
@@ -186,15 +202,15 @@ export async function addManualModerationEntry(
   ) {
     throw new Error('MODERATION_RECHECK_ENTRY_EXISTS');
   }
+  // A pasted `#comment-<id>` link is the exact handle the re-check wants; the
+  // hash is preserved above precisely so it can be read here.
+  const commentId = readCommentIdFromUrl(pageUrl);
   const entry: ManualModerationEntry = {
     id: idFactory(),
     pageUrl,
     targetWebsiteUrl,
-    // A pasted `#comment-<id>` link is the exact handle the re-check wants; the
-    // hash is preserved above precisely so it can be read here.
-    ...(readCommentIdFromUrl(pageUrl)
-      ? { commentId: readCommentIdFromUrl(pageUrl) as string }
-      : {}),
+    ...(commentId ? { commentId } : {}),
+    needsCommentPermalink: !commentId,
     status: 'pending_moderation',
     checkCount: 0,
     createdAt: now,
@@ -258,6 +274,23 @@ export function createPublicCommentPort(): PublicCommentPort {
   return { check: (query) => checkPublicComment(query) };
 }
 
+/**
+ * The success criterion a target was submitted under: a link inside the
+ * comment, or the comment by itself. This is the one place that rule is
+ * written down; both the queue builder and a one-off manual re-check call it
+ * so a `comment-only` attempt is never re-judged as if it needed a link. An
+ * attempt from before `linkMode` was recorded has no way to say that, so it
+ * falls to `link` — the only behaviour it ever had.
+ */
+export function publicCommentCriterion(
+  linkMode: LinkMode | undefined,
+  promotedWebsiteUrl: string
+): PublicCommentCriterion {
+  return linkMode === 'comment-only'
+    ? { kind: 'comment_only' }
+    : { kind: 'link', websiteUrl: promotedWebsiteUrl };
+}
+
 /** Maps a public read onto the states this job records. Only `visible` and
  *  `link_stripped` are decisions; everything else keeps the item queued. */
 export function moderationResultFromPublicCheck(
@@ -302,14 +335,22 @@ export async function recheckManualModerationEntry(
   try {
     const check = await port.check({
       pageUrl: entry.pageUrl,
-      websiteUrl: entry.targetWebsiteUrl,
+      criterion: { kind: 'link', websiteUrl: entry.targetWebsiteUrl },
       ...(entry.commentId ? { commentId: entry.commentId } : {}),
     });
-    return await recordManualModerationResult(
-      entry.id,
-      moderationResultFromPublicCheck(check),
-      storage
-    );
+    const result = moderationResultFromPublicCheck(check);
+    // A manual entry carries no comment text, so a pasted `#comment-<id>`
+    // permalink is the only thing that ties a page-wide read to this user's
+    // comment. Without one, a "published" or "link_stripped" verdict could
+    // belong to any comment on the page and must not settle this entry.
+    const settled: Pick<ModerationCheckResult, 'status' | 'message'> =
+      entry.commentId || result.status === 'pending_moderation'
+        ? result
+        : {
+            status: 'pending_moderation',
+            message: 'COMMENT_PENDING_MODERATION_NEEDS_PERMALINK',
+          };
+    return await recordManualModerationResult(entry.id, settled, storage);
   } catch {
     return await recordManualModerationResult(
       entry.id,
@@ -463,7 +504,12 @@ export class PendingModerationRecheckCoordinator {
           await this.port.check({
             // The receipt URL resolves to the right comment page by itself.
             pageUrl: check.receiptUrl ?? check.url,
-            websiteUrl: check.targetWebsiteUrl,
+            // The task that created this comment already decided what success
+            // means; forward that decision instead of rebuilding it from
+            // `targetWebsiteUrl`, which is what recorded every `comment-only`
+            // comment as a terminal `link_stripped` failure.
+            criterion: check.criterion,
+            fingerprint: check.fingerprint,
             ...(check.commentId ? { commentId: check.commentId } : {}),
           }),
           check.fingerprint

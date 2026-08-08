@@ -1,4 +1,5 @@
 import type { BatchItemStatus, BatchSnapshot } from '@/batch/types';
+import type { PublicCommentCriterion } from '@/verify/public-comment';
 import {
   type Attempt,
   type AttemptError,
@@ -28,7 +29,9 @@ import {
   countTargetStatuses,
   isFailedTargetStatus,
   isProcessedTargetStatus,
+  isRetryableTargetStatus,
 } from './model';
+import { publicCommentCriterion } from './moderation-recheck';
 
 export const DASHBOARD_DB_NAME = 'comment-link-assistant.dashboard';
 export const DASHBOARD_DB_VERSION = 1;
@@ -161,6 +164,10 @@ export interface PendingModerationCheck {
   url: string;
   targetWebsiteUrl: string;
   fingerprint: string;
+  /** What "published" meant for this target: a link inside the comment, or
+   *  just the comment itself. Comes from the attempt's own linkMode so this
+   *  job never has to reconstruct it from the plan's promoted URL. */
+  criterion: PublicCommentCriterion;
   /** Server-assigned comment id from the submit receipt, when one was captured.
    *  With it the public re-check is exact instead of text-matched. */
   commentId?: string;
@@ -1193,6 +1200,10 @@ export class DashboardRepository {
             url: target.url,
             targetWebsiteUrl: plan.promotingWebsiteUrl,
             fingerprint,
+            criterion: publicCommentCriterion(
+              attempt.linkMode,
+              plan.promotingWebsiteUrl
+            ),
             ...(attempt.receipt?.commentId
               ? { commentId: attempt.receipt.commentId }
               : {}),
@@ -1914,7 +1925,7 @@ export class DashboardRepository {
           if (requestedTargetIds && !requestedTargetIds.has(target.id)) {
             return false;
           }
-          if (kind === 'retry') return isFailedTargetStatus(target.status);
+          if (kind === 'retry') return isRetryableTargetStatus(target.status);
           if (kind === 'resume') {
             return (
               target.status === 'pending' ||
@@ -2126,6 +2137,9 @@ export class DashboardRepository {
           const fingerprint = comment
             ? commentFingerprint(comment)
             : existing?.commentFingerprint;
+          // Legacy snapshots predate this field, so a synced update from one
+          // must not erase the linkMode an earlier sync already recorded.
+          const linkMode = snapshot.settings.linkMode ?? existing?.linkMode;
           const attempt: Attempt = {
             id: identifier,
             runId: run.id,
@@ -2140,6 +2154,7 @@ export class DashboardRepository {
             })),
             ...(comment ? { comment } : {}),
             ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+            ...(linkMode ? { linkMode } : {}),
             ...((item.receipt ?? existing?.receipt)
               ? { receipt: item.receipt ?? existing?.receipt }
               : {}),
@@ -2326,6 +2341,10 @@ export class DashboardRepository {
             const fingerprint = comment
               ? commentFingerprint(comment)
               : existingAttempt?.commentFingerprint;
+            // Legacy snapshots predate this field, so a synced update from one
+            // must not erase the linkMode an earlier sync already recorded.
+            const linkMode =
+              snapshot.settings.linkMode ?? existingAttempt?.linkMode;
             const attempt: Attempt = {
               id: existingAttempt?.id ?? attemptId(run.id, target.id),
               runId: run.id,
@@ -2343,6 +2362,7 @@ export class DashboardRepository {
               })),
               ...(comment ? { comment } : {}),
               ...(fingerprint ? { commentFingerprint: fingerprint } : {}),
+              ...(linkMode ? { linkMode } : {}),
               ...((item.receipt ?? existingAttempt?.receipt)
                 ? { receipt: item.receipt ?? existingAttempt?.receipt }
                 : {}),

@@ -24,6 +24,7 @@ const checks: PendingModerationCheck[] = [
     url: 'https://blog.example/one',
     targetWebsiteUrl: 'https://product.example',
     fingerprint: 'A useful generated comment',
+    criterion: { kind: 'link', websiteUrl: 'https://product.example' },
     checkCount: 0,
   },
   {
@@ -34,6 +35,7 @@ const checks: PendingModerationCheck[] = [
     url: 'https://blog.example/two',
     targetWebsiteUrl: 'https://product.example',
     fingerprint: 'Another useful generated comment',
+    criterion: { kind: 'link', websiteUrl: 'https://product.example' },
     checkCount: 0,
   },
 ];
@@ -151,7 +153,7 @@ describe('pending moderation recheck', () => {
     // The pasted permalink already names the comment, so the check is exact.
     expect(port.check).toHaveBeenCalledWith({
       pageUrl: 'https://blog.example/article#comment-42',
-      websiteUrl: 'https://product.example',
+      criterion: { kind: 'link', websiteUrl: 'https://product.example' },
       commentId: '42',
     });
     expect(await loadManualModerationEntries(storage as never)).toEqual([
@@ -232,7 +234,8 @@ describe('pending moderation recheck', () => {
     // Addressed by the id the server assigned, on the receipt URL.
     expect(port.check).toHaveBeenCalledWith({
       pageUrl: 'https://blog.example/one#comment-4242',
-      websiteUrl: checks[0]!.targetWebsiteUrl,
+      criterion: checks[0]!.criterion,
+      fingerprint: checks[0]!.fingerprint,
       commentId: '4242',
     });
   });

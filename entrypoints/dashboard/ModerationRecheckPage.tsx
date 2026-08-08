@@ -69,6 +69,9 @@ const zh = {
   captcha: '页面要求验证码，保持待显示',
   notVisible: '尚未检测到公开评论',
   nowVisible: '已检测到公开评论',
+  needsPermalink: '需要评论永久链接',
+  needsPermalinkHint:
+    '这条只填了页面地址，无法确定页面上哪条评论是你的，检查不会给出结论。请删除后改填评论的永久链接（点评论上的时间即可复制，形如 …#comment-123）。',
 };
 
 const en: typeof zh = {
@@ -121,6 +124,9 @@ const en: typeof zh = {
   captcha: 'CAPTCHA required; kept pending',
   notVisible: 'Public comment not detected yet',
   nowVisible: 'Public comment detected',
+  needsPermalink: 'Comment permalink needed',
+  needsPermalinkHint:
+    'This entry has only a page URL, so no check can tell which comment on that page is yours and it will never reach a verdict. Remove it and add the comment permalink instead — clicking the comment timestamp copies one, in the form …#comment-123.',
 };
 
 function c(key: keyof typeof zh, values: Array<string | number> = []): string {
@@ -440,7 +446,18 @@ export function ModerationRecheckPage() {
                         <code title={item.fingerprint}>{item.fingerprint}</code>
                       </td>
                       <td>{item.checkCount}</td>
-                      <td>{resultCopy(item.lastCheckMessage)}</td>
+                      <td>
+                        {item.needsCommentPermalink ? (
+                          <span
+                            className="moderation-needs-permalink"
+                            title={c('needsPermalinkHint')}
+                          >
+                            {c('needsPermalink')}
+                          </span>
+                        ) : (
+                          resultCopy(item.lastCheckMessage)
+                        )}
+                      </td>
                       <td>{formatTimestamp(item.lastCheckAt)}</td>
                       <td>
                         <span className="moderation-row-actions">

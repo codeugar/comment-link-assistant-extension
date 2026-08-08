@@ -129,7 +129,10 @@ export interface BatchRunnerDependencies {
   ): Promise<PageSubmissionResult>;
   verifyTabSubmission(
     tabId: number,
-    prepared: Pick<PreparedPageSubmission, 'fingerprint' | 'baseline'>,
+    prepared: Pick<
+      PreparedPageSubmission,
+      'fingerprint' | 'baseline' | 'websiteUrl' | 'comment'
+    >,
     expectedUrl: string,
     batchId: string
   ): Promise<PageSubmissionResult>;
