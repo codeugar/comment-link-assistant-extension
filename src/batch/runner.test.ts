@@ -978,6 +978,33 @@ describe('batch runner', () => {
     expect(context.read()?.items[0]).toMatchObject({ status: 'no_form' });
   });
 
+  it('activates the worker tab and retries when background analysis finds no form', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const analyzeTab = vi
+      .fn()
+      .mockResolvedValueOnce(analysis('not_found'))
+      .mockResolvedValueOnce(analysis('ready'));
+    const activateWorkerTab = vi.fn(async () => true);
+    const context = dependencies(batch, {
+      analyzeTab,
+      activateWorkerTab,
+      waitForForegroundSettle: vi.fn(async () => undefined),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(activateWorkerTab).toHaveBeenCalledWith(7, 'batch-1');
+    expect(analyzeTab).toHaveBeenCalledTimes(2);
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'generating',
+      analysis: { form: { readiness: 'ready' } },
+    });
+  });
+
   it('keeps the inline comment link while filling any detected website field', async () => {
     const planned = analysis();
     planned.form.hasWebsiteField = true;

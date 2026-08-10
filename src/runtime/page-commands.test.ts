@@ -181,8 +181,291 @@ describe('page command runtime', () => {
 
     await expect(analyzeTab(42)).resolves.toEqual(analysis);
 
-    expect(executeScript).toHaveBeenCalledTimes(1);
+    expect(executeScript).toHaveBeenCalledTimes(2);
+    expect(
+      executeScript.mock.calls.filter(([options]) => options.files)
+    ).toHaveLength(1);
     expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets Verbum mount through short exponential probes before starting analyze', async () => {
+    vi.useFakeTimers();
+    const analysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: 'Description',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: true,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment',
+        submitLabel: 'comment-submit',
+        hasNameField: true,
+        hasEmailField: true,
+        hasWebsiteField: true,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    document.body.innerHTML = '<div class="comment-form__verbum"></div>';
+    const shell = document.querySelector('.comment-form__verbum');
+    if (!(shell instanceof HTMLElement)) throw new Error('test shell missing');
+    const scrollIntoView = vi.fn();
+    shell.scrollIntoView = scrollIntoView;
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The preflight is running in the page and the full listener has not been
+    // injected while Verbum is still mounting.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(executeScript).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(executeScript).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    shell.innerHTML = `
+      <textarea id="comment" name="comment"></textarea>
+      <button id="comment-submit" type="submit">Comment</button>
+    `;
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(pending).resolves.toEqual(analysis);
+    expect(executeScript).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'ready' },
+    });
+  });
+
+  it('waits for a WordPress.com Verbum shell that mounts only after its comment region is scrolled', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('location', { hostname: 'thorsaurus.wordpress.com' });
+    const analysis = {
+      page: {
+        url: 'https://thorsaurus.wordpress.com/article',
+        title: 'Article',
+        description: '',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment',
+        submitLabel: 'comment-submit',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    document.body.innerHTML = '<section id="comments"></section>';
+    const comments = document.getElementById('comments');
+    if (!comments) throw new Error('test comment region missing');
+    const scrollIntoView = vi.fn();
+    comments.scrollIntoView = scrollIntoView;
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalled();
+    comments.innerHTML = `
+      <form id="commentform">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment"></textarea>
+          <button id="comment-submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(pending).resolves.toEqual(analysis);
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'ready' },
+    });
+  });
+
+  it('declares a dormant hosted WordPress source textarea ready without a trusted click', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('location', { hostname: 'carolcooks2.com' });
+    document.head.innerHTML = '<meta name="generator" content="WordPress.com">';
+    document.body.innerHTML = `
+      <form id="commentform">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment" placeholder="Write a comment..." style="display:none"></textarea>
+          <button id="comment-submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    const analysis = {
+      page: {
+        url: 'https://carolcooks2.com/article',
+        title: 'Article',
+        description: '',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment',
+        submitLabel: 'comment-submit',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(pending).resolves.toEqual(analysis);
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'ready' },
+    });
+  });
+
+  it('does not finish Verbum preflight while the mounted form is still transparent', async () => {
+    vi.useFakeTimers();
+    const analysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: '',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment',
+        submitLabel: 'comment-submit',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    document.body.innerHTML = `
+      <form id="commentform">
+        <div class="comment-form__verbum" style="opacity: 0">
+          <textarea id="comment" name="comment"></textarea>
+          <button id="comment-submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    const shell = document.querySelector('.comment-form__verbum');
+    if (!(shell instanceof HTMLElement)) throw new Error('test shell missing');
+    shell.scrollIntoView = vi.fn();
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    shell.style.opacity = '1';
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual(analysis);
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'ready' },
+    });
   });
 
   it('reports a failed navigation as an unreachable target, not a Chrome internal', async () => {
@@ -992,10 +1275,10 @@ describe('page command runtime', () => {
       () => outcome('rejected')
     );
 
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(74_999);
     expect(outcome).not.toHaveBeenCalled();
 
-    // Analyze still has a hard 30s bound so it can never hang forever.
+    // Analyze leaves room for the 60s Verbum mount window plus page settle.
     await vi.advanceTimersByTimeAsync(1);
     expect(outcome).toHaveBeenCalledWith('rejected');
     await expect(pending).rejects.toThrow('PAGE_COMMAND_TIMEOUT');

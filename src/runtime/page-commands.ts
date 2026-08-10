@@ -39,7 +39,10 @@ const JETPACK_FRAME_POLL_INTERVAL_MS = 250;
 // mutation waits) and has no double-submit risk, so it gets generous headroom.
 // Mutating commands (submit.prepare / submit.click / verify) use the bounded
 // 2-minute window above.
-const ANALYZE_COMMAND_TIMEOUT_MS = 30_000;
+const ANALYZE_COMMAND_TIMEOUT_MS = 75_000;
+const VERBUM_PREFLIGHT_TIMEOUT_MS = 60_000;
+const VERBUM_PREFLIGHT_INITIAL_DELAY_MS = 250;
+const VERBUM_PREFLIGHT_MAX_DELAY_MS = 4_000;
 const activeSubmissionTabs = new Set<number>();
 
 // A tab whose navigation failed (DNS, refused, timeout, cert) keeps the target
@@ -128,8 +131,121 @@ async function executePageCommand(
       throw error;
     }
   }
+  const verbumPreflight =
+    command.type === 'analyze' ? await runAnalyzePreflight(tabId) : undefined;
   await injectPageCommandScript({ tabId }, command);
+  if (command.type === 'analyze' && verbumPreflight) {
+    return sendPageCommand(tabId, { ...command, verbumPreflight });
+  }
   return sendPageCommand(tabId, command);
+}
+
+async function runAnalyzePreflight(
+  tabId: number
+): Promise<'ready' | 'timed_out' | undefined> {
+  try {
+    const [execution] = await withPageCommandTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (
+          timeoutMs: number,
+          initialDelayMs: number,
+          maxDelayMs: number
+        ) => {
+          const deadline = Date.now() + timeoutMs;
+          let delayMs = initialDelayMs;
+          let sawVerbum = false;
+          const generator = document.querySelector<HTMLMetaElement>(
+            'meta[name="generator"]'
+          )?.content;
+          const hostedWordPress =
+            location.hostname === 'wordpress.com' ||
+            location.hostname.endsWith('.wordpress.com') ||
+            /wordpress\.com/i.test(generator ?? '') ||
+            Boolean(
+              document.querySelector(
+                'link[href*=".wp.com/"], script[src*=".wp.com/"]'
+              )
+            );
+          const isVisible = (element: Element): boolean => {
+            let current: Element | null = element;
+            while (current) {
+              const style = getComputedStyle(current);
+              if (
+                (current as HTMLElement).hidden ||
+                current.getAttribute('aria-hidden') === 'true' ||
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                Number.parseFloat(style.opacity || '1') <= 0.01
+              ) {
+                return false;
+              }
+              current = current.parentElement;
+            }
+            return true;
+          };
+          for (;;) {
+            const shell = document.querySelector('.comment-form__verbum');
+            const scrollTarget =
+              shell ??
+              (hostedWordPress
+                ? document.querySelector(
+                    '#comments, #respond, .comment-respond, [id*="comment"]'
+                  )
+                : null);
+            scrollTarget?.scrollIntoView({ block: 'center' });
+            if (shell) {
+              sawVerbum = true;
+              const editor = document.querySelector(
+                'textarea#comment, textarea[name="comment"]'
+              );
+              const submit = document.querySelector(
+                '#submit, button#comment-submit, input[type="submit"][name="submit"], button[type="submit"][name="submit"], .comment-submit'
+              );
+              const verbumSourceEditor = Boolean(
+                editor?.matches('textarea#comment') && shell.contains(editor)
+              );
+              if (
+                editor &&
+                submit &&
+                (isVisible(editor) || verbumSourceEditor) &&
+                isVisible(submit)
+              ) {
+                return 'ready' as const;
+              }
+            } else if (!hostedWordPress && document.readyState !== 'loading') {
+              return 'not_verbum' as const;
+            }
+
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) {
+              return sawVerbum
+                ? ('timed_out' as const)
+                : ('not_verbum' as const);
+            }
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(delayMs, remainingMs))
+            );
+            delayMs = Math.min(delayMs * 2, maxDelayMs);
+          }
+        },
+        args: [
+          VERBUM_PREFLIGHT_TIMEOUT_MS,
+          VERBUM_PREFLIGHT_INITIAL_DELAY_MS,
+          VERBUM_PREFLIGHT_MAX_DELAY_MS,
+        ],
+      }),
+      ANALYZE_COMMAND_TIMEOUT_MS
+    );
+    const result = execution?.result;
+    return result === 'ready' || result === 'timed_out' ? result : undefined;
+  } catch (error) {
+    if (injectionRejectedByErrorPage(error)) {
+      throw new Error('TARGET_PAGE_UNREACHABLE');
+    }
+    throw error;
+  }
 }
 
 async function sendPageCommand(
