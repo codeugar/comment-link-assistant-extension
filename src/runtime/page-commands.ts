@@ -40,9 +40,14 @@ const JETPACK_FRAME_POLL_INTERVAL_MS = 250;
 // Mutating commands (submit.prepare / submit.click / verify) use the bounded
 // 2-minute window above.
 const ANALYZE_COMMAND_TIMEOUT_MS = 75_000;
-const VERBUM_PREFLIGHT_TIMEOUT_MS = 60_000;
+// The preflight asks the page for its Verbum bundle instead of waiting on the
+// lazy loader, so a mount lands about a second after the request. The window
+// covers the slower half of that: a background tab loads at a deprioritized
+// pace, and the script registry that serves the request appears only once the
+// page itself has fetched it (measured at ~15s on a heavy hosted blog).
+const VERBUM_PREFLIGHT_TIMEOUT_MS = 30_000;
 const VERBUM_PREFLIGHT_INITIAL_DELAY_MS = 250;
-const VERBUM_PREFLIGHT_MAX_DELAY_MS = 4_000;
+const VERBUM_PREFLIGHT_MAX_DELAY_MS = 1_000;
 const activeSubmissionTabs = new Set<number>();
 
 // A tab whose navigation failed (DNS, refused, timeout, cert) keeps the target
@@ -168,6 +173,31 @@ async function runAnalyzePreflight(
                 'link[href*=".wp.com/"], script[src*=".wp.com/"]'
               )
             );
+          // WordPress.com only downloads the Verbum bundle once an
+          // IntersectionObserver reports #commentform on screen. A worker tab
+          // runs in the background, where the browser skips rendering
+          // altogether, so that callback never fires and the form never mounts
+          // however long analyze waits. Ask the page's own script registry for
+          // the bundle instead: it dedupes by handle, and a page without the
+          // registry simply falls back to the observer.
+          let bundleRequested = false;
+          const requestVerbumBundle = (): void => {
+            if (bundleRequested) return;
+            const registry = (
+              window as Window & {
+                WP_Enqueue_Dynamic_Script?: {
+                  loadScript?: (handle: string) => unknown;
+                };
+              }
+            ).WP_Enqueue_Dynamic_Script;
+            if (typeof registry?.loadScript !== 'function') return;
+            bundleRequested = true;
+            try {
+              registry.loadScript('verbum');
+            } catch {
+              // An unregistered handle leaves the lazy loader as the only path.
+            }
+          };
           const isVisible = (element: Element): boolean => {
             let current: Element | null = element;
             while (current) {
@@ -214,6 +244,7 @@ async function runAnalyzePreflight(
               ) {
                 return 'ready' as const;
               }
+              requestVerbumBundle();
             } else if (!hostedWordPress && document.readyState !== 'loading') {
               return 'not_verbum' as const;
             }

@@ -107,7 +107,11 @@ const PREPARATION_TTL_MS = 2 * 60_000;
 // form is present early. These bounds keep the settle deterministic and short.
 const ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS = 5_000;
 const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
-const VERBUM_FORM_WAIT_TIMEOUT_MS = 60_000;
+// The runtime preflight asks the page for the Verbum bundle rather than waiting
+// on its viewport-triggered loader, so a mount lands within seconds. Waiting
+// longer than that never helps: a shell that is still empty means the bundle
+// never arrived, and no amount of polling makes a background tab render.
+const VERBUM_FORM_WAIT_TIMEOUT_MS = 15_000;
 const VERBUM_PREFLIGHT_HANDOFF_TIMEOUT_MS = 10_000;
 const VERBUM_IDENTITY_WAIT_TIMEOUT_MS = 2_000;
 const VERBUM_BACKOFF_INITIAL_MS = 250;

@@ -990,8 +990,8 @@ async function advanceAnalysis(
   // Load-tolerant analyze: an on-target tab (no pending navigation, same page —
   // already asserted above) that is still `loading` can be analyzed after a
   // short settle. analyze() self-settles heavy pages and has its own generous
-  // timeout (including the 60s Verbum mount window), so we no longer
-  // dead-wait for `complete`.
+  // timeout (including the Verbum mount window), so we no longer dead-wait for
+  // `complete`.
   if (
     tab.status !== 'complete' &&
     !canUsePartialPage(item, tab) &&

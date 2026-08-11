@@ -263,6 +263,149 @@ describe('page command runtime', () => {
     });
   });
 
+  it('asks the page for the Verbum bundle instead of waiting on its viewport loader', async () => {
+    vi.useFakeTimers();
+    const analysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: '',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'ready' as const,
+        editorLabel: 'comment',
+        submitLabel: 'comment-submit',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'COMMENT_FORM_READY',
+      },
+    };
+    document.head.innerHTML = '';
+    document.body.innerHTML = `
+      <form id="commentform">
+        <div class="comment-form__verbum"></div>
+      </form>
+    `;
+    const shell = document.querySelector('.comment-form__verbum');
+    if (!(shell instanceof HTMLElement)) throw new Error('test shell missing');
+    shell.scrollIntoView = vi.fn();
+    // Stands in for the page's script registry: fetching the bundle is what
+    // mounts the form. Left to itself the page only fetches it when an
+    // IntersectionObserver reports the form on screen, which a background tab
+    // never delivers because it never renders.
+    const loadScript = vi.fn((handle: string) => {
+      if (handle !== 'verbum') return;
+      shell.innerHTML = `
+        <textarea id="comment" name="comment"></textarea>
+        <button id="comment-submit" type="submit">Comment</button>
+      `;
+    });
+    vi.stubGlobal('WP_Enqueue_Dynamic_Script', { loadScript });
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(pending).resolves.toEqual(analysis);
+    expect(loadScript).toHaveBeenCalledWith('verbum');
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'ready' },
+    });
+  });
+
+  it('requests the Verbum bundle once and hands a timed-out preflight to the page', async () => {
+    vi.useFakeTimers();
+    const analysis = {
+      page: {
+        url: 'https://blog.example/article',
+        title: 'Article',
+        description: '',
+        excerpt: 'Excerpt',
+        language: 'en',
+        hasWebsiteField: false,
+      },
+      form: {
+        readiness: 'not_found' as const,
+        editorLabel: '',
+        submitLabel: '',
+        hasNameField: false,
+        hasEmailField: false,
+        hasWebsiteField: false,
+        message: 'VERBUM_COMMENT_FORM_TIMEOUT',
+      },
+    };
+    document.head.innerHTML = '';
+    document.body.innerHTML = `
+      <form id="commentform">
+        <div class="comment-form__verbum"></div>
+      </form>
+    `;
+    const shell = document.querySelector('.comment-form__verbum');
+    if (!(shell instanceof HTMLElement)) throw new Error('test shell missing');
+    shell.scrollIntoView = vi.fn();
+    // A bundle that never arrives must not be re-requested on every probe.
+    const loadScript = vi.fn();
+    vi.stubGlobal('WP_Enqueue_Dynamic_Script', { loadScript });
+    const executeScript = vi.fn(
+      (options: {
+        files?: string[];
+        func?: (...args: number[]) => Promise<unknown>;
+        args?: number[];
+      }) =>
+        options.func
+          ? options.func(...(options.args ?? [])).then((result) => [{ result }])
+          : Promise.resolve([])
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Could not establish connection. Receiving end does not exist.'
+        )
+      )
+      .mockResolvedValueOnce({ type: 'analysis', analysis });
+    vi.stubGlobal('chrome', {
+      tabs: { sendMessage },
+      scripting: { executeScript },
+    });
+
+    const pending = analyzeTab(42);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(pending).resolves.toEqual(analysis);
+    expect(loadScript).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenLastCalledWith(42, {
+      type: 'comment-link-assistant:page-command',
+      command: { type: 'analyze', verbumPreflight: 'timed_out' },
+    });
+  });
+
   it('waits for a WordPress.com Verbum shell that mounts only after its comment region is scrolled', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('location', { hostname: 'thorsaurus.wordpress.com' });
@@ -1278,7 +1421,7 @@ describe('page command runtime', () => {
     await vi.advanceTimersByTimeAsync(74_999);
     expect(outcome).not.toHaveBeenCalled();
 
-    // Analyze leaves room for the 60s Verbum mount window plus page settle.
+    // Analyze leaves room for the Verbum mount window plus page settle.
     await vi.advanceTimersByTimeAsync(1);
     expect(outcome).toHaveBeenCalledWith('rejected');
     await expect(pending).rejects.toThrow('PAGE_COMMAND_TIMEOUT');

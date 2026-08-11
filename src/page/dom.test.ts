@@ -2140,7 +2140,7 @@ describe('load-tolerant analyze', () => {
     expect(analysis.form.readiness).toBe('not_found');
   });
 
-  it('waits up to 60 seconds for a Verbum form after the page is complete', async () => {
+  it('waits up to 15 seconds for a Verbum form after the page is complete', async () => {
     vi.useFakeTimers();
     setReadyState('complete');
     document.body.innerHTML = `
@@ -2155,7 +2155,7 @@ describe('load-tolerant analyze', () => {
     const pending = analyzePageDocument(document);
     const settled = vi.fn();
     void pending.then(settled);
-    await vi.advanceTimersByTimeAsync(59_000);
+    await vi.advanceTimersByTimeAsync(14_000);
     expect(settled).not.toHaveBeenCalled();
 
     const shell = document.querySelector('.comment-form__verbum');
@@ -2175,7 +2175,7 @@ describe('load-tolerant analyze', () => {
     });
   });
 
-  it('uses capped exponential polling and times out a missing Verbum form at 60 seconds', async () => {
+  it('uses capped exponential polling and times out a missing Verbum form at 15 seconds', async () => {
     vi.useFakeTimers();
     setReadyState('complete');
     document.body.innerHTML = `
@@ -2192,7 +2192,7 @@ describe('load-tolerant analyze', () => {
     const settled = vi.fn();
     void pending.then(settled);
 
-    await vi.advanceTimersByTimeAsync(59_999);
+    await vi.advanceTimersByTimeAsync(14_999);
     expect(settled).not.toHaveBeenCalled();
     const delays = timer.mock.calls.map((call) => call[1]);
     expect(delays).toEqual(
@@ -2245,7 +2245,7 @@ describe('load-tolerant analyze', () => {
     });
   });
 
-  it('caps the runtime timeout handoff without waiting a second 60 seconds', async () => {
+  it('caps the runtime timeout handoff below a second full Verbum window', async () => {
     vi.useFakeTimers();
     setReadyState('complete');
     document.body.innerHTML = '<div class="comment-form__verbum"></div>';
