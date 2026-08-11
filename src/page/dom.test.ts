@@ -72,6 +72,63 @@ describe('comment page DOM helpers', () => {
     }
   });
 
+  it('dismisses the Verbum subscription box so the posted comment can be reached', async () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <form id="commentform" action="/wp-comments-post.php">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment"></textarea>
+          <input type="url" name="url">
+          <button id="comment-submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    const comment =
+      'A useful observation with <a href="https://product.example\n">Product</a> in the body.';
+    const preparation = await prepareSubmissionDocument(document, {
+      comment,
+      websiteUrl: 'https://product.example',
+      requireInlineAnchor: true,
+    });
+    expect(preparation).toMatchObject({ ok: true });
+    if (!preparation.ok) throw new Error('test preparation failed');
+
+    const closed = vi.fn();
+    const subscribed = vi.fn();
+    // Verbum posts the comment with fetch and then holds the receipt behind
+    // this box instead of navigating to the comment it just created.
+    document.querySelector('#comment-submit')?.addEventListener('click', () => {
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        `<div class="verbum-simple-subscribe-modal">
+          <input type="email" name="subscription-email">
+          <button id="subscribe-submit" name="submit" type="button">Subscribe</button>
+          <div class="verbum-simple-subscribe-modal__close-button-container">
+            <button class="verbum-simple-subscribe-modal__close-button">Continue reading</button>
+          </div>
+        </div>`
+      );
+      document
+        .querySelector('.verbum-simple-subscribe-modal__close-button')
+        ?.addEventListener('click', closed);
+      document
+        .querySelector('#subscribe-submit')
+        ?.addEventListener('click', subscribed);
+    });
+
+    await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(subscribed).not.toHaveBeenCalled();
+    expect(
+      (
+        document.querySelector(
+          'input[name="subscription-email"]'
+        ) as HTMLInputElement
+      ).value
+    ).toBe('');
+  });
+
   it.each([
     ['an unresolved placeholder', 'A useful observation. {LINK}'],
     [

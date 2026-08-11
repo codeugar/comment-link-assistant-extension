@@ -56,7 +56,11 @@ const RESUME_TARGET_REQUIRED = 'BATCH_RESUME_TARGET_REQUIRED';
 const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
-const TARGET_LOAD_GRACE_MS = 30_000;
+// A worker tab loads in the background, where Chrome deprioritizes its
+// requests: a hosted blog measured 15-40s to commit its document even without
+// a slow link in the way. Giving up at 30s wrote those off as unreachable
+// pages, so the cap sits far enough out to cover an ordinary slow load.
+const TARGET_LOAD_GRACE_MS = 60_000;
 // A submit that navigates gets a longer load grace than ordinary opens: the
 // redirect target must finish loading before its verdict means anything, and
 // heavy blog pages with long comment threads routinely need more than 30s.

@@ -1921,6 +1921,26 @@ export function verifySubmissionDocument(
   });
 }
 
+// A WordPress.com site with the subscription box enabled never navigates on
+// submit: Verbum posts the comment with `fetch` and then offers a subscription,
+// holding the receipt (and its comment id) until that box is dismissed. Its
+// close control does nothing but navigate to the comment that was just posted,
+// so clicking it hands back the same receipt every other form produces. The
+// email field and its Subscribe button are never touched.
+const VERBUM_SUBSCRIBE_CLOSE_SELECTOR =
+  '.verbum-simple-subscribe-modal__close-button';
+
+function dismissVerbumSubscribeBox(document: Document): boolean {
+  const close = document.querySelector(VERBUM_SUBSCRIBE_CLOSE_SELECTOR);
+  if (!close || !isHtmlElement(close) || !isVisible(close)) return false;
+  try {
+    close.click();
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 // Re-runs the full verdict until it is decisive or the window closes. Success
 // copy alone is deliberately not an exit condition: banners routinely render
 // before the comment node (and its promoted link) are inserted, and a verdict
@@ -1933,7 +1953,11 @@ async function pollSubmissionVerdict(
   const targetUrl = extractPromotedUrl(prepared.comment) ?? undefined;
   const view = document.defaultView;
   const deadline = Date.now() + Math.max(waitMs, 0);
+  let subscribeBoxDismissed = false;
   for (;;) {
+    if (!subscribeBoxDismissed) {
+      subscribeBoxDismissed = dismissVerbumSubscribeBox(document);
+    }
     const result = verifySubmissionDocument(
       document,
       prepared.fingerprint,

@@ -383,7 +383,7 @@ describe('batch runner', () => {
     }
 
     // Analyze ran even though the tab never reached `complete`, and the whole
-    // run stayed far below the 30s TARGET_LOAD_GRACE_MS — no dead-wait.
+    // run stayed far below TARGET_LOAD_GRACE_MS — no dead-wait.
     expect(context.deps.analyzeTab).toHaveBeenCalledWith(7, 'batch-1');
     expect(currentNow).toBeLessThan(30_000);
     expect(context.read()).toMatchObject({
@@ -410,7 +410,7 @@ describe('batch runner', () => {
         url: 'https://blog.example/different-post',
         status: 'loading',
       })),
-      now: () => 30_004,
+      now: () => 60_004,
     });
 
     await advanceBatchStep(context.deps);
@@ -442,7 +442,7 @@ describe('batch runner', () => {
         pendingUrl: 'https://blog.example/login',
         status: 'loading',
       })),
-      now: () => 30_004,
+      now: () => 60_004,
     });
 
     await advanceBatchStep(context.deps);
