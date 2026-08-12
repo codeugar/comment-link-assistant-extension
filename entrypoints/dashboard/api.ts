@@ -645,6 +645,12 @@ async function demoRequest<T extends DashboardRequestResult>(
     );
     return null as T;
   }
+  if (message.type === 'plan.restore') {
+    demoPlans = demoPlans.map((plan) =>
+      plan.id === message.planId ? { ...plan, status: 'active' } : plan
+    );
+    return null as T;
+  }
   if (message.type === 'plan.deleteTarget') {
     demoDeletedTargets.add(`${message.planId}:${message.targetId}`);
     return null as T;

@@ -1537,6 +1537,12 @@ async function dispatch(
       data: await dashboardService.archivePlan(message.planId),
     };
   }
+  if (message.type === 'plan.restore') {
+    return {
+      type: message.type,
+      data: await dashboardService.restorePlan(message.planId),
+    };
+  }
   if (message.type === 'plan.deletePermanently') {
     await dashboardService.deletePlanPermanently(message.planId);
     return { type: message.type, data: null };

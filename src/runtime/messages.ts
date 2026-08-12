@@ -133,6 +133,7 @@ export type PopupMessage =
   | { type: 'plan.rename'; planId: string; name: string }
   | { type: 'plan.setChunkSize'; planId: string; chunkSize: number }
   | { type: 'plan.archive'; planId: string }
+  | { type: 'plan.restore'; planId: string }
   | { type: 'plan.deletePermanently'; planId: string }
   | {
       type: 'plan.deleteTarget';
@@ -200,6 +201,7 @@ export type PopupMessageResult =
   | { type: 'plan.rename'; data: Plan }
   | { type: 'plan.setChunkSize'; data: PlanDetail }
   | { type: 'plan.archive'; data: Plan }
+  | { type: 'plan.restore'; data: Plan }
   | { type: 'plan.deletePermanently'; data: null }
   | { type: 'plan.deleteTarget'; data: PlanTarget }
   | {

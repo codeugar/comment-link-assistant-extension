@@ -100,7 +100,6 @@ export type DashboardDataErrorCode =
   | 'PLAN_TARGET_URL_INVALID'
   | 'PLAN_CHUNK_SIZE_INVALID'
   | 'PLAN_ID_CONFLICT'
-  | 'PLAN_SITE_CONFLICT'
   | 'PLAN_NOT_FOUND'
   | 'PLAN_TARGET_NOT_FOUND'
   | 'PLAN_ARCHIVED'
@@ -1639,6 +1638,55 @@ export class DashboardRepository {
         };
         store.put(archived);
         return archived;
+      }
+    );
+  }
+
+  /**
+   * Brings an archived plan back. Archiving overwrites the previous status, so
+   * the restored status is recomputed from the batches instead of assumed to be
+   * active: a plan whose batches all finished before archiving comes back as
+   * completed.
+   */
+  async restorePlan(
+    planIdValue: string,
+    at: number = this.clock()
+  ): Promise<Plan> {
+    return this.transaction(
+      [
+        DASHBOARD_STORE_NAMES.plans,
+        DASHBOARD_STORE_NAMES.planBatches,
+        DASHBOARD_STORE_NAMES.planTargets,
+      ],
+      'readwrite',
+      async (transaction) => {
+        const planStore = transaction.objectStore(DASHBOARD_STORE_NAMES.plans);
+        const plan = (await requestResult(planStore.get(planIdValue))) as
+          | Plan
+          | undefined;
+        if (!plan) throw new DashboardDataError('PLAN_NOT_FOUND');
+        if (plan.status !== 'archived') return plan;
+        const [targets, batches] = await Promise.all([
+          allFromIndex<PlanTarget>(
+            transaction.objectStore(DASHBOARD_STORE_NAMES.planTargets),
+            INDEXES.targets.plan,
+            plan.id
+          ),
+          allFromIndex<PlanBatch>(
+            transaction.objectStore(DASHBOARD_STORE_NAMES.planBatches),
+            INDEXES.batches.plan,
+            plan.id
+          ),
+        ]);
+        const { archivedAt: _archivedAt, ...withoutArchivedAt } = plan;
+        const restored = applyCountsToPlan(
+          { ...withoutArchivedAt, status: 'active' },
+          targets,
+          batches,
+          at
+        );
+        planStore.put(restored);
+        return restored;
       }
     );
   }
