@@ -78,7 +78,7 @@ const WORDPRESS_COMMENT_CONTAINER_SELECTOR = [
 const WORDPRESS_CANONICAL_EDITOR_SELECTOR =
   'textarea#comment, textarea[name="comment"]';
 const WORDPRESS_CANONICAL_SUBMIT_SELECTOR =
-  '#submit, input[type="submit"][name="submit"], .comment-submit';
+  '#submit, button#comment-submit, input[type="submit"][name="submit"], button[type="submit"][name="submit"], .comment-submit';
 const RENDERED_COMMENT_EXCLUDE =
   /preview|draft|(?:^|[\s_-])(?:editor|form|composer|input)(?:$|[\s_-])/i;
 const RENDERED_COMMENT_SELECTOR = [
@@ -107,6 +107,16 @@ const PREPARATION_TTL_MS = 2 * 60_000;
 // form is present early. These bounds keep the settle deterministic and short.
 const ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS = 5_000;
 const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
+// The runtime preflight asks the page for the Verbum bundle rather than waiting
+// on its viewport-triggered loader, so a mount lands within seconds. Waiting
+// longer than that never helps: a shell that is still empty means the bundle
+// never arrived, and no amount of polling makes a background tab render.
+const VERBUM_FORM_WAIT_TIMEOUT_MS = 15_000;
+const VERBUM_PREFLIGHT_HANDOFF_TIMEOUT_MS = 10_000;
+const VERBUM_IDENTITY_WAIT_TIMEOUT_MS = 2_000;
+const VERBUM_BACKOFF_INITIAL_MS = 250;
+const VERBUM_BACKOFF_MAX_MS = 4_000;
+const VERBUM_SHELL_SELECTOR = '.comment-form__verbum';
 const COMMENT_REGION_SELECTOR = [
   '#respond',
   '#commentform',
@@ -270,14 +280,14 @@ function isInsideWordPressCommentForm(element: Element): boolean {
   return Boolean(respond && isWordPressCommentContainer(respond));
 }
 
-// WordPress stamps its submit with `id="submit"` / `name="submit"` (or the
-// `.comment-submit` class) in every locale, so accept it by identity when it
-// lives inside a WordPress comment form — bypassing the language-fragile label
-// whitelist. Gated on the WordPress context so generic pages are unaffected.
+// WordPress stamps its submit with `id="submit"` / `name="submit"`; Verbum uses
+// `button#comment-submit`. Accept those identities inside a WordPress comment
+// form, bypassing the language-fragile label whitelist. The WordPress context
+// gate keeps generic forms unaffected.
 function isCanonicalWordPressSubmit(element: Element): boolean {
   const canonical =
-    element.matches('#submit') ||
-    (isInputElement(element) &&
+    element.matches('#submit, button#comment-submit') ||
+    ((isInputElement(element) || isButtonElement(element)) &&
       element.type === 'submit' &&
       element.name === 'submit');
   return canonical && isInsideWordPressCommentForm(element);
@@ -497,6 +507,14 @@ function queryAllDeep(document: Document, selector: string): Element[] {
   );
 }
 
+function isVerbumSourceEditor(element: Element): boolean {
+  return Boolean(
+    isTextAreaElement(element) &&
+      element.matches('textarea#comment') &&
+      element.closest(VERBUM_SHELL_SELECTOR)
+  );
+}
+
 // The <iframe> in the parent document that hosts `frameDocument`. Real browsers
 // expose this directly as `Window.frameElement`; when that is unavailable (or
 // not a usable element, as under happy-dom), resolve it by matching
@@ -559,6 +577,13 @@ function scoreEditor(element: Element): number {
 }
 
 function findEditor(document: Document): HTMLElement | null {
+  const verbumSourceEditor = queryAllDeep(
+    document,
+    `${VERBUM_SHELL_SELECTOR} textarea#comment`
+  )
+    .filter(isHtmlElement)
+    .find(isVerbumSourceEditor);
+  if (verbumSourceEditor) return verbumSourceEditor;
   const candidates = queryAllDeep(document, EDITOR_SELECTOR)
     .filter(isHtmlElement)
     .map((element) => ({ element, score: scoreEditor(element) }))
@@ -1006,13 +1031,14 @@ interface WordPressCommentForm {
 function resolveVisibleWordPressEditor(container: Element): HTMLElement | null {
   const candidates = Array.from(
     container.querySelectorAll(WORDPRESS_CANONICAL_EDITOR_SELECTOR)
-  )
-    .filter(isHtmlElement)
-    .filter((element) => isVisible(element) && !isDisabled(element));
+  ).filter(isHtmlElement);
+  const usable = candidates.filter(
+    (element) =>
+      !isDisabled(element) &&
+      (isVisible(element) || isVerbumSourceEditor(element))
+  );
   return (
-    candidates.find((element) => element.matches('#comment')) ??
-    candidates[0] ??
-    null
+    usable.find((element) => element.matches('#comment')) ?? usable[0] ?? null
   );
 }
 
@@ -1170,6 +1196,59 @@ function looksUnsettled(document: Document): boolean {
   return document.readyState !== 'complete';
 }
 
+interface VerbumWindow extends Window {
+  VerbumComments?: { requireNameEmail?: boolean };
+}
+
+function hasVerbumShell(document: Document): boolean {
+  return Boolean(document.querySelector(VERBUM_SHELL_SELECTOR));
+}
+
+function verbumRequiresIdentity(document: Document): boolean {
+  return (
+    (document.defaultView as VerbumWindow | null)?.VerbumComments
+      ?.requireNameEmail === true
+  );
+}
+
+async function waitWithExponentialBackoff(
+  document: Document,
+  condition: () => boolean,
+  timeoutMs: number
+): Promise<boolean> {
+  const view = document.defaultView;
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = VERBUM_BACKOFF_INITIAL_MS;
+  while (!condition()) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await new Promise<void>((resolve) => {
+      (view?.setTimeout ?? setTimeout)(resolve, Math.min(delayMs, remainingMs));
+    });
+    delayMs = Math.min(delayMs * 2, VERBUM_BACKOFF_MAX_MS);
+  }
+  return true;
+}
+
+function verbumIdentityFieldsReady(document: Document): boolean {
+  const editor = findEditor(document);
+  if (!editor) return false;
+  const container = findContainer(editor);
+  return Boolean(findInput(container, 'name') && findInput(container, 'email'));
+}
+
+async function revealVerbumIdentityFields(document: Document): Promise<void> {
+  if (!verbumRequiresIdentity(document)) return;
+  const editor = findEditor(document);
+  if (!editor) return;
+  editor.focus();
+  await waitWithExponentialBackoff(
+    document,
+    () => verbumIdentityFieldsReady(document),
+    VERBUM_IDENTITY_WAIT_TIMEOUT_MS
+  );
+}
+
 function scrollCommentRegionIntoView(document: Document): void {
   const target: Element | null =
     findEditor(document) ?? document.querySelector(COMMENT_REGION_SELECTOR);
@@ -1289,8 +1368,13 @@ async function revealHiddenCommentForm(document: Document): Promise<boolean> {
   return true;
 }
 
+interface AnalyzePageOptions {
+  verbumPreflightTimedOut?: boolean;
+}
+
 export async function analyzePageDocument(
-  document: Document
+  document: Document,
+  options: AnalyzePageOptions = {}
 ): Promise<PageAnalysis> {
   if (document.readyState === 'loading') {
     await waitForDomContentLoaded(
@@ -1301,13 +1385,43 @@ export async function analyzePageDocument(
   scrollCommentRegionIntoView(document);
   const jetpackFrame = resolveJetpackCommentFrame(document);
   if (jetpackFrame) promoteJetpackCommentFrame(jetpackFrame);
+  const verbum = hasVerbumShell(document);
+  let verbumTimedOut = false;
+  if (verbum && !resolveWordPressCommentForm(document)) {
+    const initial = buildPageAnalysis(document);
+    const manuallyGated =
+      initial.form.readiness === 'login_required' ||
+      initial.form.readiness === 'captcha_required';
+    if (!manuallyGated) {
+      verbumTimedOut = !(await waitWithExponentialBackoff(
+        document,
+        () => Boolean(resolveWordPressCommentForm(document)),
+        options.verbumPreflightTimedOut
+          ? VERBUM_PREFLIGHT_HANDOFF_TIMEOUT_MS
+          : VERBUM_FORM_WAIT_TIMEOUT_MS
+      ));
+      scrollCommentRegionIntoView(document);
+    }
+  }
+  if (verbum && !verbumTimedOut) {
+    await revealVerbumIdentityFields(document);
+  }
   let analysis = buildPageAnalysis(document);
   // Only pay the bounded settle when nothing was found and the page still looks
   // like it is mounting content; a fully loaded page with no editor is final.
-  if (!findEditor(document) && looksUnsettled(document)) {
+  if (!verbum && !findEditor(document) && looksUnsettled(document)) {
     await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
     scrollCommentRegionIntoView(document);
     analysis = buildPageAnalysis(document);
+  }
+  if (verbumTimedOut && analysis.form.readiness === 'not_found') {
+    return {
+      ...analysis,
+      form: {
+        ...analysis.form,
+        message: 'VERBUM_COMMENT_FORM_TIMEOUT',
+      },
+    };
   }
   // The form may still hide behind a "Leave a comment" style toggle. Click at
   // most one reveal control per analyze; verify never runs this path.
@@ -1807,6 +1921,26 @@ export function verifySubmissionDocument(
   });
 }
 
+// A WordPress.com site with the subscription box enabled never navigates on
+// submit: Verbum posts the comment with `fetch` and then offers a subscription,
+// holding the receipt (and its comment id) until that box is dismissed. Its
+// close control does nothing but navigate to the comment that was just posted,
+// so clicking it hands back the same receipt every other form produces. The
+// email field and its Subscribe button are never touched.
+const VERBUM_SUBSCRIBE_CLOSE_SELECTOR =
+  '.verbum-simple-subscribe-modal__close-button';
+
+function dismissVerbumSubscribeBox(document: Document): boolean {
+  const close = document.querySelector(VERBUM_SUBSCRIBE_CLOSE_SELECTOR);
+  if (!close || !isHtmlElement(close) || !isVisible(close)) return false;
+  try {
+    close.click();
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 // Re-runs the full verdict until it is decisive or the window closes. Success
 // copy alone is deliberately not an exit condition: banners routinely render
 // before the comment node (and its promoted link) are inserted, and a verdict
@@ -1819,7 +1953,11 @@ async function pollSubmissionVerdict(
   const targetUrl = extractPromotedUrl(prepared.comment) ?? undefined;
   const view = document.defaultView;
   const deadline = Date.now() + Math.max(waitMs, 0);
+  let subscribeBoxDismissed = false;
   for (;;) {
+    if (!subscribeBoxDismissed) {
+      subscribeBoxDismissed = dismissVerbumSubscribeBox(document);
+    }
     const result = verifySubmissionDocument(
       document,
       prepared.fingerprint,

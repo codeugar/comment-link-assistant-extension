@@ -72,6 +72,63 @@ describe('comment page DOM helpers', () => {
     }
   });
 
+  it('dismisses the Verbum subscription box so the posted comment can be reached', async () => {
+    document.body.innerHTML = `
+      <article><p>Long-form article copy.</p></article>
+      <form id="commentform" action="/wp-comments-post.php">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment"></textarea>
+          <input type="url" name="url">
+          <button id="comment-submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    const comment =
+      'A useful observation with <a href="https://product.example\n">Product</a> in the body.';
+    const preparation = await prepareSubmissionDocument(document, {
+      comment,
+      websiteUrl: 'https://product.example',
+      requireInlineAnchor: true,
+    });
+    expect(preparation).toMatchObject({ ok: true });
+    if (!preparation.ok) throw new Error('test preparation failed');
+
+    const closed = vi.fn();
+    const subscribed = vi.fn();
+    // Verbum posts the comment with fetch and then holds the receipt behind
+    // this box instead of navigating to the comment it just created.
+    document.querySelector('#comment-submit')?.addEventListener('click', () => {
+      document.body.insertAdjacentHTML(
+        'beforeend',
+        `<div class="verbum-simple-subscribe-modal">
+          <input type="email" name="subscription-email">
+          <button id="subscribe-submit" name="submit" type="button">Subscribe</button>
+          <div class="verbum-simple-subscribe-modal__close-button-container">
+            <button class="verbum-simple-subscribe-modal__close-button">Continue reading</button>
+          </div>
+        </div>`
+      );
+      document
+        .querySelector('.verbum-simple-subscribe-modal__close-button')
+        ?.addEventListener('click', closed);
+      document
+        .querySelector('#subscribe-submit')
+        ?.addEventListener('click', subscribed);
+    });
+
+    await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(subscribed).not.toHaveBeenCalled();
+    expect(
+      (
+        document.querySelector(
+          'input[name="subscription-email"]'
+        ) as HTMLInputElement
+      ).value
+    ).toBe('');
+  });
+
   it.each([
     ['an unresolved placeholder', 'A useful observation. {LINK}'],
     [
@@ -2052,6 +2109,10 @@ describe('load-tolerant analyze', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    const view = document.defaultView as
+      | (Window & { VerbumComments?: { requireNameEmail?: boolean } })
+      | null;
+    if (view) view.VerbumComments = undefined;
     setReadyState('complete');
   });
 
@@ -2134,5 +2195,197 @@ describe('load-tolerant analyze', () => {
     await vi.advanceTimersByTimeAsync(4_000);
     const analysis = await pending;
     expect(analysis.form.readiness).toBe('not_found');
+  });
+
+  it('waits up to 15 seconds for a Verbum form after the page is complete', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    document.body.innerHTML = `
+      <article><h1>Slow Verbum article</h1><p>Long-form article copy with enough context to analyze.</p></article>
+      <div id="respond" class="comment-respond">
+        <form action="/wp-comments-post.php" id="commentform" class="comment-form">
+          <div class="comment-form__verbum transparent"></div>
+        </form>
+      </div>
+    `;
+
+    const pending = analyzePageDocument(document);
+    const settled = vi.fn();
+    void pending.then(settled);
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    const shell = document.querySelector('.comment-form__verbum');
+    if (shell) {
+      shell.innerHTML = `
+        <textarea id="comment" name="comment" placeholder="Write a comment..."></textarea>
+        <button id="comment-submit" name="submit" type="submit">Kommentar</button>
+      `;
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(pending).resolves.toMatchObject({
+      form: {
+        readiness: 'ready',
+        submitLabel: expect.stringContaining('comment-submit'),
+      },
+    });
+  });
+
+  it('uses capped exponential polling and times out a missing Verbum form at 15 seconds', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    document.body.innerHTML = `
+      <article><h1>Broken Verbum article</h1><p>Long-form article copy with enough context to analyze.</p></article>
+      <form action="/wp-comments-post.php" id="commentform" class="comment-form">
+        <div class="comment-form__verbum transparent"></div>
+      </form>
+    `;
+    const view = document.defaultView;
+    if (!view) throw new Error('test window missing');
+    const timer = vi.spyOn(view, 'setTimeout');
+
+    const pending = analyzePageDocument(document);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).not.toHaveBeenCalled();
+    const delays = timer.mock.calls.map((call) => call[1]);
+    expect(delays).toEqual(
+      expect.arrayContaining([250, 500, 1_000, 2_000, 4_000])
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({
+      form: {
+        readiness: 'not_found',
+        message: 'VERBUM_COMMENT_FORM_TIMEOUT',
+      },
+    });
+  });
+
+  it('captures a Verbum form that mounts during the timeout handoff', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    document.body.innerHTML = `
+      <article><h1>Slow Verbum article</h1><p>Long-form article copy with enough context to analyze.</p></article>
+      <form id="commentform" action="/wp-comments-post.php">
+        <div class="comment-form__verbum"></div>
+      </form>
+    `;
+
+    const pending = runPageCommand(document, {
+      type: 'analyze',
+      verbumPreflight: 'timed_out',
+    } as Parameters<typeof runPageCommand>[1]);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(settled).not.toHaveBeenCalled();
+    document
+      .querySelector('.comment-form__verbum')
+      ?.insertAdjacentHTML(
+        'beforeend',
+        '<textarea id="comment" name="comment"></textarea><button id="comment-submit" type="submit">Comment</button>'
+      );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(pending).resolves.toMatchObject({
+      type: 'analysis',
+      analysis: {
+        form: {
+          readiness: 'ready',
+          message: 'COMMENT_FORM_READY',
+        },
+      },
+    });
+  });
+
+  it('caps the runtime timeout handoff below a second full Verbum window', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    document.body.innerHTML = '<div class="comment-form__verbum"></div>';
+
+    const pending = runPageCommand(document, {
+      type: 'analyze',
+      verbumPreflight: 'timed_out',
+    } as Parameters<typeof runPageCommand>[1]);
+    const settled = vi.fn();
+    void pending.then(settled);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({
+      type: 'analysis',
+      analysis: {
+        form: {
+          readiness: 'not_found',
+          message: 'VERBUM_COMMENT_FORM_TIMEOUT',
+        },
+      },
+    });
+  });
+
+  it('focuses a ready Verbum editor so required identity fields can mount', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    const view = document.defaultView as
+      | (Window & { VerbumComments?: { requireNameEmail?: boolean } })
+      | null;
+    if (!view) throw new Error('test window missing');
+    view.VerbumComments = { requireNameEmail: true };
+    document.body.innerHTML = `
+      <article><h1>Verbum identity fields</h1><p>Long-form article copy with enough context to analyze.</p></article>
+      <form action="/wp-comments-post.php" id="commentform" class="comment-form">
+        <div class="comment-form__verbum transparent">
+          <textarea id="comment" name="comment" placeholder="Write a comment..."></textarea>
+          <button id="comment-submit" name="submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    document.querySelector('#comment')?.addEventListener('focus', () => {
+      view.setTimeout(() => {
+        document
+          .querySelector('#commentform')
+          ?.insertAdjacentHTML(
+            'beforeend',
+            '<input name="author"><input name="email" type="email"><input name="url" type="url">'
+          );
+      }, 500);
+    });
+
+    const pending = analyzePageDocument(document);
+    await vi.advanceTimersByTimeAsync(750);
+    const analysis = await pending;
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      hasNameField: true,
+      hasEmailField: true,
+      hasWebsiteField: true,
+    });
+  });
+
+  it('recognizes the dormant WordPress.com source textarea without a trusted click', async () => {
+    vi.useFakeTimers();
+    setReadyState('complete');
+    document.body.innerHTML = `
+      <article><h1>Hosted WordPress article</h1><p>Enough article copy for comment generation.</p></article>
+      <form action="/wp-comments-post.php" id="commentform" class="comment-form">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment" placeholder="Write a comment..." style="display:none"></textarea>
+          <button id="comment-submit" name="submit" type="submit">Comment</button>
+        </div>
+      </form>
+    `;
+    const pending = analyzePageDocument(document);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const analysis = await pending;
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+    });
   });
 });

@@ -383,7 +383,7 @@ describe('batch runner', () => {
     }
 
     // Analyze ran even though the tab never reached `complete`, and the whole
-    // run stayed far below the 30s TARGET_LOAD_GRACE_MS — no dead-wait.
+    // run stayed far below TARGET_LOAD_GRACE_MS — no dead-wait.
     expect(context.deps.analyzeTab).toHaveBeenCalledWith(7, 'batch-1');
     expect(currentNow).toBeLessThan(30_000);
     expect(context.read()).toMatchObject({
@@ -410,7 +410,7 @@ describe('batch runner', () => {
         url: 'https://blog.example/different-post',
         status: 'loading',
       })),
-      now: () => 30_004,
+      now: () => 60_004,
     });
 
     await advanceBatchStep(context.deps);
@@ -442,7 +442,7 @@ describe('batch runner', () => {
         pendingUrl: 'https://blog.example/login',
         status: 'loading',
       })),
-      now: () => 30_004,
+      now: () => 60_004,
     });
 
     await advanceBatchStep(context.deps);
@@ -976,6 +976,33 @@ describe('batch runner', () => {
     await advanceBatchStep(context.deps);
 
     expect(context.read()?.items[0]).toMatchObject({ status: 'no_form' });
+  });
+
+  it('activates the worker tab and retries when background analysis finds no form', async () => {
+    const batch = updateBatchProgress(
+      initialBatch(),
+      { workerTabId: 7, item: { status: 'analyzing' } },
+      3
+    );
+    const analyzeTab = vi
+      .fn()
+      .mockResolvedValueOnce(analysis('not_found'))
+      .mockResolvedValueOnce(analysis('ready'));
+    const activateWorkerTab = vi.fn(async () => true);
+    const context = dependencies(batch, {
+      analyzeTab,
+      activateWorkerTab,
+      waitForForegroundSettle: vi.fn(async () => undefined),
+    });
+
+    await advanceBatchStep(context.deps);
+
+    expect(activateWorkerTab).toHaveBeenCalledWith(7, 'batch-1');
+    expect(analyzeTab).toHaveBeenCalledTimes(2);
+    expect(context.read()?.items[0]).toMatchObject({
+      status: 'generating',
+      analysis: { form: { readiness: 'ready' } },
+    });
   });
 
   it('keeps the inline comment link while filling any detected website field', async () => {

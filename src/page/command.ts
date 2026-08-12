@@ -17,7 +17,10 @@ import type {
 export const PAGE_COMMAND_MESSAGE_TYPE = 'comment-link-assistant:page-command';
 
 export type PageCommand =
-  | { type: 'analyze' }
+  | {
+      type: 'analyze';
+      verbumPreflight?: 'ready' | 'timed_out';
+    }
   | {
       type: 'submit.prepare';
       input: PageSubmissionInput;
@@ -46,7 +49,13 @@ export type PageCommandResult =
 export function isPageCommand(value: unknown): value is PageCommand {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  if (record.type === 'analyze') return true;
+  if (record.type === 'analyze') {
+    return (
+      record.verbumPreflight === undefined ||
+      record.verbumPreflight === 'ready' ||
+      record.verbumPreflight === 'timed_out'
+    );
+  }
   if (record.type === 'verify') {
     return (
       typeof record.fingerprint === 'string' &&
@@ -125,7 +134,12 @@ export async function runPageCommand(
   command: PageCommand
 ): Promise<PageCommandResult> {
   if (command.type === 'analyze') {
-    return { type: 'analysis', analysis: await analyzePageDocument(document) };
+    return {
+      type: 'analysis',
+      analysis: await analyzePageDocument(document, {
+        verbumPreflightTimedOut: command.verbumPreflight === 'timed_out',
+      }),
+    };
   }
   if (command.type === 'verify') {
     if (

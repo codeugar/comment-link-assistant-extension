@@ -56,7 +56,11 @@ const RESUME_TARGET_REQUIRED = 'BATCH_RESUME_TARGET_REQUIRED';
 const RESUME_VERIFICATION_REQUIRED = 'BATCH_RESUME_VERIFICATION_REQUIRED';
 const VERIFICATION_NAVIGATION_PENDING = 'BATCH_VERIFICATION_NAVIGATION_PENDING';
 const PARTIAL_PAGE_READY = 'BATCH_PARTIAL_PAGE_READY';
-const TARGET_LOAD_GRACE_MS = 30_000;
+// A worker tab loads in the background, where Chrome deprioritizes its
+// requests: a hosted blog measured 15-40s to commit its document even without
+// a slow link in the way. Giving up at 30s wrote those off as unreachable
+// pages, so the cap sits far enough out to cover an ordinary slow load.
+const TARGET_LOAD_GRACE_MS = 60_000;
 // A submit that navigates gets a longer load grace than ordinary opens: the
 // redirect target must finish loading before its verdict means anything, and
 // heavy blog pages with long comment threads routinely need more than 30s.
@@ -71,6 +75,10 @@ const VERIFY_RETRY_WINDOW_MS = 180_000;
 // we hand off to analysis on an on-target tab after this short settle instead of
 // dead-waiting the full TARGET_LOAD_GRACE_MS (which remains the hard cap).
 const ANALYZE_LOADING_SETTLE_MS = 750;
+// WordPress.com / Verbum can defer mounting its comment UI while the worker
+// tab is hidden. A short foreground settle is enough to let that UI mount;
+// the analyzer then applies its own platform-specific wait budget.
+const FOREGROUND_ANALYZE_SETTLE_MS = 2_000;
 
 const filterableItemStatuses = new Set<BatchItemStatus>([
   'queued',
@@ -98,6 +106,8 @@ export interface BatchRunnerDependencies {
     url: string,
     batchId: string
   ): Promise<WorkerTab | null>;
+  activateWorkerTab?(tabId: number, batchId: string): Promise<boolean>;
+  waitForForegroundSettle?(): Promise<void>;
   analyzeTab(tabId: number, batchId: string): Promise<PageAnalysis>;
   generateComment(
     keys: ProviderApiKeys,
@@ -194,6 +204,16 @@ export const defaultDependencies: BatchRunnerDependencies = {
       pendingUrl: tab.pendingUrl,
       status: tab.status,
     };
+  },
+  async activateWorkerTab(tabId, batchId) {
+    return Boolean(
+      await updateOwnedWorkerTab(batchId, tabId, { active: true })
+    );
+  },
+  async waitForForegroundSettle() {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, FOREGROUND_ANALYZE_SETTLE_MS);
+    });
   },
   async analyzeTab(tabId, batchId) {
     await assertWorkerTabOwnership(batchId, tabId);
@@ -974,7 +994,8 @@ async function advanceAnalysis(
   // Load-tolerant analyze: an on-target tab (no pending navigation, same page —
   // already asserted above) that is still `loading` can be analyzed after a
   // short settle. analyze() self-settles heavy pages and has its own generous
-  // 30s timeout, so we no longer dead-wait for `complete`.
+  // timeout (including the Verbum mount window), so we no longer dead-wait for
+  // `complete`.
   if (
     tab.status !== 'complete' &&
     !canUsePartialPage(item, tab) &&
@@ -983,6 +1004,21 @@ async function advanceAnalysis(
     return 'wait';
   }
   let analysis: PageAnalysis;
+  let foregroundAttempted = false;
+  const analyzeInForeground = async (): Promise<PageAnalysis | null> => {
+    if (foregroundAttempted || !dependencies.activateWorkerTab) return null;
+    foregroundAttempted = true;
+    const activated = await dependencies.activateWorkerTab(tab.id, batch.id);
+    if (!activated) return null;
+    if (dependencies.waitForForegroundSettle) {
+      await dependencies.waitForForegroundSettle();
+    } else {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, FOREGROUND_ANALYZE_SETTLE_MS);
+      });
+    }
+    return dependencies.analyzeTab(tab.id, batch.id);
+  };
   try {
     analysis = await dependencies.analyzeTab(tab.id, batch.id);
   } catch (error) {
@@ -990,7 +1026,17 @@ async function advanceAnalysis(
       return saveFailure(batch, errorMessage(error), dependencies);
     }
     try {
-      analysis = await dependencies.analyzeTab(tab.id, batch.id);
+      analysis =
+        (await analyzeInForeground()) ??
+        (await dependencies.analyzeTab(tab.id, batch.id));
+    } catch (retryError) {
+      return saveFailure(batch, errorMessage(retryError), dependencies);
+    }
+  }
+
+  if (analysis.form.readiness === 'not_found') {
+    try {
+      analysis = (await analyzeInForeground()) ?? analysis;
     } catch (retryError) {
       return saveFailure(batch, errorMessage(retryError), dependencies);
     }

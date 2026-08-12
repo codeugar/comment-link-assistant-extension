@@ -158,6 +158,12 @@ describe('WordPress-native recognition', () => {
     ) as HTMLTextAreaElement;
     expect(real.value).toContain('genuinely useful');
     expect(decoy.value).toBe('');
+    if (preparation.ok) {
+      document
+        .querySelector('#commentform')
+        ?.addEventListener('submit', (event) => event.preventDefault());
+      await clickPreparedSubmissionDocument(document, preparation.prepared, 0);
+    }
   });
 
   it('recognizes a WordPress form by its wp-comments-post.php action without a commentform id', async () => {
@@ -170,6 +176,47 @@ describe('WordPress-native recognition', () => {
     `;
 
     expect((await analyzePageDocument(document)).form.readiness).toBe('ready');
+  });
+
+  it('recognizes, prepares, and binds the Verbum button#comment-submit by canonical identity', async () => {
+    document.body.innerHTML = `
+      <article><p>Article copy about the topic in enough detail to analyze.</p></article>
+      <form action="/wp-comments-post.php" id="commentform" class="comment-form">
+        <div class="comment-form__verbum">
+          <textarea id="comment" name="comment"></textarea>
+          <button id="comment-submit" name="submit" type="submit">Kommentar</button>
+        </div>
+      </form>
+    `;
+
+    expect(await analyzePageDocument(document)).toMatchObject({
+      form: {
+        readiness: 'ready',
+        submitLabel: expect.stringContaining('comment-submit'),
+      },
+    });
+
+    let submitted = false;
+    document
+      .querySelector('#commentform')
+      ?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitted = true;
+      });
+    const preparation = await prepareSubmissionDocument(document, {
+      comment: 'A genuinely useful comment about the winter walk.',
+      websiteUrl: '',
+    });
+    expect(preparation).toMatchObject({ ok: true });
+    if (!preparation.ok) return;
+
+    const result = await clickPreparedSubmissionDocument(
+      document,
+      preparation.prepared,
+      0
+    );
+    expect(submitted).toBe(true);
+    expect(result.clickOccurred).toBe(true);
   });
 
   it('recognizes a WordPress form inside a comment-respond wrapper without a native form', async () => {

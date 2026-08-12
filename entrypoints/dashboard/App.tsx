@@ -223,6 +223,8 @@ function readRoute(): Route {
   return { page: 'dashboard' };
 }
 
+let notifyRouteChange: ((route: Route) => void) | null = null;
+
 function navigate(route: Route) {
   if (route.page === 'dashboard') globalThis.location.hash = '#/dashboard';
   else if (route.page === 'moderation') {
@@ -236,15 +238,25 @@ function navigate(route: Route) {
       ? `#/plans/${encodeURIComponent(route.planId)}`
       : '#/plans';
   }
+  // Update React route state synchronously instead of waiting for the
+  // browser's async 'hashchange' event. Without this, a stale `route` value
+  // can outlive a fresh navigate() call across an async gap, letting an
+  // effect that reacts to `route` (e.g. the "auto-select first plan" one)
+  // read the old value and overwrite this navigation with a stale target.
+  notifyRouteChange?.(route);
 }
 
 function useRoute(): Route {
   const [route, setRoute] = useState<Route>(readRoute);
   useEffect(() => {
     if (!globalThis.location.hash) navigate({ page: 'dashboard' });
+    notifyRouteChange = setRoute;
     const onHashChange = () => setRoute(readRoute());
     globalThis.addEventListener('hashchange', onHashChange);
-    return () => globalThis.removeEventListener('hashchange', onHashChange);
+    return () => {
+      globalThis.removeEventListener('hashchange', onHashChange);
+      notifyRouteChange = null;
+    };
   }, []);
   return route;
 }
@@ -2114,14 +2126,8 @@ function PlansPage({
   onBatchCommand: (type: 'batch.open-current' | 'batch.stop') => void;
   onResume: (planId: string) => void;
 }) {
-  const [activePlanId, setActivePlanId] = useState<string | undefined>(
-    selectedPlanId
-  );
-  useEffect(() => {
-    setActivePlanId(selectedPlanId);
-  }, [selectedPlanId]);
   const selectedPlan =
-    plans.find((plan) => plan.id === activePlanId) ??
+    plans.find((plan) => plan.id === selectedPlanId) ??
     plans.find((plan) => plan.status !== 'archived') ??
     plans[0];
   const [detail, setDetail] = useState<PlanDetail | null>(null);
@@ -2224,10 +2230,7 @@ function PlansPage({
           plans={plans}
           selectedPlanId={selectedPlan?.id}
           onNewPlan={onNewPlan}
-          onSelectPlan={(planId) => {
-            setActivePlanId(planId);
-            navigate({ page: 'plans', planId });
-          }}
+          onSelectPlan={(planId) => navigate({ page: 'plans', planId })}
         />
         {!selectedPlan ? (
           <main className="plan-detail-pane empty-detail">
