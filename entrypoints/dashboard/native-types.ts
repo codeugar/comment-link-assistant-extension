@@ -45,6 +45,7 @@ export type DashboardMessage =
   | { type: 'plan.rename'; planId: string; name: string }
   | { type: 'plan.setChunkSize'; planId: string; chunkSize: number }
   | { type: 'plan.archive'; planId: string }
+  | { type: 'plan.restore'; planId: string }
   | { type: 'plan.deletePermanently'; planId: string }
   | {
       type: 'plan.deleteTarget';

@@ -302,6 +302,78 @@ describe('DashboardRepository schema and plans', () => {
   });
 });
 
+describe('DashboardRepository plan archive and restore', () => {
+  it('keeps several live plans for the same promoting site', async () => {
+    const { repo } = repository();
+    const first = await repo.createPlan(planInput({ name: 'July comments' }));
+    const second = await repo.createPlan(
+      planInput({ name: 'August comments' })
+    );
+
+    expect(second.plan.id).not.toBe(first.plan.id);
+    const plans = await repo.listPlans();
+    expect(plans.map((plan) => plan.id).sort()).toEqual(
+      [first.plan.id, second.plan.id].sort()
+    );
+    expect(plans.every((plan) => plan.promotingSiteId === 'site-1')).toBe(true);
+    expect(plans.every((plan) => plan.status === 'active')).toBe(true);
+  });
+
+  it('restores an archived plan into a writable active plan', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(planInput());
+    await repo.archivePlan(detail.plan.id, 30_000);
+    expect(await repo.listPlans()).toEqual([]);
+
+    const restored = await repo.restorePlan(detail.plan.id, 40_000);
+    expect(restored).toMatchObject({
+      id: detail.plan.id,
+      status: 'active',
+      targetCount: 3,
+      updatedAt: 40_000,
+    });
+    expect(restored.archivedAt).toBeUndefined();
+    expect(
+      (await repo.getPlanDetail(detail.plan.id))?.plan.archivedAt
+    ).toBeUndefined();
+    expect(await repo.listPlans()).toMatchObject([{ id: detail.plan.id }]);
+    await expect(
+      repo.renamePlan(detail.plan.id, 'Back in play')
+    ).resolves.toMatchObject({ name: 'Back in play' });
+  });
+
+  it('restores a finished plan as completed instead of active', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(
+      planInput({
+        urls: ['https://blog.example/one', 'https://forum.example/two'],
+        chunkSize: 2,
+      })
+    );
+    await completedFirstBatch(detail, repo);
+    expect((await repo.getPlanDetail(detail.plan.id))?.plan.status).toBe(
+      'completed'
+    );
+
+    await repo.archivePlan(detail.plan.id, 30_000);
+    await expect(
+      repo.restorePlan(detail.plan.id, 40_000)
+    ).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  it('leaves a live plan untouched and rejects a missing plan', async () => {
+    const { repo } = repository();
+    const detail = await repo.createPlan(planInput());
+
+    await expect(
+      repo.restorePlan(detail.plan.id, 40_000)
+    ).resolves.toMatchObject({ status: 'active', updatedAt: 10_000 });
+    await expect(repo.restorePlan('plan:missing')).rejects.toMatchObject({
+      code: 'PLAN_NOT_FOUND',
+    });
+  });
+});
+
 describe('DashboardRepository plan chunk size', () => {
   it('regroups only the batches that have not started', async () => {
     const { repo } = repository();

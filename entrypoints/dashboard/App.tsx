@@ -97,6 +97,7 @@ import { normalizeWebsiteUrl } from '@/website/profile';
 import {
   Archive,
   ArrowClockwise,
+  ArrowCounterClockwise,
   ArrowSquareOut,
   CalendarBlank,
   CaretDown,
@@ -211,11 +212,25 @@ const EMPTY_SUMMARY: DashboardSummaryView = {
   activeRun: null,
 };
 
+/**
+ * Plan ids carry a colon (`plan:abc`), so navigate() percent-encodes them into
+ * the hash. Reading one back without decoding yields an id that matches no
+ * plan, and the plans page silently falls back to the first live plan.
+ */
+function decodePlanId(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function readRoute(): Route {
   const hash = globalThis.location?.hash || '#/dashboard';
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   if (parts[0] === 'plans') {
-    return { page: 'plans', planId: parts[1] };
+    return { page: 'plans', planId: decodePlanId(parts[1]) };
   }
   if (parts[0] === 'moderation') return { page: 'moderation' };
   if (parts[0] === 'outbound') return { page: 'outbound' };
@@ -1902,6 +1917,7 @@ function PlanDetailPane({
   onRun,
   onRename,
   onArchive,
+  onRestore,
   onDelete,
 }: {
   detail: PlanDetail;
@@ -1923,6 +1939,7 @@ function PlanDetailPane({
   onRun: () => void;
   onRename: () => void;
   onArchive: () => void;
+  onRestore: () => void;
   onDelete: () => void;
 }) {
   const { plan, batches } = detail;
@@ -1990,15 +2007,26 @@ function PlanDetailPane({
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              className="danger-text-button"
-              onClick={onDelete}
-              disabled={Boolean(busyAction)}
-            >
-              <Trash size={17} aria-hidden />
-              {t('deleteForever')}
-            </button>
+            <>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={onRestore}
+                disabled={Boolean(busyAction)}
+              >
+                <ArrowCounterClockwise size={17} aria-hidden />
+                {t('restorePlan')}
+              </button>
+              <button
+                type="button"
+                className="danger-text-button"
+                onClick={onDelete}
+                disabled={Boolean(busyAction)}
+              >
+                <Trash size={17} aria-hidden />
+                {t('deleteForever')}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -2096,6 +2124,7 @@ function PlansPage({
   onDeleteTarget,
   onRunPlan,
   onArchivePlan,
+  onRestorePlan,
   onDeletePlan,
   onRetryTargets,
   onBatchCommand,
@@ -2117,6 +2146,7 @@ function PlansPage({
   onDeleteTarget: (target: PlanTargetWithAttempts) => void;
   onRunPlan: (planId: string, resume?: boolean) => void;
   onArchivePlan: (plan: Plan) => void;
+  onRestorePlan: (plan: Plan) => void;
   onDeletePlan: (plan: Plan) => void;
   onRetryTargets: (
     planId: string,
@@ -2301,6 +2331,7 @@ function PlansPage({
             onResume={() => onResume(selectedPlan.id)}
             onRename={() => onRenamePlan(detail)}
             onArchive={() => onArchivePlan(detail.plan)}
+            onRestore={() => onRestorePlan(detail.plan)}
             onDelete={() => onDeletePlan(detail.plan)}
           />
         )}
@@ -6642,12 +6673,8 @@ export default function App() {
         await dashboardRequest(message);
         if (successMessage) pushToast(successMessage);
         await refresh();
-      } catch (error) {
-        const messageText =
-          error instanceof Error && error.message.includes('PLAN_ACTIVE_EXISTS')
-            ? t('duplicateActiveSite')
-            : t('actionFailed');
-        pushToast(messageText, 'error');
+      } catch {
+        pushToast(t('actionFailed'), 'error');
       } finally {
         setBusyAction(null);
       }
@@ -6812,14 +6839,8 @@ export default function App() {
       pushToast(t('planCreated'));
       await refresh();
       navigate({ page: 'plans', planId: created.id });
-    } catch (error) {
-      const errorText =
-        error instanceof Error &&
-        (error.message.includes('PLAN_ACTIVE_EXISTS') ||
-          error.message.includes('PLAN_SITE_CONFLICT'))
-          ? t('duplicateActiveSite')
-          : t('actionFailed');
-      pushToast(errorText, 'error');
+    } catch {
+      pushToast(t('actionFailed'), 'error');
     } finally {
       setBusyAction(null);
     }
@@ -7060,6 +7081,13 @@ export default function App() {
                 `archive:${plan.id}`,
                 { type: 'plan.archive', planId: plan.id },
                 t('archiveSuccess')
+              )
+            }
+            onRestorePlan={(plan) =>
+              runAction(
+                `restore:${plan.id}`,
+                { type: 'plan.restore', planId: plan.id },
+                t('restoreSuccess')
               )
             }
             onDeletePlan={setDeletePlan}

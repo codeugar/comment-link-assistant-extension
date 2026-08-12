@@ -267,6 +267,7 @@ const zh = {
   planCreated: '计划已创建',
   archivePlan: '归档计划',
   archiveConfirm: '归档后计划将只读，但所有运行记录仍会保留。',
+  restorePlan: '恢复计划',
   deleteForever: '永久删除',
   deleteConfirmTitle: '永久删除这个计划？',
   deleteConfirm: '此操作会删除计划、批次、链接结果和错误历史，无法恢复。',
@@ -308,7 +309,6 @@ const zh = {
     '\u8bf7\u586b\u5199\u6709\u6548\u7684 HTTP(S) \u63a8\u5e7f\u843d\u5730\u9875 URL\u3002',
   invalidInput: '请修正无效链接后再保存。',
   tooManyLinks: '单个计划最多 2,000 条有效链接。',
-  duplicateActiveSite: '该推广网站已有未归档计划，请先归档旧计划。',
   copyFailed: '复制失败',
   dateJoiner: '·',
   today: '今天',
@@ -325,6 +325,7 @@ const zh = {
   captchaReason: '该页面需要人工完成验证码。',
   genericFailureReason: '处理目标页面时发生错误。',
   archiveSuccess: '计划已归档',
+  restoreSuccess: '计划已恢复',
   deleteSuccess: '计划已永久删除',
   startedSuccess: '批次已启动',
   stoppedSuccess: '批次已停止',
@@ -620,6 +621,7 @@ const en: Record<keyof typeof zh, string> = {
   archivePlan: 'Archive plan',
   archiveConfirm:
     'The plan will become read-only while all run history stays available.',
+  restorePlan: 'Restore plan',
   deleteForever: 'Delete permanently',
   deleteConfirmTitle: 'Permanently delete this plan?',
   deleteConfirm:
@@ -663,8 +665,6 @@ const en: Record<keyof typeof zh, string> = {
     'Set a valid HTTP(S) URL for this promoting website in Settings first.',
   invalidInput: 'Fix invalid links before saving.',
   tooManyLinks: 'A plan can contain up to 2,000 valid links.',
-  duplicateActiveSite:
-    'This site already has an unarchived plan. Archive it first.',
   copyFailed: 'Copy failed',
   dateJoiner: '·',
   today: 'Today',
@@ -682,6 +682,7 @@ const en: Record<keyof typeof zh, string> = {
   captchaReason: 'This page requires a person to complete a CAPTCHA.',
   genericFailureReason: 'An error occurred while processing this target.',
   archiveSuccess: 'Plan archived',
+  restoreSuccess: 'Plan restored',
   deleteSuccess: 'Plan permanently deleted',
   startedSuccess: 'Batch started',
   stoppedSuccess: 'Batch stopped',

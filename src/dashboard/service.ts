@@ -104,6 +104,7 @@ type RepositoryPort = Pick<
   | 'prepareRetry'
   | 'renamePlan'
   | 'recordModerationCheck'
+  | 'restorePlan'
   | 'resumeBatchRun'
   | 'setPlanChunkSize'
   | 'startBatchRun'
@@ -431,6 +432,12 @@ export class DashboardService {
       throw new Error('BATCH_ALREADY_ACTIVE');
     }
     const plan = await this.repository.archivePlan(planId);
+    await this.bumpRevision();
+    return plan;
+  }
+
+  async restorePlan(planId: string): Promise<Plan> {
+    const plan = await this.repository.restorePlan(planId);
     await this.bumpRevision();
     return plan;
   }

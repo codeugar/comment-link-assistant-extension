@@ -116,10 +116,10 @@ describe('background message client', () => {
     const sendMessage = vi.spyOn(chrome.runtime, 'sendMessage');
     sendMessage.mockResolvedValueOnce({
       ok: false,
-      error: { code: 'PLAN_SITE_CONFLICT', message: 'already active' },
+      error: { code: 'PLAN_NOT_FOUND', message: 'missing plan' },
     } as never);
     await expect(sendToBackground({ type: 'plans.list' })).rejects.toThrow(
-      'PLAN_SITE_CONFLICT:already active'
+      'PLAN_NOT_FOUND:missing plan'
     );
 
     sendMessage.mockResolvedValueOnce({ unexpected: true } as never);

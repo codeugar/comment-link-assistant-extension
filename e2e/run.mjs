@@ -780,6 +780,108 @@ async function main() {
     return `invalid row copy: ${joined}`;
   });
 
+  /* --------------------------------------------------------------- T4P ---- */
+  await runTest('T4P', 'one site keeps several plans, and archiving is reversible', async () => {
+    await dashboard.bringToFront();
+    await closeSettingsDrawer(dashboard);
+    await waitForDashboardReady(dashboard);
+    await dashboard.click('nav.main-navigation button:has-text("计划管理")');
+    await dashboard.waitForSelector('.plans-page', { timeout: 20_000 });
+
+    const addPlan = async (name, urls) => {
+      await dashboard.click('.plans-page button:has-text("新建计划")');
+      await dashboard.waitForSelector('dialog.new-plan-dialog', { timeout: 20_000 });
+      await dashboard.fill('dialog.new-plan-dialog .form-field input', name);
+      await dashboard.fill('dialog.new-plan-dialog .target-urls-field textarea', urls.join('\n'));
+      await dashboard.click('dialog.new-plan-dialog button[type="submit"]');
+      await dashboard.waitForSelector('dialog.new-plan-dialog', { state: 'detached', timeout: 20_000 });
+      await dashboard.waitForSelector('.plan-detail-actions', { timeout: 20_000 });
+    };
+    const listedPlans = async () =>
+      dashboard.$$eval('.plan-list li button strong', (nodes) =>
+        nodes.map((node) => node.textContent.trim())
+      );
+    const detailButtons = async () =>
+      dashboard.$$eval('.plan-detail-actions button', (nodes) =>
+        nodes.map((node) => node.textContent.trim())
+      );
+
+    // Both plans point at the one configured promoting site: a site is allowed
+    // more than one unarchived plan.
+    await addPlan('E2E 归档甲', ['https://archive-a.example/one']);
+    await addPlan('E2E 归档乙', ['https://archive-b.example/one']);
+    const liveNames = (await listedPlans()).join(' | ');
+    for (const name of ['E2E 归档甲', 'E2E 归档乙']) {
+      assertIncludes(liveNames, name, `Plan ${name} is missing from the live plan list`);
+    }
+    await shot(dashboard, 'T4Pa-two-plans-one-site');
+
+    // 归档乙 is the selected plan, so the detail pane archives it directly.
+    await dashboard.click('.plan-detail-actions button:has-text("归档计划")');
+    await dashboard.waitForFunction(
+      (name) => !(document.querySelector('.plan-list')?.textContent ?? '').includes(name),
+      'E2E 归档乙',
+      { timeout: 20_000, polling: 50 }
+    );
+    // Archiving keeps the plan on screen, so an accidental archive can be undone
+    // without hunting for it again.
+    await dashboard.waitForSelector('.plan-detail-actions button:has-text("恢复计划")', { timeout: 20_000 });
+    assertIncludes(
+      await dashboard.locator('.plan-detail-heading h1').innerText(),
+      'E2E 归档乙',
+      'Archiving jumped the detail pane to another plan'
+    );
+
+    // The archived plan is only hidden, and the filter brings it back on screen.
+    await dashboard.locator('.archive-filter input').check();
+    await dashboard.waitForFunction(
+      (name) => (document.querySelector('.plan-list')?.textContent ?? '').includes(name),
+      'E2E 归档乙',
+      { timeout: 20_000, polling: 50 }
+    );
+    const archivedStatusClass = await dashboard
+      .locator('.plan-list li button:has-text("E2E 归档乙") .plan-status')
+      .first()
+      .getAttribute('class');
+    assertIncludes(archivedStatusClass, 'status-archived', 'Archived plan is not labelled 已归档 in the list');
+
+    await dashboard.click('.plan-list li button:has-text("E2E 归档乙")');
+    await dashboard.waitForSelector('.plan-detail-actions button:has-text("恢复计划")', { timeout: 20_000 });
+    const archivedActions = await detailButtons();
+    assert(
+      !archivedActions.some((label) => label.includes('归档计划')),
+      `Archived plan still offered 归档计划: ${JSON.stringify(archivedActions)}`
+    );
+    await shot(dashboard, 'T4Pb-archived');
+
+    await dashboard.click('.plan-detail-actions button:has-text("恢复计划")');
+    await dashboard.waitForSelector('.plan-detail-actions button:has-text("归档计划")', { timeout: 20_000 });
+    const restoredActions = await detailButtons();
+    assert(
+      !restoredActions.some((label) => label.includes('恢复计划')),
+      `Restored plan still offered 恢复计划: ${JSON.stringify(restoredActions)}`
+    );
+    assert(
+      restoredActions.some((label) => label.includes('重命名') || label.includes('归档计划')),
+      `Restored plan stayed read-only: ${JSON.stringify(restoredActions)}`
+    );
+
+    // Back among the live plans, not merely un-hidden.
+    await dashboard.locator('.archive-filter input').uncheck();
+    const restoredNames = (await listedPlans()).join(' | ');
+    assertIncludes(restoredNames, 'E2E 归档乙', 'Restored plan is missing from the live plan list');
+    const restoredStatusClass = await dashboard
+      .locator('.plan-list li button:has-text("E2E 归档乙") .plan-status')
+      .first()
+      .getAttribute('class');
+    assertIncludes(restoredStatusClass, 'status-active', 'Restored plan did not come back as an active plan');
+    await shot(dashboard, 'T4Pc-restored');
+
+    const errors = extensionErrorsFor('T4P');
+    assertEqual(errors.length, 0, `Uncaught page errors while archiving:\n${JSON.stringify(errors, null, 2)}`);
+    return `live plans: ${restoredNames}; restored status ${restoredStatusClass}`;
+  });
+
   /* ---------------------------------------------------------------- T5 ---- */
   await runTest('T5', 'batch stop is immediate', async () => {
     // The batch cannot start until the promoted site's meta can be fetched, and
