@@ -463,3 +463,153 @@ describe('HUBzero CKEditor iframe comment form', () => {
     expect(analysis.form.readiness).toBe('not_found');
   });
 });
+
+describe('forum reply composer mounted on demand', () => {
+  beforeEach(() => {
+    document.documentElement.lang = 'en';
+    document.head.innerHTML =
+      '<meta name="description" content="Release notes announced in the vendor community.">';
+    document.title = "What's New in the June release";
+    document.body.innerHTML = '';
+  });
+
+  // Adobe Community's shape: nothing editable is in the DOM on load. The only
+  // way in is a bare "Reply" button, and the composer it mounts has no <form>
+  // at all — a CKEditor iframe whose contenteditable body is separated from the
+  // "Send" button by six levels and a frame boundary, under a `qa-topic-post-edit`
+  // test hook.
+  function mountComposer(host: HTMLElement): HTMLIFrameElement | null {
+    host.innerHTML = `
+      <div class="qa-topic-post-edit">
+        <div>
+          <div class="html-editor__wrapper">
+            <div class="html-editor">
+              <div class="cke_1 cke cke_reset cke_chrome cke_editor_editor1">
+                <div class="cke_inner cke_reset">
+                  <span class="cke_top">
+                    <a class="cke_button cke_button__bold" role="button" title="Bold">Bold</a>
+                    <a class="cke_button cke_button__italic" role="button" title="Italic">Italic</a>
+                  </span>
+                  <div class="cke_contents cke_reset">
+                    <iframe class="cke_wysiwyg_frame cke_reset" title="Rich Text Editor, editor1" frameborder="0"></iframe>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="editor__actions">
+              <button type="button" class="btn btn-secondary">Cancel</button>
+              <button type="button" class="btn btn-primary">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    return host.querySelector('iframe');
+  }
+
+  function mountEditableBody(iframe: HTMLIFrameElement): Document | null {
+    const frameDocument = iframe.contentDocument;
+    if (!frameDocument) return null;
+    frameDocument.body.setAttribute('contenteditable', 'true');
+    frameDocument.body.setAttribute('aria-label', 'Editor');
+    frameDocument.body.className =
+      'post__content--new-editor post__content post__content--reply cke_editable cke_editable_themed cke_contents_ltr';
+    return frameDocument;
+  }
+
+  function renderThread(onReply: (host: HTMLElement) => void): void {
+    document.body.innerHTML = `
+      <article><h1>What's New in the June release</h1><p>Enough announcement copy to build an excerpt for generation and analysis of the release.</p></article>
+      <div class="topic-post">
+        <div class="post-actions">
+          <button type="button" class="subtle-button action-btn--like">Like</button>
+          <button type="button" class="subtle-button action-btn--reply">Reply</button>
+          <button type="button" class="subtle-button action-btn--share">Share</button>
+        </div>
+      </div>
+      <div id="reply-editor-inline" class="editor"><div class="editor__container"></div></div>
+    `;
+    const host = document.querySelector(
+      '.editor__container'
+    ) as HTMLElement | null;
+    document
+      .querySelector('.action-btn--reply')
+      ?.addEventListener('click', () => {
+        if (host) onReply(host);
+      });
+  }
+
+  it('clicks the bare "Reply" control and reads the composer it mounts', async () => {
+    renderThread((host) => {
+      const iframe = mountComposer(host);
+      if (iframe) mountEditableBody(iframe);
+    });
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+    });
+    expect(analysis.form.submitLabel).toContain('Send');
+  });
+
+  it('waits for an editor that only becomes editable after the frame is attached', async () => {
+    // The frame lands in the outer DOM first and turns editable later, so the
+    // mount is invisible to a MutationObserver watching the top document.
+    renderThread((host) => {
+      const iframe = mountComposer(host);
+      if (!iframe) return;
+      setTimeout(() => mountEditableBody(iframe), 20);
+    });
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'ready',
+      message: 'COMMENT_FORM_READY',
+    });
+  });
+
+  it('leaves a bare "Reply" control alone once an editor is already on the page', async () => {
+    document.body.innerHTML = `
+      <article><h1>What's New in the June release</h1><p>Enough announcement copy to build an excerpt for generation and analysis of the release.</p></article>
+      <form class="comment-form" action="/comments">
+        <label for="c">Leave a comment</label>
+        <textarea id="c" name="comment"></textarea>
+        <button type="submit">Post comment</button>
+      </form>
+      <button type="button" class="action-btn--reply">Reply</button>
+    `;
+    const reply = document.querySelector(
+      '.action-btn--reply'
+    ) as HTMLElement | null;
+    const clicked = vi.fn();
+    reply?.addEventListener('click', clicked);
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({ readiness: 'ready' });
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it('keeps refusing a form whose own identity is a standalone "edit"', async () => {
+    document.body.innerHTML = `
+      <article><h1>What's New in the June release</h1><p>Enough announcement copy to build an excerpt for generation and analysis of the release.</p></article>
+      <div class="edit">
+        <form class="comment-form">
+          <label for="c">Your comment</label>
+          <textarea id="c" name="comment"></textarea>
+          <button type="submit">Post</button>
+        </form>
+      </div>
+    `;
+
+    const analysis = await analyzePageDocument(document);
+
+    expect(analysis.form).toMatchObject({
+      readiness: 'not_found',
+      message: 'COMMENT_FORM_NOT_FOUND',
+    });
+  });
+});

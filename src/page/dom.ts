@@ -43,6 +43,15 @@ const DESTRUCTIVE_SUBMIT =
 const NON_COMMENT_FORM_CONTEXT =
   /\b(?:report|flag|spam|abuse|delete|remove|edit|update|moderat(?:e|ion)|approve|reject|ban|block|hide|archive|trash|discard|share|forward|invite|private[\s_-]*message|direct[\s_-]*message|message[\s_-]*author|order|checkout|payment|purchase|cart|billing|shipping|donat(?:e|ion)|booking|reservation|rsvp|application|apply|log[\s_-]*in|sign[\s_-]*(?:in|up)|register|account)\b|删除|刪除|移除|举报|舉報|标记|標記|垃圾|滥用|濫用|编辑|編輯|更新|审核|審核|批准|拒绝|拒絕|封禁|屏蔽|隱藏|隐藏|归档|歸檔|丢弃|丟棄|分享|转发|轉發|邀请|邀請|私信|私人消息|私人訊息|站内信|站內信|订单|訂單|结账|結帳|支付|付款|购买|購買|购物车|購物車|账单|帳單|捐赠|捐贈|预订|預訂|预约|預約|申请|申請|登录|登入|注册|註冊|加入|账号|帳號/i;
 const CHECKOUT_THEME_IDENTITY_TOKEN = /(^|[\s_-])checkout(?=$|[\s_-])/gi;
+// `edit` / `update` welded into a longer id/class names a component, not an
+// action: Adobe Community wraps its reply composer in `qa-topic-post-edit`, a
+// test hook meaning "the post editor". Strip those from structural identity
+// before the non-comment-form veto reads it. A standalone `edit` class still
+// vetoes, as does the word in visible copy or in the submit control's own
+// identity — and a real edit form's Save / Update button is already rejected by
+// `scoreSubmit` via DESTRUCTIVE_SUBMIT before confidence is ever consulted.
+const COMPOUND_EDIT_IDENTITY_TOKEN =
+  /(?<=[_-])(?:edit|update)(?![A-Za-z0-9])|(?<![A-Za-z0-9])(?:edit|update)(?=[_-])/gi;
 const LOGIN_COPY =
   /log[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*in\s+to\s+(?:comment|reply)|sign[\s-]*up\s+to\s+(?:comment|reply)|register\s+to\s+(?:comment|reply)|create\s+(?:an?\s+)?account\s+to\s+(?:comment|reply)|(?:log[\s-]*in|sign[\s-]*(?:in|up)|register)\s+(?:or\s+(?:sign[\s-]*up|register)\s+)?to\s+(?:post|leave|add|write|submit)\s+(?:a\s+|your\s+)?(?:comment|repl(?:y|ies))s?|you must be logged in|登录后(?:才可)?(?:评论|回复|留言)|请先登录|登入後(?:才可)?(?:評論|回覆)|注册后(?:才可)?(?:评论|回复|留言)|註冊後(?:才可)?(?:評論|回覆)/i;
 const CAPTCHA_SELECTOR = [
@@ -91,6 +100,11 @@ const RENDERED_COMMENT_SELECTOR = [
   '[data-comment-id]',
   '[data-comment-key]',
 ].join(', ');
+// How far `findContainer` climbs when the nearest control-bearing ancestor has
+// no usable submit. A rich-text editor hosted in its own frame sits ~12 levels
+// below the container that owns the submit button (Adobe Community's CKEditor
+// measures 11), so the bound has to clear that with a little room.
+const CONTAINER_CLIMB_LIMIT = 16;
 const DOM_SETTLE_MS = 50;
 const SUBMIT_ENABLE_TIMEOUT_MS = 750;
 // Post-click verification polls for decisive evidence (rendered promoted link,
@@ -107,6 +121,16 @@ const PREPARATION_TTL_MS = 2 * 60_000;
 // form is present early. These bounds keep the settle deterministic and short.
 const ANALYZE_DOM_CONTENT_LOADED_TIMEOUT_MS = 5_000;
 const ANALYZE_SETTLE_TIMEOUT_MS = 4_000;
+// A revealed editor is a lazily fetched bundle, not a hidden node that merely
+// unhides: the on-demand rich-text editors behind a "Reply" control take
+// 15-20s to boot in a background worker tab (measured on Adobe Community's
+// CKEditor). Analyze runs under a 75s command budget, so this still leaves the
+// rest of the pass room, and the wait ends the moment the editor appears.
+const REVEAL_SETTLE_TIMEOUT_MS = 30_000;
+// A MutationObserver on the top document never sees a mount that happens inside
+// a same-origin child frame — CKEditor builds its editor in its own iframe — so
+// the editor wait polls alongside the observer.
+const EDITOR_POLL_INTERVAL_MS = 500;
 // The runtime preflight asks the page for the Verbum bundle rather than waiting
 // on its viewport-triggered loader, so a mount lands within seconds. Waiting
 // longer than that never helps: a shell that is still empty means the bundle
@@ -128,6 +152,13 @@ const COMMENT_REGION_SELECTOR = [
 // links ("5 comments") are deliberately excluded: they usually just scroll.
 const REVEAL_COMMENT_COPY =
   /(?:leave|write|post|add|drop)\s+(?:a\s+|your\s+)?(?:comment|reply)|join\s+the\s+(?:discussion|conversation)|(?:show|view|load|open)\s+(?:the\s+)?comments?|^\s*respond\s*$|发表评论|寫評論|写评论|添加评论|发表留言|我要评论|我要留言/i;
+// Forum platforms (Adobe Community, most Khoros/Discourse skins) label the
+// control that mounts their editor with the bare word "Reply". A bare label is
+// too weak to trust on its own — it is also how a submit button reads — so it
+// only counts while the page has no editor at all: with nothing to submit, the
+// click cannot post anything, and a real submit never stands without an editor.
+const BARE_REVEAL_COMMENT_COPY =
+  /^(?:reply|comment|respond)$|^(?:回复|回覆|评论|評論|留言)$/i;
 const REVEAL_REJECT =
   /\b(?:like|unlike|upvote|downvote|vote|follow|bookmark|copy|share|report|flag)\b|点赞|點讚|投票|关注|關注|收藏|复制|複製|分享|举报|舉報/i;
 
@@ -592,20 +623,35 @@ function findEditor(document: Document): HTMLElement | null {
   return candidates[0]?.element ?? null;
 }
 
+// The parent chain continued across a same-origin frame boundary. A CKEditor
+// style editor is the <body> of its own iframe, so its local chain dies at
+// <html> and never reaches the container that owns the submit button.
+function containerParent(element: Element): HTMLElement | null {
+  return element.parentElement ?? ownerFrameElement(element.ownerDocument);
+}
+
 function findContainer(editor: HTMLElement): HTMLElement {
   const form = crossFrameAncestor(editor, 'form');
   if (form) return form;
 
-  let current = editor.parentElement;
-  for (let depth = 0; current && depth < 6; depth += 1) {
+  // The nearest ancestor holding any control is the right container for the
+  // overwhelming majority of forms, so it still wins. Climb past it only when
+  // it holds no usable submit — a rich-text editor puts its own formatting
+  // toolbar between the editor and the real submit. Those pages report
+  // SUBMIT_BUTTON_NOT_FOUND today, so the wider search can only turn a failure
+  // into a match, never redirect a container that already resolves.
+  let nearest: HTMLElement | null = null;
+  let current = containerParent(editor);
+  for (let depth = 0; current && depth < CONTAINER_CLIMB_LIMIT; depth += 1) {
     if (
       current.querySelector('button, input[type="submit"], [role="button"]')
     ) {
-      return current;
+      if (findSubmit(current)) return current;
+      nearest ??= current;
     }
-    current = current.parentElement;
+    current = containerParent(current);
   }
-  return editor.parentElement ?? editor;
+  return nearest ?? editor.parentElement ?? editor;
 }
 
 function scoreSubmit(element: Element): number {
@@ -680,11 +726,10 @@ function isConfidentCommentForm(
     editor,
     container
   );
-  const actionContext = `${structuralContext} ${headingCopy}`;
   const explicitCommentControls =
     POSITIVE_EDITOR.test(elementDescriptor(editor)) &&
     STRONG_COMMENT_SUBMIT.test(elementDescriptor(submit));
-  const safetyContext = explicitCommentControls
+  const safetyIdentity = explicitCommentControls
     ? [
         structuralDescriptor(editor, true),
         structuralDescriptor(container, true),
@@ -693,10 +738,15 @@ function isConfidentCommentForm(
           container.parentElement?.parentElement ?? null,
           true
         ),
-        headingCopy,
-        controlActionDescriptor(submit),
       ].join(' ')
-    : `${actionContext} ${controlActionDescriptor(submit)}`;
+    : structuralContext;
+  // Only structural identity is relaxed; the heading copy and the submit
+  // control's own descriptor reach the veto untouched.
+  const safetyContext = [
+    safetyIdentity.replace(COMPOUND_EDIT_IDENTITY_TOKEN, ''),
+    headingCopy,
+    controlActionDescriptor(submit),
+  ].join(' ');
   if (NEGATIVE_EDITOR.test(structuralContext)) return false;
   if (NON_COMMENT_FORM_CONTEXT.test(safetyContext)) return false;
   if (POSITIVE_EDITOR.test(structuralContext)) return true;
@@ -1290,7 +1340,10 @@ function waitForCommentEditor(
   return new Promise((resolve) => {
     const view = document.defaultView;
     const Observer = view?.MutationObserver;
-    const pending: { timer?: ReturnType<typeof setTimeout> } = {};
+    const pending: {
+      timer?: ReturnType<typeof setTimeout>;
+      poll?: ReturnType<typeof setInterval>;
+    } = {};
     let settled = false;
     const finish = () => {
       if (settled) return;
@@ -1298,6 +1351,9 @@ function waitForCommentEditor(
       observer?.disconnect();
       if (pending.timer !== undefined) {
         (view?.clearTimeout ?? clearTimeout)(pending.timer);
+      }
+      if (pending.poll !== undefined) {
+        (view?.clearInterval ?? clearInterval)(pending.poll);
       }
       resolve();
     };
@@ -1310,7 +1366,9 @@ function waitForCommentEditor(
       observer.observe(document.body, { childList: true, subtree: true });
     }
     pending.timer = (view?.setTimeout ?? setTimeout)(finish, timeoutMs);
-    if (!observer) finish();
+    pending.poll = (view?.setInterval ?? setInterval)(() => {
+      if (findEditor(document)) finish();
+    }, EDITOR_POLL_INTERVAL_MS);
   });
 }
 
@@ -1325,6 +1383,7 @@ function isSamePageAnchor(element: HTMLElement): boolean {
 // absent / hidden comment form. Links that navigate, auth prompts, and
 // destructive or social actions are never candidates.
 function findCommentRevealControl(document: Document): HTMLElement | null {
+  const bareAllowed = !findEditor(document);
   const candidates = queryAllDeep(
     document,
     'button, [role="button"], summary, a'
@@ -1334,7 +1393,9 @@ function findCommentRevealControl(document: Document): HTMLElement | null {
       if (!isVisible(element) || isDisabled(element)) return null;
       if (element.closest('form')) return null;
       const copy = normalizeWhitespace(visibleTextContent(element));
-      if (!copy || copy.length > 80 || !REVEAL_COMMENT_COPY.test(copy)) {
+      if (!copy || copy.length > 80) return null;
+      const phrase = REVEAL_COMMENT_COPY.test(copy);
+      if (!phrase && !(bareAllowed && BARE_REVEAL_COMMENT_COPY.test(copy))) {
         return null;
       }
       const descriptor = controlActionDescriptor(element);
@@ -1347,7 +1408,11 @@ function findCommentRevealControl(document: Document): HTMLElement | null {
         return null;
       }
       if (element.tagName === 'A' && !isSamePageAnchor(element)) return null;
-      return { element, score: element.tagName === 'A' ? 1 : 2 };
+      // An explicit phrase always outranks a bare label; within each tier a
+      // button outranks a link, and ties keep DOM order — on a thread that is
+      // the top-level reply control rather than a nested one.
+      const score = (phrase ? 2 : 0) + (element.tagName === 'A' ? 0 : 1);
+      return { element, score };
     })
     .filter((candidate): candidate is { element: HTMLElement; score: number } =>
       Boolean(candidate)
@@ -1364,7 +1429,7 @@ async function revealHiddenCommentForm(document: Document): Promise<boolean> {
   } catch {
     return false;
   }
-  await waitForCommentEditor(document, ANALYZE_SETTLE_TIMEOUT_MS);
+  await waitForCommentEditor(document, REVEAL_SETTLE_TIMEOUT_MS);
   return true;
 }
 
