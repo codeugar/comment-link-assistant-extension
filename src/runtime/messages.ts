@@ -27,6 +27,7 @@ import type {
 } from '@/storage/outbound-link-library';
 import type { SitePlan } from '@/storage/plans';
 import type { WebsiteProfile } from '@/website/profile';
+import type { WriteLinkFormat, WriteSession } from '@/write/types';
 
 export interface DashboardActiveRun {
   planId: string;
@@ -151,7 +152,24 @@ export type PopupMessage =
     }
   | { type: 'anchor.generateNaturalTexts'; siteId: string; count: number }
   | { type: 'data-backup.export' }
-  | { type: 'data-backup.import'; backup: unknown };
+  | { type: 'data-backup.import'; backup: unknown }
+  | { type: 'write.start'; siteId: string; format: WriteLinkFormat }
+  | { type: 'write.send'; tabId: number; text: string }
+  | { type: 'write.setFormat'; tabId: number; format: WriteLinkFormat }
+  | {
+      type: 'write.setAnchor';
+      tabId: number;
+      draftId: string;
+      anchorText: string;
+    }
+  | { type: 'write.get'; tabId: number }
+  | { type: 'write.reset'; tabId: number }
+  | {
+      type: 'write.markSent';
+      tabId: number;
+      draftId: string;
+      addToRecheck: boolean;
+    };
 
 export interface PreparedComment {
   analysis: PageAnalysis;
@@ -209,7 +227,14 @@ export type PopupMessageResult =
       data: BatchSnapshot;
     }
   | { type: 'data-backup.export'; data: DataBackupFile }
-  | { type: 'data-backup.import'; data: { imported: true } };
+  | { type: 'data-backup.import'; data: { imported: true } }
+  | { type: 'write.start'; data: WriteSession }
+  | { type: 'write.send'; data: WriteSession }
+  | { type: 'write.setFormat'; data: WriteSession }
+  | { type: 'write.setAnchor'; data: WriteSession }
+  | { type: 'write.get'; data: WriteSession | null }
+  | { type: 'write.reset'; data: null }
+  | { type: 'write.markSent'; data: WriteSession };
 
 export type BackgroundResponse =
   | { ok: true; data: PopupMessageResult }

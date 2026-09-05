@@ -15,6 +15,21 @@ export interface TargetPageContext {
   hasWebsiteField: boolean;
 }
 
+/** What a read-only `read-context` page command hands the write-comment chat
+ *  assistant: the thread's own words, never anything the assistant authored. */
+export interface WritePageContext {
+  url: string;
+  title: string;
+  language: string;
+  /** The user's own selection on the page, when there was one. */
+  selection: string | null;
+  firstPost: string;
+  /** Total posts detected minus the opening one, or null when no forum
+   *  selector matched and the count cannot be trusted. */
+  replyCount: number | null;
+  source: 'selection' | 'first-post' | 'article' | 'body';
+}
+
 // A comment form that lives inside a cross-origin iframe the extension can
 // still script (given host permission). Carried on the summary so the command
 // layer knows to run submit/click inside the frame instead of the top document.

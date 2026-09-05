@@ -10,6 +10,7 @@ import type {
   PageSubmissionResult,
   PreparedPageSubmission,
   TargetPageContext,
+  WritePageContext,
 } from './types';
 import { isLocallyVisible, isVisible } from './visibility';
 
@@ -984,6 +985,166 @@ function readPageExcerpt(document: Document): string {
     0,
     8_000
   );
+}
+
+const WRITE_CONTEXT_FIRST_POST_MAX_LENGTH = 6_000;
+const WRITE_CONTEXT_SELECTION_MAX_LENGTH = 3_000;
+// Minimum plausible article length once no forum thread and no <article> match
+// carried anything usable — short of this, `body` is more noise than context.
+const WRITE_CONTEXT_ARTICLE_MIN_LENGTH = 40;
+
+const ARTICLE_EXCERPT_SELECTORS = [
+  'article .entry-content',
+  'article',
+  '.post-content',
+  '.article-content',
+  'main',
+  '[role="main"]',
+  '#content',
+  '.entry-content',
+];
+
+// Order matters: the first rule whose `first` selector matches non-empty text
+// wins. `all` is the sibling selector that also matches every post in the
+// thread (the opening one included), so replyCount is that count minus one.
+const FORUM_FIRST_POST_RULES: ReadonlyArray<{
+  first: readonly string[];
+  all: string | null;
+}> = [
+  // Discourse
+  {
+    first: ['#post_1 .cooked', 'article[data-post-number="1"] .cooked'],
+    all: 'article[data-post-number]',
+  },
+  // XenForo
+  {
+    first: [
+      '.message--post:first-of-type .message-body',
+      'article.message:first-of-type .bbWrapper',
+    ],
+    all: '.message--post, article.message',
+  },
+  // phpBB
+  { first: ['.post:first-of-type .content'], all: '.post' },
+  // Flarum
+  {
+    first: ['.PostStream-item:first-child .Post-body'],
+    all: '.PostStream-item',
+  },
+  // Discuz
+  {
+    first: ['#postlist .t_f:first-of-type', '.plc .t_fsz'],
+    all: '#postlist .t_f',
+  },
+  // V2EX has no reliable "every post" selector to derive a reply count from.
+  { first: ['.topic_content'], all: null },
+  // NodeBB
+  {
+    first: ['[component="post"]:first-of-type [component="post/content"]'],
+    all: '[component="post"]',
+  },
+];
+
+function findForumFirstPost(
+  document: Document
+): { text: string; replyCount: number | null } | null {
+  for (const rule of FORUM_FIRST_POST_RULES) {
+    for (const selector of rule.first) {
+      const element = document.querySelector(selector);
+      if (!element) continue;
+      const text = normalizeWhitespace(renderedPageText(element));
+      if (!text) continue;
+      const replyCount = rule.all
+        ? Math.max(0, document.querySelectorAll(rule.all).length - 1)
+        : null;
+      return { text, replyCount };
+    }
+  }
+  return null;
+}
+
+function findArticleExcerpt(document: Document): string {
+  let fallback = '';
+  for (const selector of ARTICLE_EXCERPT_SELECTORS) {
+    for (const source of document.querySelectorAll(selector)) {
+      const text = normalizeWhitespace(renderedPageText(source));
+      if (text.length >= 200) return text;
+      if (text.length > fallback.length) fallback = text;
+    }
+  }
+  return fallback;
+}
+
+// Best-effort only: a same-origin iframe the top document can already reach
+// without extra permissions. A cross-origin iframe throws on `.contentDocument`
+// and is skipped rather than treated as an error.
+function readSelectionText(document: Document): string {
+  const own = document.getSelection?.()?.toString() ?? '';
+  if (own.trim()) return own;
+  for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+    try {
+      const frameDocument = (frame as HTMLIFrameElement).contentDocument;
+      const text = frameDocument?.getSelection?.()?.toString() ?? '';
+      if (text.trim()) return text;
+    } catch {
+      // Cross-origin frame: not trivially available, so it is skipped.
+    }
+  }
+  return '';
+}
+
+/**
+ * Read-only context for the write-comment chat assistant: the thread's own
+ * words (a forum's opening post, an article's body, or the user's own
+ * selection), never anything generated. Selection wins when present because
+ * the user pointed at it on purpose.
+ */
+export function readWriteContext(document: Document): WritePageContext {
+  const url = document.location?.href ?? '';
+  const title = normalizeWhitespace(document.title || '').slice(0, 500);
+  const language = (
+    document.documentElement.getAttribute('lang')?.trim() ||
+    document.defaultView?.navigator.language ||
+    'en'
+  ).slice(0, 100);
+  const selectionText = normalizeWhitespace(readSelectionText(document)).slice(
+    0,
+    WRITE_CONTEXT_SELECTION_MAX_LENGTH
+  );
+  const selection = selectionText || null;
+
+  const forumPost = findForumFirstPost(document);
+  let firstPost: string;
+  let replyCount: number | null;
+  let source: WritePageContext['source'];
+  if (forumPost) {
+    firstPost = forumPost.text;
+    replyCount = forumPost.replyCount;
+    source = 'first-post';
+  } else {
+    const articleText = findArticleExcerpt(document);
+    if (articleText.length >= WRITE_CONTEXT_ARTICLE_MIN_LENGTH) {
+      firstPost = articleText;
+      replyCount = null;
+      source = 'article';
+    } else {
+      firstPost = document.body
+        ? normalizeWhitespace(renderedPageText(document.body))
+        : '';
+      replyCount = null;
+      source = 'body';
+    }
+  }
+
+  return {
+    url,
+    title,
+    language,
+    selection,
+    firstPost: firstPost.slice(0, WRITE_CONTEXT_FIRST_POST_MAX_LENGTH),
+    replyCount,
+    source: selection ? 'selection' : source,
+  };
 }
 
 function hasCaptcha(document: Document): boolean {
