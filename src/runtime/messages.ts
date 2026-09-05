@@ -234,7 +234,13 @@ export type PopupMessageResult =
   | { type: 'write.setAnchor'; data: WriteSession }
   | { type: 'write.get'; data: WriteSession | null }
   | { type: 'write.reset'; data: null }
-  | { type: 'write.markSent'; data: WriteSession };
+  | {
+      type: 'write.markSent';
+      /** `recheckError` is set only when `addToRecheck` was requested and the
+       *  best-effort moderation re-check enrollment failed unexpectedly — the
+       *  ledger and library writes still happened and `sentAt` is still set. */
+      data: WriteSession & { recheckError?: string };
+    };
 
 export type BackgroundResponse =
   | { ok: true; data: PopupMessageResult }

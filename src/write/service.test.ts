@@ -1,5 +1,7 @@
+import { createDefaultAnchorPlan } from '@/anchor/types';
 import type { WritePageContext } from '@/page/types';
 import { getAnchorLedger } from '@/storage/anchor-ledger';
+import { getAnchorPlan, saveAnchorPlan } from '@/storage/anchor-plan';
 import { getOutboundLinkLibrary } from '@/storage/outbound-link-library';
 import {
   createDefaultSettings,
@@ -379,5 +381,269 @@ describe('writeMarkSent', () => {
     await expect(
       writeMarkSent({ tabId: 1, draftId: 'missing', addToRecheck: false })
     ).rejects.toThrow('WRITE_DRAFT_NOT_FOUND');
+  });
+
+  it('derives what it records from the draft format at send time, not the format it was drawn under', async () => {
+    await seedSettings();
+    // Drawn under bbcode with a real bucket, then switched to `none` before
+    // being sent: nothing must be recorded, because `none` never carried a
+    // link — the rotation cost already happened when it was drawn.
+    const session = makeSession({
+      drafts: [
+        {
+          id: 'draft-1',
+          version: 1,
+          template: 'Worth a look at {LINK} for context.',
+          anchorBucket: 'brand',
+          anchorText: 'Product Site',
+          rendered: 'Worth a look at for context.',
+          format: 'none',
+          createdAt: 1,
+        },
+      ],
+    });
+    await setWriteSession(session);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+
+    await writeMarkSent({ tabId: 1, draftId: 'draft-1', addToRecheck: false });
+
+    const ledger = await getAnchorLedger(SITE_ID);
+    expect(ledger.published.brand).toBe(0);
+    expect(ledger.published.naked).toBe(0);
+  });
+
+  it('records the naked bucket against the site URL for a bare-url draft, ignoring any stored bucket', async () => {
+    await seedSettings();
+    const session = makeSession({
+      drafts: [
+        {
+          id: 'draft-1',
+          version: 1,
+          template: 'Worth a look at {LINK} for context.',
+          anchorBucket: 'brand',
+          anchorText: 'Product Site',
+          rendered: `Worth a look at ${WEBSITE_URL} for context.`,
+          format: 'bare-url',
+          createdAt: 1,
+        },
+      ],
+    });
+    await setWriteSession(session);
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+
+    await writeMarkSent({ tabId: 1, draftId: 'draft-1', addToRecheck: false });
+
+    const ledger = await getAnchorLedger(SITE_ID);
+    expect(ledger.published.naked).toBe(1);
+    expect(ledger.published.brand).toBe(0);
+    expect(ledger.texts.find((row) => row.bucket === 'naked')?.text).toBe(
+      WEBSITE_URL
+    );
+  });
+
+  it('persists sentAt and the ledger write even when the re-check enrollment fails unexpectedly, and surfaces the error', async () => {
+    await seedSentTest();
+    const moderationModule = await import('@/dashboard/moderation-recheck');
+    vi.spyOn(moderationModule, 'addManualModerationEntry').mockRejectedValue(
+      new Error('MODERATION_RECHECK_UNEXPECTED')
+    );
+
+    const result = await writeMarkSent({
+      tabId: 1,
+      draftId: 'draft-1',
+      addToRecheck: true,
+    });
+
+    expect(result.drafts[0]?.sentAt).toBeTypeOf('number');
+    expect(result.recheckError).toBe('MODERATION_RECHECK_UNEXPECTED');
+    const ledger = await getAnchorLedger(SITE_ID);
+    expect(ledger.published.brand).toBe(1);
+
+    // A retry must see the draft as already sent and never touch the ledger
+    // again, even though the re-check enrollment never actually succeeded.
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+    const retry = await writeMarkSent({
+      tabId: 1,
+      draftId: 'draft-1',
+      addToRecheck: true,
+    });
+    expect(retry.recheckError).toBeUndefined();
+    const ledgerAfterRetry = await getAnchorLedger(SITE_ID);
+    expect(ledgerAfterRetry.published.brand).toBe(1);
+  });
+});
+
+describe('anchor selection depends on the session format', () => {
+  async function seedSendable(format: WriteSession['format']): Promise<void> {
+    await seedSettings();
+    await seedWebsiteProfileCache();
+    await setWriteSession(makeSession({ format }));
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+  }
+
+  it('draws no anchor and never touches the plan for format none', async () => {
+    await seedSendable('none');
+    // A plan with a non-empty pool would prove a draw happened if one did;
+    // its cursor staying untouched shows format `none` never consulted it.
+    await saveAnchorPlan({
+      ...createDefaultAnchorPlan(SITE_ID, 1),
+      targets: {
+        brand: 100,
+        naked: 0,
+        exact: 0,
+        partial: 0,
+        generic: 0,
+        natural: 0,
+      },
+      pools: {
+        brand: ['Product Site'],
+        naked: [],
+        exact: [],
+        partial: [],
+        generic: [],
+        natural: [],
+      },
+    });
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({
+        reply: 'Here is a draft.',
+        draft: { comment: 'Worth a look at {LINK} for context.' },
+      })
+    );
+
+    const session = await writeSend({ tabId: 1, text: 'go on' });
+
+    expect(session.drafts[0]?.anchorBucket).toBeNull();
+    expect(session.drafts[0]?.anchorText).toBeNull();
+    expect(session.drafts[0]?.rendered).not.toContain('{LINK}');
+    const plan = await getAnchorPlan(SITE_ID);
+    expect(plan.cursor.brand).toBe(0);
+  });
+
+  it('records the naked bucket with the site URL for format bare-url without drawing from the plan', async () => {
+    await seedSendable('bare-url');
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({
+        reply: 'Here is a draft.',
+        draft: { comment: 'Worth a look at {LINK} for context.' },
+      })
+    );
+
+    const session = await writeSend({ tabId: 1, text: 'go on' });
+
+    expect(session.drafts[0]?.anchorBucket).toBe('naked');
+    expect(session.drafts[0]?.anchorText).toBe(WEBSITE_URL);
+    expect(session.drafts[0]?.rendered).toContain(WEBSITE_URL);
+  });
+
+  it('draws from the anchor plan for markdown/bbcode/html formats', async () => {
+    await seedSendable('markdown');
+    await saveAnchorPlan({
+      ...createDefaultAnchorPlan(SITE_ID, 1),
+      targets: {
+        brand: 100,
+        naked: 0,
+        exact: 0,
+        partial: 0,
+        generic: 0,
+        natural: 0,
+      },
+      pools: {
+        brand: ['Product Site', 'Product Co'],
+        naked: [],
+        exact: [],
+        partial: [],
+        generic: [],
+        natural: [],
+      },
+    });
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({
+        reply: 'Here is a draft.',
+        draft: { comment: 'Worth a look at {LINK} for context.' },
+      })
+    );
+
+    const session = await writeSend({ tabId: 1, text: 'go on' });
+
+    expect(session.drafts[0]?.anchorBucket).toBe('brand');
+    expect(session.drafts[0]?.anchorText).toBe('Product Site');
+  });
+});
+
+describe('anchor rotation is only spent once a draft is produced', () => {
+  async function seedRotationPlan(): Promise<void> {
+    await saveAnchorPlan({
+      ...createDefaultAnchorPlan(SITE_ID, 1),
+      targets: {
+        brand: 100,
+        naked: 0,
+        exact: 0,
+        partial: 0,
+        generic: 0,
+        natural: 0,
+      },
+      pools: {
+        brand: ['Product Site', 'Product Co'],
+        naked: [],
+        exact: [],
+        partial: [],
+        generic: [],
+        natural: [],
+      },
+    });
+  }
+
+  it('never advances the cursor on a turn that produced no draft', async () => {
+    await seedSettings();
+    await seedWebsiteProfileCache();
+    await seedRotationPlan();
+    await setWriteSession(makeSession({ format: 'markdown' }));
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({ reply: 'Tell me more first.' })
+    );
+
+    await writeSend({ tabId: 1, text: 'not sure yet' });
+
+    const plan = await getAnchorPlan(SITE_ID);
+    expect(plan.cursor.brand).toBe(0);
+  });
+
+  it('advances and persists the cursor once a draft is produced', async () => {
+    await seedSettings();
+    await seedWebsiteProfileCache();
+    await seedRotationPlan();
+    await setWriteSession(makeSession({ format: 'markdown' }));
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({
+        reply: 'Here is a draft.',
+        draft: { comment: 'Worth a look at {LINK} for context.' },
+      })
+    );
+
+    await writeSend({ tabId: 1, text: 'go on' });
+
+    const plan = await getAnchorPlan(SITE_ID);
+    expect(plan.cursor.brand).toBe(1);
   });
 });
