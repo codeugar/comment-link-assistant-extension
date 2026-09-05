@@ -2,6 +2,7 @@ import {
   analyzePageDocument,
   clickPreparedSubmissionDocument,
   prepareSubmissionDocument,
+  readWriteContext,
   verifySubmissionDocument,
 } from './dom';
 import type {
@@ -12,6 +13,7 @@ import type {
   PageSubmissionPreparation,
   PageSubmissionResult,
   PreparedPageSubmission,
+  WritePageContext,
 } from './types';
 
 export const PAGE_COMMAND_MESSAGE_TYPE = 'comment-link-assistant:page-command';
@@ -33,7 +35,8 @@ export type PageCommand =
       baseline: PageSubmissionBaseline;
       expectedUrl: string;
       targetWebsiteUrl?: string;
-    };
+    }
+  | { type: 'read-context' };
 
 export interface PageCommandMessage {
   type: typeof PAGE_COMMAND_MESSAGE_TYPE;
@@ -44,6 +47,7 @@ export type PageCommandResult =
   | { type: 'analysis'; analysis: PageAnalysis }
   | { type: 'preparation'; preparation: PageSubmissionPreparation }
   | { type: 'submission'; result: PageSubmissionResult }
+  | { type: 'context'; context: WritePageContext }
   | { type: 'error'; message: string };
 
 export function isPageCommand(value: unknown): value is PageCommand {
@@ -56,6 +60,7 @@ export function isPageCommand(value: unknown): value is PageCommand {
       record.verbumPreflight === 'timed_out'
     );
   }
+  if (record.type === 'read-context') return true;
   if (record.type === 'verify') {
     return (
       typeof record.fingerprint === 'string' &&
@@ -140,6 +145,9 @@ export async function runPageCommand(
         verbumPreflightTimedOut: command.verbumPreflight === 'timed_out',
       }),
     };
+  }
+  if (command.type === 'read-context') {
+    return { type: 'context', context: readWriteContext(document) };
   }
   if (command.type === 'verify') {
     if (
