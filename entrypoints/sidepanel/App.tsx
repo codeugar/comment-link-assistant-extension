@@ -25,6 +25,15 @@ import {
 import type { ExtensionSettings } from '@/types';
 import { ChartLineUp } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
+import WritePanel from './WritePanel';
+
+export const SIDEPANEL_TAB_STORAGE_KEY = 'comment-link-assistant.sidepanel-tab';
+
+type SidepanelTab = 'run' | 'write';
+
+function isSidepanelTab(value: unknown): value is SidepanelTab {
+  return value === 'run' || value === 'write';
+}
 
 // The sidepanel observes a run and works the manual gates it stops at. It never
 // starts one: every surface that puts a link on someone else's page lives in the
@@ -46,7 +55,7 @@ function providerLabel(provider: ExtensionSettings['provider']): string {
   );
 }
 
-function friendlyError(error: unknown): string {
+export function friendlyError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const code = raw.split(':', 1)[0];
   if (code.startsWith('TARGET_URL_')) return translate('invalidTargetUrls');
@@ -339,6 +348,7 @@ export default function App() {
   const [manuallyExpandedItemIds, setManuallyExpandedItemIds] = useState<
     Set<string>
   >(() => new Set());
+  const [sidepanelTab, setSidepanelTab] = useState<SidepanelTab>('run');
 
   useEffect(() => {
     let disposed = false;
@@ -347,14 +357,25 @@ export default function App() {
       getSettings(),
       getBatch(),
       getBatchHistory(),
-    ]).then(([, storedSettings, storedBatch, storedHistory]) => {
-      setSettings(storedSettings);
-      setUiLocale(storedSettings.locale ?? DEFAULT_UI_LOCALE);
-      setBatch(storedBatch);
-      setHistory(storedHistory);
-      setLoaded(true);
-      if (!disposed) chrome.storage.onChanged.addListener(onStorageChanged);
-    });
+      chrome.storage.session.get(SIDEPANEL_TAB_STORAGE_KEY).catch(() => ({})),
+    ]).then(
+      ([, storedSettings, storedBatch, storedHistory, storedTabResult]) => {
+        setSettings(storedSettings);
+        setUiLocale(storedSettings.locale ?? DEFAULT_UI_LOCALE);
+        setBatch(storedBatch);
+        setHistory(storedHistory);
+        const storedTab = (storedTabResult as Record<string, unknown>)[
+          SIDEPANEL_TAB_STORAGE_KEY
+        ];
+        const batchActive =
+          storedBatch?.status === 'running' || storedBatch?.status === 'paused';
+        setSidepanelTab(
+          isSidepanelTab(storedTab) ? storedTab : batchActive ? 'run' : 'write'
+        );
+        setLoaded(true);
+        if (!disposed) chrome.storage.onChanged.addListener(onStorageChanged);
+      }
+    );
 
     const onStorageChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -476,6 +497,15 @@ export default function App() {
     }
   }
 
+  async function selectSidepanelTab(next: SidepanelTab) {
+    setSidepanelTab(next);
+    try {
+      await chrome.storage.session.set({ [SIDEPANEL_TAB_STORAGE_KEY]: next });
+    } catch {
+      // Non-fatal: the panel just reopens on the default tab next time.
+    }
+  }
+
   async function copyDiagnostics(item: BatchDiagnosticItem) {
     try {
       await navigator.clipboard.writeText(batchItemDiagnostic(item));
@@ -515,57 +545,121 @@ export default function App() {
         </div>
       </header>
 
-      <div className="model-strip">
-        <span className="model-dot" />
-        <span>
-          {providerLabel(
-            batchIsActive ? batch.settings.provider : settings.provider
-          )}
-        </span>
+      <div className="sidepanel-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidepanelTab === 'run'}
+          className={`sidepanel-tab${sidepanelTab === 'run' ? ' is-active' : ''}`}
+          onClick={() => void selectSidepanelTab('run')}
+        >
+          {translate('sidepanelTabRun')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={sidepanelTab === 'write'}
+          className={`sidepanel-tab${sidepanelTab === 'write' ? ' is-active' : ''}`}
+          onClick={() => void selectSidepanelTab('write')}
+        >
+          {translate('sidepanelTabWrite')}
+        </button>
       </div>
 
-      {!batch ? (
-        <section className="panel idle-panel">
-          <h2>{translate('batchIdleTitle')}</h2>
-          <p>{translate('batchIdleDescription')}</p>
-          <button
-            type="button"
-            className="primary-button full-width-button"
-            onClick={openDashboard}
-          >
-            {translate('openDashboard')}
-          </button>
-        </section>
-      ) : (
-        <section className="panel batch-panel">
-          <div className="batch-heading">
-            <div>
-              <p className="step-number">01</p>
-              <h2>
-                {batch.status === 'completed'
-                  ? translate('batchCompletedTitle')
-                  : batch.status === 'stopped'
-                    ? translate('batchStoppedTitle')
-                    : translate('batchProgressTitle')}
-              </h2>
+      <div hidden={sidepanelTab !== 'write'}>
+        <WritePanel settings={settings} />
+      </div>
+
+      <div hidden={sidepanelTab !== 'run'}>
+        <div className="model-strip">
+          <span className="model-dot" />
+          <span>
+            {providerLabel(
+              batchIsActive ? batch.settings.provider : settings.provider
+            )}
+          </span>
+        </div>
+
+        {!batch ? (
+          <section className="panel idle-panel">
+            <h2>{translate('batchIdleTitle')}</h2>
+            <p>{translate('batchIdleDescription')}</p>
+            <button
+              type="button"
+              className="primary-button full-width-button"
+              onClick={openDashboard}
+            >
+              {translate('openDashboard')}
+            </button>
+          </section>
+        ) : (
+          <section className="panel batch-panel">
+            <div className="batch-heading">
+              <div>
+                <p className="step-number">01</p>
+                <h2>
+                  {batch.status === 'completed'
+                    ? translate('batchCompletedTitle')
+                    : batch.status === 'stopped'
+                      ? translate('batchStoppedTitle')
+                      : translate('batchProgressTitle')}
+                </h2>
+              </div>
+              <strong>
+                {translate('batchProgressCount', [
+                  String(currentPosition),
+                  String(batch.items.length),
+                ])}
+              </strong>
             </div>
-            <strong>
-              {translate('batchProgressCount', [
-                String(currentPosition),
-                String(batch.items.length),
-              ])}
-            </strong>
-          </div>
 
-          <progress
-            className="batch-progress"
-            max={batch.items.length}
-            value={completedBeforeCurrent}
-          />
+            <progress
+              className="batch-progress"
+              max={batch.items.length}
+              value={completedBeforeCurrent}
+            />
 
-          {batch.status === 'paused' && currentItem ? (
-            <div className="pause-card" aria-live="polite">
-              <p>{pauseCopy(currentItem.status)}</p>
+            {batch.status === 'paused' && currentItem ? (
+              <div className="pause-card" aria-live="polite">
+                <p>{pauseCopy(currentItem.status)}</p>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy !== 'idle'}
+                    onClick={() =>
+                      runBatchCommand('batch.open-current', 'opening')
+                    }
+                  >
+                    {translate('openCurrentTarget')}
+                  </button>
+                  {canSkipCurrentManualGate ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy !== 'idle'}
+                      onClick={() =>
+                        runBatchCommand('batch.skip-current', 'skipping')
+                      }
+                    >
+                      {translate('skipCurrentTarget')}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={busy !== 'idle'}
+                    onClick={() =>
+                      runBatchCommand('batch.continue', 'continuing')
+                    }
+                  >
+                    {translate('continueBatch')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {batch.status === 'running' ? (
               <div className="action-row">
                 <button
                   type="button"
@@ -577,305 +671,285 @@ export default function App() {
                 >
                   {translate('openCurrentTarget')}
                 </button>
-                {canSkipCurrentManualGate ? (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={busy !== 'idle'}
-                    onClick={() =>
-                      runBatchCommand('batch.skip-current', 'skipping')
-                    }
-                  >
-                    {translate('skipCurrentTarget')}
-                  </button>
-                ) : null}
                 <button
                   type="button"
-                  className="primary-button"
+                  className="secondary-button stop-button"
                   disabled={busy !== 'idle'}
-                  onClick={() =>
-                    runBatchCommand('batch.continue', 'continuing')
-                  }
+                  onClick={() => runBatchCommand('batch.stop', 'stopping')}
                 >
-                  {translate('continueBatch')}
+                  {translate('stopBatch')}
                 </button>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          {batch.status === 'running' ? (
-            <div className="action-row">
+            {batch.status === 'paused' ? (
               <button
                 type="button"
-                className="secondary-button"
-                disabled={busy !== 'idle'}
-                onClick={() => runBatchCommand('batch.open-current', 'opening')}
-              >
-                {translate('openCurrentTarget')}
-              </button>
-              <button
-                type="button"
-                className="secondary-button stop-button"
+                className="secondary-button stop-button full-width-button"
                 disabled={busy !== 'idle'}
                 onClick={() => runBatchCommand('batch.stop', 'stopping')}
               >
                 {translate('stopBatch')}
               </button>
-            </div>
-          ) : null}
+            ) : null}
 
-          {batch.status === 'paused' ? (
-            <button
-              type="button"
-              className="secondary-button stop-button full-width-button"
-              disabled={busy !== 'idle'}
-              onClick={() => runBatchCommand('batch.stop', 'stopping')}
+            {batchIsActive ? (
+              <p className="stop-hint">{translate('stopBatchHint')}</p>
+            ) : (
+              <>
+                <p className="batch-summary">
+                  {translate('batchSummary', batchSummary(batch))}
+                </p>
+                {canResumeStopped ? (
+                  <>
+                    <button
+                      type="button"
+                      className="primary-button full-width-button"
+                      disabled={busy !== 'idle'}
+                      onClick={() =>
+                        runBatchCommand('batch.resume', 'resuming')
+                      }
+                    >
+                      {translate('resumeStoppedBatch')}
+                    </button>
+                    <p className="stop-hint">
+                      {translate('resumeStoppedBatchHint')}
+                    </p>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className={`${canResumeStopped ? 'secondary-button' : 'primary-button'} full-width-button`}
+                  disabled={busy !== 'idle'}
+                  onClick={() => runBatchCommand('batch.reset', 'resetting')}
+                >
+                  {translate('startNewBatch')}
+                </button>
+              </>
+            )}
+
+            <section
+              className="site-flow-section"
+              aria-labelledby="site-flow-title"
             >
-              {translate('stopBatch')}
-            </button>
-          ) : null}
-
-          {batchIsActive ? (
-            <p className="stop-hint">{translate('stopBatchHint')}</p>
-          ) : (
-            <>
-              <p className="batch-summary">
-                {translate('batchSummary', batchSummary(batch))}
-              </p>
-              {canResumeStopped ? (
-                <>
-                  <button
-                    type="button"
-                    className="primary-button full-width-button"
-                    disabled={busy !== 'idle'}
-                    onClick={() => runBatchCommand('batch.resume', 'resuming')}
-                  >
-                    {translate('resumeStoppedBatch')}
-                  </button>
-                  <p className="stop-hint">
-                    {translate('resumeStoppedBatchHint')}
-                  </p>
-                </>
-              ) : null}
-              <button
-                type="button"
-                className={`${canResumeStopped ? 'secondary-button' : 'primary-button'} full-width-button`}
-                disabled={busy !== 'idle'}
-                onClick={() => runBatchCommand('batch.reset', 'resetting')}
-              >
-                {translate('startNewBatch')}
-              </button>
-            </>
-          )}
-
-          <section
-            className="site-flow-section"
-            aria-labelledby="site-flow-title"
-          >
-            <div className="site-flow-heading">
-              <h3 id="site-flow-title">{translate('siteFlowTitle')}</h3>
-              <span>{translate('backgroundWorkerNotice')}</span>
-            </div>
-            <div className="site-flow-list">
-              {batch.items.map((item) => {
-                const isCurrent = currentItem?.id === item.id;
-                const detail = batchItemMessageCopy(item.message);
-                const failureDetail = failureDetailFor(item);
-                return (
-                  <details
-                    key={item.id}
-                    data-site-id={item.id}
-                    className={`site-flow-card status-${item.status}${
-                      isCurrent ? ' is-current' : ''
-                    }${isTerminalItem(item) ? ' is-terminal' : ''}`}
-                    open={isCurrent || manuallyExpandedItemIds.has(item.id)}
-                    onToggle={(event) => {
-                      if (isCurrent) return;
-                      const open = event.currentTarget.open;
-                      setManuallyExpandedItemIds((current) => {
-                        const next = new Set(current);
-                        if (open) next.add(item.id);
-                        else next.delete(item.id);
-                        return next;
-                      });
-                    }}
-                  >
-                    <summary>
-                      <span className="queue-index" aria-hidden="true" />
-                      <span className="site-flow-summary-copy">
-                        <a
-                          className="site-flow-target-link"
-                          href={item.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={item.url}
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          {displayTarget(item.url)}
-                        </a>
-                        <small>{batchItemStatusCopy(item.status)}</small>
-                      </span>
-                      <time dateTime={new Date(item.updatedAt).toISOString()}>
-                        {formatEventTime(item.updatedAt)}
-                      </time>
-                    </summary>
-
-                    {isCurrent && batchIsActive ? (
-                      <div className="live-activity" aria-live="polite">
-                        <span className="live-dot" aria-hidden="true" />
-                        <TextLoop
-                          key={`${item.id}:${item.status}`}
-                          className="activity-loop"
-                          interval={2.2}
-                        >
-                          {activityCopy(item.status).map((copy) => (
-                            <span key={copy}>{copy}</span>
-                          ))}
-                        </TextLoop>
-                      </div>
-                    ) : null}
-
-                    <ol className="node-timeline">
-                      {item.events.map((event, index) => {
-                        const eventDetail = batchItemMessageCopy(event.message);
-                        return (
-                          <li key={`${event.status}:${event.at}:${index}`}>
-                            <span className="node-marker" aria-hidden="true" />
-                            <div>
-                              <strong>
-                                {batchItemStatusCopy(event.status)}
-                              </strong>
-                              {eventDetail ? <p>{eventDetail}</p> : null}
-                            </div>
-                            <time dateTime={new Date(event.at).toISOString()}>
-                              {formatEventTime(event.at)}
-                            </time>
-                          </li>
-                        );
-                      })}
-                    </ol>
-
-                    {detail ? (
-                      <p className="site-result-detail">{detail}</p>
-                    ) : null}
-
-                    {failureDetail ? (
-                      <div className="site-diagnostics">
-                        <code>{failureDetail.message}</code>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => copyDiagnostics(item)}
-                        >
-                          {translate('copyDiagnostics')}
-                        </button>
-                      </div>
-                    ) : null}
-
-                    {item.comment ? (
-                      <details className="generated-comment">
-                        <summary>{translate('generatedCommentLabel')}</summary>
-                        <p>{item.comment}</p>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() =>
-                            copyGeneratedComment(item.comment ?? '')
-                          }
-                        >
-                          {translate('copyGeneratedComment')}
-                        </button>
-                      </details>
-                    ) : null}
-                  </details>
-                );
-              })}
-            </div>
-          </section>
-        </section>
-      )}
-
-      <section className="panel history-panel" aria-labelledby="history-title">
-        <details className="history-section">
-          <summary>
-            <h3 id="history-title">{translate('batchHistoryTitle')}</h3>
-          </summary>
-          {history.length === 0 ? (
-            <p className="history-empty">{translate('batchHistoryEmpty')}</p>
-          ) : (
-            <ul className="history-list">
-              {history.map((entry) => {
-                const failedItems = entry.items.filter((item) =>
-                  isFailedHistoryStatus(item.status)
-                );
-                return (
-                  <li key={entry.id}>
-                    <details className="history-entry">
+              <div className="site-flow-heading">
+                <h3 id="site-flow-title">{translate('siteFlowTitle')}</h3>
+                <span>{translate('backgroundWorkerNotice')}</span>
+              </div>
+              <div className="site-flow-list">
+                {batch.items.map((item) => {
+                  const isCurrent = currentItem?.id === item.id;
+                  const detail = batchItemMessageCopy(item.message);
+                  const failureDetail = failureDetailFor(item);
+                  return (
+                    <details
+                      key={item.id}
+                      data-site-id={item.id}
+                      className={`site-flow-card status-${item.status}${
+                        isCurrent ? ' is-current' : ''
+                      }${isTerminalItem(item) ? ' is-terminal' : ''}`}
+                      open={isCurrent || manuallyExpandedItemIds.has(item.id)}
+                      onToggle={(event) => {
+                        if (isCurrent) return;
+                        const open = event.currentTarget.open;
+                        setManuallyExpandedItemIds((current) => {
+                          const next = new Set(current);
+                          if (open) next.add(item.id);
+                          else next.delete(item.id);
+                          return next;
+                        });
+                      }}
+                    >
                       <summary>
-                        <span className="history-entry-site">
-                          {entry.settings.siteLabel ||
-                            displayTarget(entry.settings.websiteUrl)}
+                        <span className="queue-index" aria-hidden="true" />
+                        <span className="site-flow-summary-copy">
+                          <a
+                            className="site-flow-target-link"
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={item.url}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            {displayTarget(item.url)}
+                          </a>
+                          <small>{batchItemStatusCopy(item.status)}</small>
                         </span>
-                        <small>
-                          {translate('batchSummary', [
-                            String(entry.counts.published ?? 0),
-                            String(entry.counts.pendingModeration ?? 0),
-                            String(
-                              entry.counts.unconfirmed ??
-                                entry.counts.submitted ??
-                                0
-                            ),
-                            String(entry.counts.failed),
-                          ])}
-                        </small>
-                        <time
-                          dateTime={new Date(entry.archivedAt).toISOString()}
-                        >
-                          {formatEventTime(entry.archivedAt)}
+                        <time dateTime={new Date(item.updatedAt).toISOString()}>
+                          {formatEventTime(item.updatedAt)}
                         </time>
                       </summary>
-                      <ul className="history-failed-list">
-                        {failedItems.map((item) => {
-                          const failureDetail = failureDetailFor(item);
+
+                      {isCurrent && batchIsActive ? (
+                        <div className="live-activity" aria-live="polite">
+                          <span className="live-dot" aria-hidden="true" />
+                          <TextLoop
+                            key={`${item.id}:${item.status}`}
+                            className="activity-loop"
+                            interval={2.2}
+                          >
+                            {activityCopy(item.status).map((copy) => (
+                              <span key={copy}>{copy}</span>
+                            ))}
+                          </TextLoop>
+                        </div>
+                      ) : null}
+
+                      <ol className="node-timeline">
+                        {item.events.map((event, index) => {
+                          const eventDetail = batchItemMessageCopy(
+                            event.message
+                          );
                           return (
-                            <li key={item.url} className="history-failed-item">
-                              <div className="history-failed-copy">
-                                <span title={item.url}>
-                                  {displayTarget(item.url)}
-                                </span>
-                                <small>
-                                  {batchItemStatusCopy(item.status)}
-                                </small>
-                                {failureDetail?.friendly ? (
-                                  <p>{failureDetail.friendly}</p>
-                                ) : null}
-                                {failureDetail ? (
-                                  <code>{failureDetail.message}</code>
-                                ) : null}
+                            <li key={`${event.status}:${event.at}:${index}`}>
+                              <span
+                                className="node-marker"
+                                aria-hidden="true"
+                              />
+                              <div>
+                                <strong>
+                                  {batchItemStatusCopy(event.status)}
+                                </strong>
+                                {eventDetail ? <p>{eventDetail}</p> : null}
                               </div>
-                              {failureDetail ? (
-                                <div className="history-failed-actions">
-                                  <button
-                                    type="button"
-                                    className="text-button"
-                                    onClick={() => copyDiagnostics(item)}
-                                  >
-                                    {translate('copyDiagnostics')}
-                                  </button>
-                                </div>
-                              ) : null}
+                              <time dateTime={new Date(event.at).toISOString()}>
+                                {formatEventTime(event.at)}
+                              </time>
                             </li>
                           );
                         })}
-                      </ul>
+                      </ol>
+
+                      {detail ? (
+                        <p className="site-result-detail">{detail}</p>
+                      ) : null}
+
+                      {failureDetail ? (
+                        <div className="site-diagnostics">
+                          <code>{failureDetail.message}</code>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => copyDiagnostics(item)}
+                          >
+                            {translate('copyDiagnostics')}
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {item.comment ? (
+                        <details className="generated-comment">
+                          <summary>
+                            {translate('generatedCommentLabel')}
+                          </summary>
+                          <p>{item.comment}</p>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() =>
+                              copyGeneratedComment(item.comment ?? '')
+                            }
+                          >
+                            {translate('copyGeneratedComment')}
+                          </button>
+                        </details>
+                      ) : null}
                     </details>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </details>
-      </section>
+                  );
+                })}
+              </div>
+            </section>
+          </section>
+        )}
+
+        <section
+          className="panel history-panel"
+          aria-labelledby="history-title"
+        >
+          <details className="history-section">
+            <summary>
+              <h3 id="history-title">{translate('batchHistoryTitle')}</h3>
+            </summary>
+            {history.length === 0 ? (
+              <p className="history-empty">{translate('batchHistoryEmpty')}</p>
+            ) : (
+              <ul className="history-list">
+                {history.map((entry) => {
+                  const failedItems = entry.items.filter((item) =>
+                    isFailedHistoryStatus(item.status)
+                  );
+                  return (
+                    <li key={entry.id}>
+                      <details className="history-entry">
+                        <summary>
+                          <span className="history-entry-site">
+                            {entry.settings.siteLabel ||
+                              displayTarget(entry.settings.websiteUrl)}
+                          </span>
+                          <small>
+                            {translate('batchSummary', [
+                              String(entry.counts.published ?? 0),
+                              String(entry.counts.pendingModeration ?? 0),
+                              String(
+                                entry.counts.unconfirmed ??
+                                  entry.counts.submitted ??
+                                  0
+                              ),
+                              String(entry.counts.failed),
+                            ])}
+                          </small>
+                          <time
+                            dateTime={new Date(entry.archivedAt).toISOString()}
+                          >
+                            {formatEventTime(entry.archivedAt)}
+                          </time>
+                        </summary>
+                        <ul className="history-failed-list">
+                          {failedItems.map((item) => {
+                            const failureDetail = failureDetailFor(item);
+                            return (
+                              <li
+                                key={item.url}
+                                className="history-failed-item"
+                              >
+                                <div className="history-failed-copy">
+                                  <span title={item.url}>
+                                    {displayTarget(item.url)}
+                                  </span>
+                                  <small>
+                                    {batchItemStatusCopy(item.status)}
+                                  </small>
+                                  {failureDetail?.friendly ? (
+                                    <p>{failureDetail.friendly}</p>
+                                  ) : null}
+                                  {failureDetail ? (
+                                    <code>{failureDetail.message}</code>
+                                  ) : null}
+                                </div>
+                                {failureDetail ? (
+                                  <div className="history-failed-actions">
+                                    <button
+                                      type="button"
+                                      className="text-button"
+                                      onClick={() => copyDiagnostics(item)}
+                                    >
+                                      {translate('copyDiagnostics')}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </details>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </details>
+        </section>
+      </div>
 
       {notice ? <p className="toast success-toast">{notice}</p> : null}
       {error ? <p className="toast error-toast">{error}</p> : null}

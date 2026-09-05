@@ -643,5 +643,128 @@
   },
   "resumeStoppedBatchHint": {
     "message": "继续会从队列里未完成的目标接着跑；已提交的评论不会重复提交。"
+  },
+  "sidepanelTabRun": {
+    "message": "运行"
+  },
+  "sidepanelTabWrite": {
+    "message": "写评论"
+  },
+  "writeSiteChipLabel": {
+    "message": "推广"
+  },
+  "writeFormatChipLabel": {
+    "message": "写法"
+  },
+  "writeFormatBbcode": {
+    "message": "BBCode"
+  },
+  "writeFormatMarkdown": {
+    "message": "Markdown"
+  },
+  "writeFormatBareUrl": {
+    "message": "纯网址"
+  },
+  "writeFormatHtml": {
+    "message": "HTML 链接"
+  },
+  "writeFormatNone": {
+    "message": "不带链接"
+  },
+  "writePageNotSupported": {
+    "message": "当前页不支持"
+  },
+  "writeStartEyebrow": {
+    "message": "STEP 01"
+  },
+  "writeStartTitle": {
+    "message": "为这一页写评论"
+  },
+  "writeStartDescription": {
+    "message": "我会读标题和一楼，结合上面选的推广网站，先跟你确认主题，再动笔。"
+  },
+  "writeStartButton": {
+    "message": "读取本页，开始"
+  },
+  "writeStartButtonBusy": {
+    "message": "正在读取本页…"
+  },
+  "writeStartHint": {
+    "message": "在页面上选中一段文字，就会针对那段来写。"
+  },
+  "writeAssistantLabel": {
+    "message": "助手"
+  },
+  "writeContextMetaTitleFirstPost": {
+    "message": "读到的内容：标题 + 一楼 · $1 字"
+  },
+  "writeContextMetaSelection": {
+    "message": "读到的内容：你选中的文字 · $1 字"
+  },
+  "writeDraftVersion": {
+    "message": "草稿 v$1"
+  },
+  "writeAnchorLabel": {
+    "message": "锚文本"
+  },
+  "writeCopy": {
+    "message": "复制"
+  },
+  "writeCopied": {
+    "message": "已复制"
+  },
+  "writeMarkSent": {
+    "message": "已发出"
+  },
+  "writeRewrite": {
+    "message": "重写"
+  },
+  "writeRewritePrompt": {
+    "message": "换个角度再写一版"
+  },
+  "writeAddToRecheck": {
+    "message": "同时加入待复查"
+  },
+  "writeSentRecorded": {
+    "message": "已记入 · 锚文本账本 · 外链库 $1"
+  },
+  "writeSentRecordedWithRecheck": {
+    "message": "已记入 · 锚文本账本 · 外链库 $1 · 待复查"
+  },
+  "writeRecheckFailedSuffix": {
+    "message": "（待复查登记失败，可在看板手动添加）"
+  },
+  "writeComposerPlaceholderFirst": {
+    "message": "比如：说我们支持中文自动字幕，语气随和"
+  },
+  "writeComposerPlaceholderNext": {
+    "message": "继续改，或者说「换个角度」"
+  },
+  "writeSelectionChip": {
+    "message": "已选中页面文字 · $1 字"
+  },
+  "writeThinkingContext": {
+    "message": "在读上下文"
+  },
+  "writeThinkingAngle": {
+    "message": "在想切入点"
+  },
+  "writeThinkingDraft": {
+    "message": "在写草稿"
+  },
+  "writeNewConversation": {
+    "message": "新对话"
+  },
+  "writeSend": {
+    "message": "发送"
+  },
+  "writeErrorSiteNotFound": {
+    "message": "请先在看板里添加推广网站"
+  },
+  "writeErrorContextEmpty": {
+    "message": "这一页读不到足够内容，试试选中一段文字再开始"
+  },
+  "writeErrorSessionStale": {
+    "message": "页面已经换了，重新开始吧"
   }
 }

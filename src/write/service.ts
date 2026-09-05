@@ -6,7 +6,11 @@ import type {
 } from '@/anchor/types';
 import { generateWriteTurn } from '@/api/client';
 import { addManualModerationEntry } from '@/dashboard/moderation-recheck';
-import { readActivePageWriteContext } from '@/runtime/page-commands';
+import {
+  comparablePageUrl,
+  readActivePageWriteContext,
+  readTabWriteContext,
+} from '@/runtime/page-commands';
 import {
   getAnchorLedger,
   recordAnchorPublished,
@@ -193,11 +197,36 @@ function buildDraft(
   };
 }
 
+/**
+ * A live conversation can outlive the moment the user selected text: they
+ * might pick a different reply mid-chat and say "respond to the one I just
+ * selected." Each turn re-reads the tab's selection so that works — but only
+ * the selection, and only when the tab is still on the same page the session
+ * was started for, so a background tab that has since navigated never
+ * silently swaps in unrelated content.
+ */
+async function withFreshSelection(
+  session: WriteSession
+): Promise<WriteSession['context']> {
+  const fresh = await readTabWriteContext(session.tabId).catch(() => null);
+  if (!fresh) return session.context;
+  try {
+    if (comparablePageUrl(fresh.url) !== comparablePageUrl(session.pageUrl)) {
+      return session.context;
+    }
+  } catch {
+    return session.context;
+  }
+  return { ...session.context, selection: fresh.selection };
+}
+
 export async function writeSend(input: {
   tabId: number;
   text: string;
 }): Promise<WriteSession> {
-  const session = await loadFreshSession(input.tabId);
+  const staleSession = await loadFreshSession(input.tabId);
+  const context = await withFreshSelection(staleSession);
+  const session: WriteSession = { ...staleSession, context };
   const settings = await getSettings();
   const site = requireSite(session.siteId, settings.sites);
   const [keys, websiteProfile, anchor] = await Promise.all([

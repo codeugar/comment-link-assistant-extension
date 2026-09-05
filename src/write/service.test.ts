@@ -221,6 +221,62 @@ describe('writeSend', () => {
     expect(session.drafts[0]?.rendered).toContain('(https://product.example)');
   });
 
+  it('re-reads the tab and swaps in a fresh selection made mid-conversation', async () => {
+    await seedSettings();
+    await seedWebsiteProfileCache();
+    await setWriteSession(makeSession());
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+    vi.spyOn(chrome.tabs, 'sendMessage').mockImplementation(async () => ({
+      type: 'context',
+      context: {
+        ...context,
+        selection: 'This is the reply I just selected on the page.',
+      },
+    }));
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({ reply: 'Responding to the reply you selected.' })
+    );
+
+    const session = await writeSend({
+      tabId: 1,
+      text: 'Respond to the one I just selected.',
+    });
+
+    expect(session.context.selection).toBe(
+      'This is the reply I just selected on the page.'
+    );
+    // Nothing else about the context was disturbed by the re-read.
+    expect(session.context.title).toBe(context.title);
+  });
+
+  it('keeps the original context when the tab has since navigated elsewhere', async () => {
+    await seedSettings();
+    await seedWebsiteProfileCache();
+    await setWriteSession(makeSession());
+    vi.spyOn(chrome.tabs, 'get').mockResolvedValue({
+      id: 1,
+      url: PAGE_URL,
+    } as chrome.tabs.Tab);
+    vi.spyOn(chrome.tabs, 'sendMessage').mockImplementation(async () => ({
+      type: 'context',
+      context: {
+        ...context,
+        url: 'https://forum.example/thread/2',
+        selection: 'Selection from an unrelated page.',
+      },
+    }));
+    vi.stubGlobal('fetch', async () =>
+      deepseekReply({ reply: 'Still talking about the original thread.' })
+    );
+
+    const session = await writeSend({ tabId: 1, text: 'Keep going.' });
+
+    expect(session.context.selection).toBeNull();
+  });
+
   it('does not add a draft when the model sends none', async () => {
     await seedSettings();
     await seedWebsiteProfileCache();
