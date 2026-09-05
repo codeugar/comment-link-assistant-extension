@@ -158,6 +158,46 @@ describe('data backup format', () => {
     }
   });
 
+  it('keeps a published attempt with its receipt and link mode', () => {
+    // A real run stores the submit receipt and link mode on the attempt; a
+    // strict schema that omits them rejected every backup of a used install.
+    const sections = sampleSections();
+    sections.dashboard.attempts = [
+      {
+        id: 'run-1:target-1',
+        runId: 'run-1',
+        planId: 'plan-1',
+        batchId: 'plan-1:batch-1',
+        targetId: 'plan-1:target-1',
+        url: 'https://blog.example/post',
+        attemptNumber: 1,
+        status: 'published',
+        timeline: [
+          {
+            stage: 'published',
+            status: 'published',
+            message: 'COMMENT_PUBLISHED_PUBLIC_CHECK',
+            at: 2_000,
+          },
+        ],
+        comment: 'Nice post.',
+        commentFingerprint: 'nice post',
+        receipt: { url: 'https://blog.example/post#comment-9', commentId: '9' },
+        linkMode: 'a-tag-newline',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        completedAt: 2_000,
+      },
+    ];
+    const built = buildDataBackup(sections, '1.2.3');
+    const parsed = parseDataBackupFile(JSON.parse(JSON.stringify(built)));
+    expect(parsed.data.dashboard.attempts[0]?.receipt).toEqual({
+      url: 'https://blog.example/post#comment-9',
+      commentId: '9',
+    });
+    expect(parsed.data.dashboard.attempts[0]?.linkMode).toBe('a-tag-newline');
+  });
+
   it('rejects a corrupted dashboard section', () => {
     const built = buildDataBackup(sampleSections(), '1.2.3');
     const raw = JSON.parse(JSON.stringify(built));

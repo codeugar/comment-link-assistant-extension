@@ -6,7 +6,12 @@ import {
   PLAN_TARGET_STATUSES,
 } from '@/dashboard/model';
 import type { DashboardBackupData } from '@/dashboard/model';
-import type { ExtensionSettings, ProviderApiKeys, SiteProfile } from '@/types';
+import {
+  type ExtensionSettings,
+  LINK_MODES,
+  type ProviderApiKeys,
+  type SiteProfile,
+} from '@/types';
 import { z } from 'zod';
 import { anchorLedgersSchema } from './anchor-ledger';
 import type { AnchorLedgersMap } from './anchor-ledger';
@@ -188,6 +193,11 @@ const dashboardAttemptSchema = z
     timeline: z.array(attemptEventSchema),
     comment: z.string().optional(),
     commentFingerprint: z.string().optional(),
+    receipt: z
+      .object({ url: z.string(), commentId: z.string().optional() })
+      .strict()
+      .optional(),
+    linkMode: z.enum(LINK_MODES).optional(),
     error: attemptErrorSchema.optional(),
     createdAt: z.number(),
     updatedAt: z.number(),
