@@ -643,5 +643,128 @@
   },
   "resumeStoppedBatchHint": {
     "message": "Resuming picks up the targets this run has not finished. A comment that was already submitted is never sent twice."
+  },
+  "sidepanelTabRun": {
+    "message": "Run"
+  },
+  "sidepanelTabWrite": {
+    "message": "Write comment"
+  },
+  "writeSiteChipLabel": {
+    "message": "Promoting"
+  },
+  "writeFormatChipLabel": {
+    "message": "Format"
+  },
+  "writeFormatBbcode": {
+    "message": "BBCode"
+  },
+  "writeFormatMarkdown": {
+    "message": "Markdown"
+  },
+  "writeFormatBareUrl": {
+    "message": "Bare URL"
+  },
+  "writeFormatHtml": {
+    "message": "HTML link"
+  },
+  "writeFormatNone": {
+    "message": "No link"
+  },
+  "writePageNotSupported": {
+    "message": "This page is not supported"
+  },
+  "writeStartEyebrow": {
+    "message": "STEP 01"
+  },
+  "writeStartTitle": {
+    "message": "Write a comment for this page"
+  },
+  "writeStartDescription": {
+    "message": "I'll read the title and first post, combine that with the promoted site you picked above, confirm the angle with you, then draft it."
+  },
+  "writeStartButton": {
+    "message": "Read this page and start"
+  },
+  "writeStartButtonBusy": {
+    "message": "Reading this page..."
+  },
+  "writeStartHint": {
+    "message": "Select a passage on the page first and I will write about that instead."
+  },
+  "writeAssistantLabel": {
+    "message": "Assistant"
+  },
+  "writeContextMetaTitleFirstPost": {
+    "message": "Read: title + first post · $1 characters"
+  },
+  "writeContextMetaSelection": {
+    "message": "Read: your selected text · $1 characters"
+  },
+  "writeDraftVersion": {
+    "message": "Draft v$1"
+  },
+  "writeAnchorLabel": {
+    "message": "Anchor text"
+  },
+  "writeCopy": {
+    "message": "Copy"
+  },
+  "writeCopied": {
+    "message": "Copied"
+  },
+  "writeMarkSent": {
+    "message": "Sent"
+  },
+  "writeRewrite": {
+    "message": "Rewrite"
+  },
+  "writeRewritePrompt": {
+    "message": "Try a different angle"
+  },
+  "writeAddToRecheck": {
+    "message": "Also add to re-check queue"
+  },
+  "writeSentRecorded": {
+    "message": "Recorded · anchor ledger · outbound link library $1"
+  },
+  "writeSentRecordedWithRecheck": {
+    "message": "Recorded · anchor ledger · outbound link library $1 · re-check queued"
+  },
+  "writeRecheckFailedSuffix": {
+    "message": " (failed to queue the re-check; add it by hand in the dashboard)"
+  },
+  "writeComposerPlaceholderFirst": {
+    "message": "e.g. mention we support auto Chinese subtitles, keep it casual"
+  },
+  "writeComposerPlaceholderNext": {
+    "message": "Keep revising, or say \"try a different angle\""
+  },
+  "writeSelectionChip": {
+    "message": "Selected page text · $1 characters"
+  },
+  "writeThinkingContext": {
+    "message": "Reading the context"
+  },
+  "writeThinkingAngle": {
+    "message": "Thinking of an angle"
+  },
+  "writeThinkingDraft": {
+    "message": "Writing the draft"
+  },
+  "writeNewConversation": {
+    "message": "New conversation"
+  },
+  "writeSend": {
+    "message": "Send"
+  },
+  "writeErrorSiteNotFound": {
+    "message": "Add a promoted website in the dashboard first"
+  },
+  "writeErrorContextEmpty": {
+    "message": "This page doesn't have enough content to read; try selecting a passage first"
+  },
+  "writeErrorSessionStale": {
+    "message": "The page has changed; start a new conversation"
   }
 }

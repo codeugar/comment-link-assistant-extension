@@ -18,6 +18,7 @@ import type {
   PageSubmissionResult,
   PageSubmissionTarget,
   PreparedPageSubmission,
+  WritePageContext,
 } from '@/page/types';
 import {
   type PublicCommentCriterion,
@@ -629,6 +630,28 @@ export async function analyzeActivePage(): Promise<{
   };
 }
 
+export async function readTabWriteContext(
+  tabId: number
+): Promise<WritePageContext> {
+  const result = await executePageCommand(tabId, { type: 'read-context' });
+  if (result.type === 'context') return result.context;
+  throw new Error(
+    result.type === 'error' ? result.message : 'WRITE_CONTEXT_READ_FAILED'
+  );
+}
+
+export async function readActivePageWriteContext(): Promise<{
+  tabId: number;
+  context: WritePageContext;
+}> {
+  const tab = await activeTab();
+  const tabId = tab.id as number;
+  return {
+    tabId,
+    context: await readTabWriteContext(tabId),
+  };
+}
+
 export async function submitCurrentPage(
   input: PageSubmissionInput,
   target: PageSubmissionTarget
@@ -709,7 +732,7 @@ export async function submitCurrentPage(
   }
 }
 
-function comparablePageUrl(value: string): string {
+export function comparablePageUrl(value: string): string {
   const url = new URL(value);
   url.hash = '';
   return url.href;

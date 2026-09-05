@@ -14,6 +14,7 @@ import {
   PROVIDER_API_KEYS_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
 } from '@/storage/settings';
+import type { WriteSession } from '@/write/types';
 import { act } from 'react';
 import { type Root, createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -840,5 +841,270 @@ describe('multi-site profiles', () => {
     await renderSidePanel();
 
     expect(container.textContent).toContain('Seed Audio');
+  });
+});
+
+describe('write comment tab', () => {
+  const writeSettings = {
+    provider: 'deepseek' as const,
+    sites: [
+      {
+        id: 'site-1',
+        label: 'Seedance',
+        websiteUrl: 'https://seedance.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+      {
+        id: 'site-2',
+        label: 'Museimage',
+        websiteUrl: 'https://museimage.example',
+        displayName: '',
+        email: '',
+        linkMode: 'inline' as const,
+      },
+    ],
+    activeSiteId: 'site-1',
+  };
+
+  async function seedWriteSettings(): Promise<void> {
+    await chrome.storage.local.set({
+      [SETTINGS_STORAGE_KEY]: writeSettings,
+      [PROVIDER_API_KEYS_STORAGE_KEY]: {
+        deepseekApiKey: 'deepseek-key',
+        kieApiKey: '',
+      },
+    });
+  }
+
+  async function activateTab(
+    url = 'https://forum.example/thread'
+  ): Promise<number> {
+    const tab = await fakeBrowser.tabs.create({
+      url,
+      active: true,
+      title: 'Forum thread title',
+    });
+    vi.spyOn(chrome.tabs, 'query').mockResolvedValue([
+      tab,
+    ] as unknown as chrome.tabs.Tab[]);
+    return tab.id as number;
+  }
+
+  function mockBackground(
+    handlers: Record<string, (message: never) => unknown>
+  ) {
+    return vi.spyOn(chrome.runtime, 'sendMessage').mockImplementation((async (
+      message: unknown
+    ) => {
+      const typed = message as { type: string };
+      const handler = handlers[typed.type];
+      if (!handler) throw new Error(`UNEXPECTED_MESSAGE:${typed.type}`);
+      return {
+        ok: true,
+        data: { type: typed.type, data: await handler(message as never) },
+      };
+    }) as never);
+  }
+
+  function makeSession(overrides: Partial<WriteSession> = {}): WriteSession {
+    return {
+      tabId: 1,
+      pageUrl: 'https://forum.example/thread',
+      siteId: 'site-1',
+      format: 'markdown',
+      context: {
+        url: 'https://forum.example/thread',
+        title: 'Forum thread title',
+        language: 'en',
+        selection: null,
+        firstPost: 'This is the opening post of the thread.',
+        replyCount: 3,
+        source: 'first-post',
+      },
+      turns: [{ role: 'assistant', text: 'What angle interests you?', at: 1 }],
+      drafts: [],
+      createdAt: 1,
+      updatedAt: 1,
+      ...overrides,
+    };
+  }
+
+  function findWritePanelWrapperHidden(): boolean {
+    const panel = container.querySelector('.write-panel');
+    return Boolean(panel?.parentElement?.hasAttribute('hidden'));
+  }
+
+  function findRunTabWrapperHidden(): boolean {
+    const strip = container.querySelector('.model-strip');
+    return Boolean(strip?.parentElement?.hasAttribute('hidden'));
+  }
+
+  it('switches between the 运行 and 写评论 tabs', async () => {
+    await seedWriteSettings();
+    await activateTab();
+    mockBackground({ 'write.get': async () => null });
+
+    await renderSidePanel();
+
+    const tabButtons = Array.from(
+      container.querySelectorAll('button[role="tab"]')
+    );
+    expect(tabButtons).toHaveLength(2);
+
+    await clickButton('sidepanelTabRun');
+    expect(findRunTabWrapperHidden()).toBe(false);
+    expect(findWritePanelWrapperHidden()).toBe(true);
+
+    await clickButton('sidepanelTabWrite');
+    expect(findWritePanelWrapperHidden()).toBe(false);
+    expect(findRunTabWrapperHidden()).toBe(true);
+  });
+
+  it('renders the site/format chips in the start state and starts a session with the selected values', async () => {
+    await seedWriteSettings();
+    await activateTab();
+    const session = makeSession();
+    const sendMessage = mockBackground({
+      'write.get': async () => null,
+      'write.start': async () => session,
+    });
+
+    await renderSidePanel();
+    await clickButton('sidepanelTabWrite');
+
+    const selects = Array.from(
+      container.querySelectorAll('.write-chip select')
+    ) as HTMLSelectElement[];
+    expect(selects).toHaveLength(2);
+    const [siteSelect, formatSelect] = selects;
+
+    async function selectOption(select: HTMLSelectElement, value: string) {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLSelectElement.prototype,
+        'value'
+      )?.set;
+      await act(async () => {
+        setValue?.call(select, value);
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+
+    await selectOption(siteSelect, 'site-2');
+    await selectOption(formatSelect, 'html');
+
+    expect(container.textContent).toContain('writeStartTitle');
+    await clickButton('writeStartButton');
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: 'write.start',
+        siteId: 'site-2',
+        format: 'html',
+      });
+    });
+  });
+
+  it('renders a draft card, copies the rendered text, and marks it sent with the recheck checkbox state', async () => {
+    await seedWriteSettings();
+    await activateTab();
+    const draft = {
+      id: 'draft-1',
+      version: 1,
+      template: 'Worth a look at {LINK}.',
+      anchorBucket: 'partial' as const,
+      anchorText: 'a useful resource',
+      rendered: '[a useful resource](https://seedance.example)',
+      format: 'markdown' as const,
+      createdAt: 1,
+    };
+    const session = makeSession({ drafts: [draft] });
+    const sentSession = {
+      ...session,
+      drafts: [{ ...draft, sentAt: 2 }],
+    };
+
+    const writeText = vi.fn<(text: string) => Promise<void>>(
+      async () => undefined
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const sendMessage = mockBackground({
+      'write.get': async () => session,
+      'write.markSent': async (message: {
+        draftId: string;
+        addToRecheck: boolean;
+      }) => ({ ...sentSession, recheckError: undefined }),
+    });
+
+    await renderSidePanel();
+    await clickButton('sidepanelTabWrite');
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.write-draft')).not.toBeNull();
+    });
+    expect(container.textContent).toContain('writeDraftVersion');
+    expect(container.textContent).toContain(draft.anchorText);
+
+    await clickButton('writeCopy');
+    expect(writeText).toHaveBeenCalledWith(draft.rendered);
+
+    // Uncheck "同时加入待复查" before marking the draft sent.
+    const recheckCheckbox = container.querySelector(
+      '.write-recheck-toggle input'
+    ) as HTMLInputElement;
+    expect(recheckCheckbox.checked).toBe(true);
+    await act(async () => {
+      recheckCheckbox.click();
+    });
+
+    await clickButton('writeMarkSent');
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith({
+        type: 'write.markSent',
+        tabId: session.tabId,
+        draftId: draft.id,
+        addToRecheck: false,
+      });
+    });
+  });
+
+  it('shows the start state again once the session comes back stale', async () => {
+    await seedWriteSettings();
+    await activateTab();
+    const session = makeSession();
+    mockBackground({
+      'write.get': async () => session,
+      'write.send': async () => {
+        throw new Error('WRITE_SESSION_STALE:the page moved on');
+      },
+    });
+
+    await renderSidePanel();
+    await clickButton('sidepanelTabWrite');
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.write-composer')).not.toBeNull();
+    });
+
+    const textarea = container.querySelector(
+      '.write-composer textarea'
+    ) as HTMLTextAreaElement;
+    await enterTextareaValue(textarea, 'keep going');
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.write-start-card')).not.toBeNull();
+    });
+    expect(container.textContent).toContain('writeErrorSessionStale');
   });
 });

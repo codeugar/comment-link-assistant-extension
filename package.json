@@ -18,6 +18,8 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@fontsource/archivo-black": "^5.3.0",
+    "@fontsource/space-mono": "^5.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "linkify-it": "^6.0.0",
     "motion": "^12.42.2",

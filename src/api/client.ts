@@ -176,12 +176,114 @@ export async function generateNaturalAnchorTexts(
   return texts;
 }
 
+const writeTurnResponseSchema = z
+  .object({
+    reply: z.string().trim().min(1).max(1_500),
+    draft: z
+      .union([
+        z.null(),
+        z
+          .object({
+            comment: z.string().trim().min(1).max(2_000),
+            anchorText: z.string().max(200).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
+  })
+  .strict();
+
+export interface GenerateWriteTurnInput {
+  provider: CommentProvider;
+  websiteProfile: WebsiteProfile;
+  prompt: { system: string; messages: PromptMessage[] };
+  /** True for the very first turn of a session, where a draft is never
+   *  wanted — a model that still writes one has it dropped, not repaired. */
+  isFirstTurn: boolean;
+  anchorText?: string;
+  requestAnchorText?: boolean;
+}
+
+export interface GeneratedWriteTurnDraft {
+  /** Plain text containing exactly one `{LINK}` token — never the rendered
+   *  comment. Rendering happens in `src/write/render.ts`. */
+  template: string;
+  anchorText?: string;
+}
+
+export interface GeneratedWriteTurn {
+  reply: string;
+  draft: GeneratedWriteTurnDraft | null;
+}
+
+/**
+ * One turn of the write-comment chat assistant. Same link-safety invariants as
+ * `generateComment`: the model may emit at most one `{LINK}` token and never a
+ * URL, markup, or an anchor string the caller did not ask for. A draft that
+ * fails validation is rejected with the existing error codes, never repaired.
+ */
+export async function generateWriteTurn(
+  keys: ProviderApiKeys,
+  input: GenerateWriteTurnInput,
+  options?: { signal?: AbortSignal }
+): Promise<GeneratedWriteTurn> {
+  const request = providerRequest(keys, input.provider, {
+    system: input.prompt.system,
+    messages: input.prompt.messages,
+  });
+  const content = await requestProvider(request, options?.signal);
+  let json: unknown;
+  try {
+    json = JSON.parse(stripJsonFence(content)) as unknown;
+  } catch {
+    throw new Error('COMMENT_PROVIDER_JSON_INVALID');
+  }
+  const parsed = writeTurnResponseSchema.safeParse(json);
+  if (!parsed.success) throw new Error('COMMENT_PROVIDER_PAYLOAD_INVALID');
+
+  // A first-turn draft is never valid output for this session state: it is
+  // silently dropped (kept only if the model produced no draft at all) rather
+  // than treated as a validation failure, since the reply itself is fine.
+  const rawDraft = input.isFirstTurn ? null : (parsed.data.draft ?? null);
+  if (!rawDraft) return { reply: parsed.data.reply, draft: null };
+
+  const template = toLinkTemplate(rawDraft.comment, input.websiteProfile);
+  validateLinkTemplate(template);
+  const suggested = input.requestAnchorText
+    ? usableAnchorText(rawDraft.anchorText)
+    : undefined;
+  const anchorText = suggested ?? input.anchorText;
+  return {
+    reply: parsed.data.reply,
+    draft: { template, ...(anchorText ? { anchorText } : {}) },
+  };
+}
+
+/** One turn in a multi-turn provider request, in the order it was said. */
+export interface PromptMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ProviderPrompt {
+  system: string;
+  /** Single-turn request. Ignored when `messages` is given. */
+  user?: string;
+  /** Multi-turn request (the write-comment chat assistant). Overrides `user`. */
+  messages?: PromptMessage[];
+}
+
+function providerPromptMessages(prompt: ProviderPrompt): PromptMessage[] {
+  return prompt.messages ?? [{ role: 'user', content: prompt.user ?? '' }];
+}
+
 function providerRequest(
   keys: ProviderApiKeys,
   provider: CommentProvider,
-  prompt: { system: string; user: string },
+  prompt: ProviderPrompt,
   temperature = 0.7
 ): ProviderRequest {
+  const turns = providerPromptMessages(prompt);
   if (provider === 'deepseek') {
     if (!keys.deepseekApiKey.trim()) {
       throw new Error('DEEPSEEK_API_KEY_REQUIRED');
@@ -201,7 +303,7 @@ function providerRequest(
         max_tokens: 500,
         messages: [
           { role: 'system', content: prompt.system },
-          { role: 'user', content: prompt.user },
+          ...turns.map((turn) => ({ role: turn.role, content: turn.content })),
         ],
       },
     };
@@ -216,12 +318,19 @@ function providerRequest(
     timeoutMs: KIE_ATTEMPT_TIMEOUT_MS,
     body: {
       stream: true,
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `${prompt.system}\n\n${prompt.user}` }],
-        },
-      ],
+      // Gemini has no separate system role for this endpoint; the system
+      // rules are prepended to the first turn's text instead.
+      contents: turns.map((turn, index) => ({
+        role: turn.role === 'assistant' ? 'model' : 'user',
+        parts: [
+          {
+            text:
+              index === 0
+                ? `${prompt.system}\n\n${turn.content}`
+                : turn.content,
+          },
+        ],
+      })),
       generationConfig: {
         temperature,
         maxOutputTokens: 500,
@@ -481,7 +590,9 @@ function parseComment(
  * caller's fallback wording takes over — the bucket it was drawn for is
  * unchanged either way, so the running mix is unaffected.
  */
-function usableAnchorText(value: string | undefined): string | undefined {
+export function usableAnchorText(
+  value: string | undefined
+): string | undefined {
   const text = value?.trim().replace(/\s+/g, ' ') ?? '';
   if (!text || text.length > MAX_GENERATED_ANCHOR_TEXT_LENGTH) return undefined;
   if (
@@ -499,7 +610,7 @@ function usableAnchorText(value: string | undefined): string | undefined {
 // plain prose with exactly one placeholder and no link of its own. A prompt
 // injection on the target page can only make it write a foreign URL, and that
 // URL has nowhere to hide once the placeholder is the only permitted link.
-function validateLinkTemplate(template: string): void {
+export function validateLinkTemplate(template: string): void {
   const body = template.replaceAll(INLINE_LINK_PLACEHOLDER, ' ');
   if (
     HTML_MARKUP.test(body) ||
@@ -531,7 +642,7 @@ function validatePlainComment(comment: string): void {
 // sees the same template regardless of how the response arrived. A response
 // that cannot be folded is returned untouched for validateLinkTemplate to
 // reject with the reason it actually failed.
-function toLinkTemplate(
+export function toLinkTemplate(
   comment: string,
   websiteProfile: WebsiteProfile
 ): string {
@@ -609,7 +720,7 @@ function inlineAnchorLabel(
   }
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   const replacements: Record<string, string> = {
     '&': '&amp;',
     '<': '&lt;',
@@ -623,7 +734,7 @@ function escapeHtml(value: string): string {
   );
 }
 
-function validatePlainText(comment: string): void {
+export function validatePlainText(comment: string): void {
   if (
     HTML_MARKUP.test(comment) ||
     MARKDOWN_LINK_MARKUP.test(comment) ||
@@ -647,7 +758,7 @@ function normalizeUrl(value: string): string | null {
   }
 }
 
-function stripJsonFence(value: string): string {
+export function stripJsonFence(value: string): string {
   return value
     .trim()
     .replace(/^```(?:json)?\s*/i, '')

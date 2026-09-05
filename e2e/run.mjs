@@ -744,6 +744,38 @@ async function main() {
     return 'no provider select / api key input / run controls; has open-dashboard + idle panel';
   });
 
+  /* --------------------------------------------------------------- T3W ---- */
+  await runTest('T3W', 'sidepanel offers a 写评论 tab with its start state', async () => {
+    assertEqual(await sidepanel.locator('.sidepanel-tabs button[role="tab"]').count(), 2, 'Sidepanel is missing the two-tab switcher');
+
+    await sidepanel.click('.sidepanel-tabs button:has-text("写评论")');
+    await sidepanel.waitForSelector('.write-panel', { state: 'visible', timeout: 10_000 });
+    await sidepanel.waitForSelector('.write-start-card', { timeout: 10_000 });
+
+    const chipLabels = await sidepanel.locator('.write-chip .write-chip-label').allInnerTexts();
+    assertEqual(chipLabels.length, 2, 'Sidepanel write tab is missing the site/format chips');
+    assertIncludes(chipLabels.join(' | '), '推广', 'Missing the 推广 (promoted site) chip label');
+    assertIncludes(chipLabels.join(' | '), '写法', 'Missing the 写法 (format) chip label');
+
+    assertEqual(await sidepanel.locator('.write-chip select').count(), 2, 'Sidepanel write tab is missing the site/format selects');
+    assertIncludes(await sidepanel.locator('.write-start-card').innerText(), '为这一页写评论', 'Start card title is missing');
+    assertIncludes(await sidepanel.locator('.write-start-card button').innerText(), '读取本页，开始', 'Start button copy is missing');
+
+    await shot(sidepanel, 'T3W-write-tab-start');
+
+    // Switching tabs and reading the chip/start-card copy must never itself
+    // call the background — no model turn is spent just looking at the tab.
+    const errors = extensionErrorsFor('T3W');
+    assertEqual(errors.length, 0, `Uncaught page errors on the write tab:\n${JSON.stringify(errors, null, 2)}`);
+
+    // Restore the 运行 tab: the remembered choice persists across reloads
+    // (by design), and later tests reuse this same sidepanel page expecting
+    // the run tab to be on screen once a batch starts.
+    await sidepanel.click('.sidepanel-tabs button:has-text("运行")');
+    await sidepanel.waitForSelector('section.idle-panel', { state: 'visible', timeout: 10_000 });
+    return 'write tab renders both chips and the start card';
+  });
+
   /* ---------------------------------------------------------------- T4 ---- */
   await runTest('T4', 'outbound link library import preview', async () => {
     const csvPath = path.join(tempRoot, 'outbound-links.csv');

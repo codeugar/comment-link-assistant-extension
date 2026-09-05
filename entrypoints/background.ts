@@ -133,6 +133,15 @@ import {
 } from '@/storage/stop-intent';
 import { releaseWorkerTab } from '@/storage/worker-tab-ownership';
 import { loadWebsiteProfile } from '@/website/profile-cache';
+import {
+  writeGet,
+  writeMarkSent,
+  writeReset,
+  writeSend,
+  writeSetAnchor,
+  writeSetFormat,
+  writeStart,
+} from '@/write/service';
 
 type SendResponse = (response: BackgroundResponse) => void;
 
@@ -1596,6 +1605,69 @@ async function dispatch(
     assertTrustedUiSender(sender);
     await importDataBackup(message.backup);
     return { type: message.type, data: { imported: true } };
+  }
+  if (message.type === 'write.start') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeStart({
+        siteId: message.siteId,
+        format: message.format,
+      }),
+    };
+  }
+  if (message.type === 'write.send') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeSend({ tabId: message.tabId, text: message.text }),
+    };
+  }
+  if (message.type === 'write.setFormat') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeSetFormat({
+        tabId: message.tabId,
+        format: message.format,
+      }),
+    };
+  }
+  if (message.type === 'write.setAnchor') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeSetAnchor({
+        tabId: message.tabId,
+        draftId: message.draftId,
+        anchorText: message.anchorText,
+      }),
+    };
+  }
+  if (message.type === 'write.get') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeGet({ tabId: message.tabId }),
+    };
+  }
+  if (message.type === 'write.reset') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeReset({ tabId: message.tabId }),
+    };
+  }
+  if (message.type === 'write.markSent') {
+    assertTrustedUiSender(sender);
+    return {
+      type: message.type,
+      data: await writeMarkSent({
+        tabId: message.tabId,
+        draftId: message.draftId,
+        addToRecheck: message.addToRecheck,
+      }),
+    };
   }
   throw new Error('BACKGROUND_MESSAGE_UNSUPPORTED');
 }
