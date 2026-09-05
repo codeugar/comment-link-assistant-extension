@@ -523,21 +523,13 @@ progress::-moz-progress-bar {
   border-radius: 0;
 }
 
-.metric-card.tone-red strong,
 .metric-card.tone-red > span {
   color: var(--red-deep);
-}
-
-.metric-card.tone-red > span {
   background: var(--red-soft);
 }
 
-.metric-card.tone-green strong,
 .metric-card.tone-green > span {
   color: var(--green-deep);
-}
-
-.metric-card.tone-green > span {
   background: var(--green-soft);
 }
 
@@ -580,16 +572,13 @@ progress::-moz-progress-bar {
 }
 
 .section-title > span {
-  width: 4px;
-  height: 26px;
-  border-radius: 0;
-  background: var(--ink-red);
+  display: none;
 }
 
 .section-title h2 {
   font-size: 22px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .schedule-list {
